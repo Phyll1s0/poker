@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { playPokerSound, setPokerAudioEnabled, unlockPokerAudio } from "../lib/poker-audio";
 
 type Suit = "♠" | "♥" | "♦" | "♣";
 type Street = "preflop" | "flop" | "turn" | "river";
@@ -534,6 +535,8 @@ export default function Home() {
   const [showLog, setShowLog] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [dealing, setDealing] = useState(false);
+  const [soundOn, setSoundOn] = useState(true);
+  const winSoundHand = useRef(0);
 
   useEffect(() => setGame(freshGame()), []);
 
@@ -551,13 +554,22 @@ export default function Home() {
     }
     setDealing(true);
     const duration = 520 + Math.max(0, game.dealCount - 1) * 300;
+    if (soundOn) {
+      for (let index = 0; index < game.dealCount; index += 1) playPokerSound("deal", index * 0.3);
+    }
     const timer = window.setTimeout(() => setDealing(false), duration);
     return () => window.clearTimeout(timer);
   }, [game?.community.length, game?.handNo]);
 
   useEffect(() => {
-    if (game?.status === "showdown" && !dealing) setShowLog(true);
-  }, [game?.status, dealing]);
+    if (game?.status === "showdown" && !dealing) {
+      setShowLog(true);
+      if (soundOn && winSoundHand.current !== game.handNo) {
+        winSoundHand.current = game.handNo;
+        playPokerSound("win");
+      }
+    }
+  }, [game?.status, game?.handNo, dealing, soundOn]);
 
   useEffect(() => {
     if (isHumanTurn && maxTarget > 0) setRaiseTo(Math.max(minTarget, Math.min(maxTarget, Math.max(30, minTarget))));
@@ -579,12 +591,13 @@ export default function Home() {
       setGame((current) => {
         if (!current || current.status !== "playing" || current.current !== player.id) return current;
         const decision = chooseAiAction(current, current.players[player.id]);
+        if (soundOn) playPokerSound(decision.kind);
         return act(current, player.id, decision.kind, decision.raiseTo);
       });
       setThinking(false);
     }, 520 + Math.random() * 620);
     return () => window.clearTimeout(timer);
-  }, [game, dealing]);
+  }, [game, dealing, soundOn]);
 
   const startNextHand = useCallback(() => {
     setFeedback(null);
@@ -594,6 +607,7 @@ export default function Home() {
 
   const handleAction = useCallback((kind: ActionKind) => {
     if (!game || !human || !isHumanTurn || !advice) return;
+    if (soundOn) void unlockPokerAudio().then((ready) => { if (ready) playPokerSound(kind); });
     const exact = kind === advice.action;
     const compatible =
       (advice.action === "raise" && (kind === "call" || kind === "check")) ||
@@ -617,7 +631,15 @@ export default function Home() {
     setReview((items) => [entry, ...items].slice(0, 12));
     setFeedback(entry);
     setGame((current) => (current ? act(current, human.id, kind, kind === "raise" ? raiseTo : undefined) : current));
-  }, [game, human, isHumanTurn, advice, raiseTo, toCall, equity]);
+  }, [game, human, isHumanTurn, advice, raiseTo, toCall, equity, soundOn]);
+
+  const toggleSound = useCallback(() => {
+    const next = !soundOn;
+    setSoundOn(next);
+    void setPokerAudioEnabled(next).then(() => {
+      if (next) playPokerSound("call");
+    });
+  }, [soundOn]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -666,6 +688,9 @@ export default function Home() {
           <span>第 {game.handNo} 手</span>
         </div>
         <div className="header-actions">
+          <button className={`sound-toggle ${soundOn ? "on" : ""}`} onClick={toggleSound} aria-pressed={soundOn} aria-label={soundOn ? "关闭牌桌音效" : "开启牌桌音效"}>
+            <span>{soundOn ? "♪" : "—"}</span><b>音效</b><em>{soundOn ? "ON" : "OFF"}</em>
+          </button>
           <button className={`training-toggle ${training ? "on" : ""}`} onClick={() => setTraining((value) => !value)}>
             <span>训练提示</span><b>{training ? "ON" : "OFF"}</b>
           </button>

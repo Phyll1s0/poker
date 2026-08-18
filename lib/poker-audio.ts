@@ -1,0 +1,136 @@
+export type PokerSound = "check" | "call" | "raise" | "fold" | "deal" | "win";
+
+let audioContext: AudioContext | null = null;
+let masterGain: GainNode | null = null;
+
+function getAudioContext() {
+  if (typeof window === "undefined") return null;
+  if (audioContext && masterGain) return audioContext;
+
+  const AudioContextConstructor = window.AudioContext ??
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextConstructor) return null;
+
+  audioContext = new AudioContextConstructor();
+  masterGain = audioContext.createGain();
+  masterGain.gain.value = 0.24;
+
+  const compressor = audioContext.createDynamicsCompressor();
+  compressor.threshold.value = -20;
+  compressor.knee.value = 12;
+  compressor.ratio.value = 5;
+  compressor.attack.value = 0.003;
+  compressor.release.value = 0.18;
+  masterGain.connect(compressor);
+  compressor.connect(audioContext.destination);
+  return audioContext;
+}
+
+export async function unlockPokerAudio() {
+  const context = getAudioContext();
+  if (!context) return false;
+  if (context.state === "suspended") await context.resume();
+  return context.state === "running";
+}
+
+export async function setPokerAudioEnabled(enabled: boolean) {
+  if (!enabled && !audioContext) return;
+  const context = getAudioContext();
+  if (!context || !masterGain) return;
+  if (enabled && context.state === "suspended") await context.resume();
+  masterGain.gain.cancelScheduledValues(context.currentTime);
+  masterGain.gain.setTargetAtTime(enabled ? 0.24 : 0.0001, context.currentTime, 0.018);
+}
+
+function tone(
+  context: AudioContext,
+  at: number,
+  frequency: number,
+  endFrequency: number,
+  duration: number,
+  volume: number,
+  type: OscillatorType = "sine",
+) {
+  if (!masterGain) return;
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.type = type;
+  oscillator.frequency.setValueAtTime(frequency, at);
+  oscillator.frequency.exponentialRampToValueAtTime(Math.max(20, endFrequency), at + duration);
+  gain.gain.setValueAtTime(0.0001, at);
+  gain.gain.exponentialRampToValueAtTime(Math.max(0.001, volume), at + 0.004);
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + duration);
+  oscillator.connect(gain);
+  gain.connect(masterGain);
+  oscillator.start(at);
+  oscillator.stop(at + duration + 0.02);
+}
+
+function noise(
+  context: AudioContext,
+  at: number,
+  duration: number,
+  frequency: number,
+  volume: number,
+  filterType: BiquadFilterType = "bandpass",
+) {
+  if (!masterGain) return;
+  const frameCount = Math.max(1, Math.floor(context.sampleRate * duration));
+  const buffer = context.createBuffer(1, frameCount, context.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i += 1) data[i] = Math.random() * 2 - 1;
+
+  const source = context.createBufferSource();
+  const filter = context.createBiquadFilter();
+  const gain = context.createGain();
+  source.buffer = buffer;
+  filter.type = filterType;
+  filter.frequency.setValueAtTime(frequency, at);
+  filter.Q.value = filterType === "bandpass" ? 1.4 : 0.7;
+  gain.gain.setValueAtTime(0.0001, at);
+  gain.gain.linearRampToValueAtTime(volume, at + 0.005);
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + duration);
+  source.connect(filter);
+  filter.connect(gain);
+  gain.connect(masterGain);
+  source.start(at);
+  source.stop(at + duration + 0.01);
+}
+
+function woodenKnock(context: AudioContext, at: number, volume = 0.78) {
+  noise(context, at, 0.055, 620, volume * 0.5, "lowpass");
+  tone(context, at, 155, 82, 0.075, volume, "sine");
+  tone(context, at, 285, 120, 0.042, volume * 0.35, "triangle");
+}
+
+function chipClick(context: AudioContext, at: number, volume = 0.42) {
+  tone(context, at, 2450, 1720, 0.045, volume, "sine");
+  tone(context, at + 0.012, 3250, 2180, 0.032, volume * 0.52, "triangle");
+}
+
+export function playPokerSound(sound: PokerSound, delaySeconds = 0) {
+  const context = getAudioContext();
+  if (!context || context.state !== "running") return;
+  const at = context.currentTime + Math.max(0, delaySeconds);
+
+  if (sound === "check") {
+    woodenKnock(context, at);
+    woodenKnock(context, at + 0.115, 0.58);
+  } else if (sound === "call") {
+    chipClick(context, at);
+    chipClick(context, at + 0.052, 0.34);
+    chipClick(context, at + 0.095, 0.28);
+  } else if (sound === "raise") {
+    [0, 0.035, 0.07, 0.11, 0.155].forEach((offset, index) => chipClick(context, at + offset, 0.48 - index * 0.045));
+    tone(context, at, 190, 130, 0.14, 0.22, "triangle");
+  } else if (sound === "fold") {
+    noise(context, at, 0.17, 1250, 0.34, "bandpass");
+    noise(context, at + 0.035, 0.1, 2600, 0.16, "highpass");
+  } else if (sound === "deal") {
+    noise(context, at, 0.105, 1750, 0.27, "bandpass");
+    tone(context, at + 0.035, 420, 250, 0.055, 0.11, "triangle");
+  } else if (sound === "win") {
+    [523, 659, 784].forEach((frequency, index) => tone(context, at + index * 0.09, frequency, frequency * 0.98, 0.22, 0.2, "sine"));
+    [0.03, 0.08, 0.14, 0.2].forEach((offset, index) => chipClick(context, at + offset, 0.32 - index * 0.035));
+  }
+}
