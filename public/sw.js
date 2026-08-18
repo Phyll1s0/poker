@@ -1,4 +1,4 @@
-const CACHE_NAME = "rangecraft-v2";
+const CACHE_NAME = "rangecraft-v3";
 const APP_SCOPE = new URL("./", self.registration.scope);
 const appAsset = (path) => new URL(path, APP_SCOPE).href;
 const STATIC_ASSETS = [
@@ -10,6 +10,20 @@ const STATIC_ASSETS = [
   appAsset("apple-touch-icon.png"),
 ];
 const CACHEABLE_DESTINATIONS = new Set(["font", "image", "script", "style"]);
+const PRIVATE_PATH_PREFIXES = [
+  "/api",
+  "/multiplayer",
+  "/account",
+  "/signin-with-chatgpt",
+  "/signout-with-chatgpt",
+  "/callback",
+];
+
+function isPrivatePath(pathname) {
+  return PRIVATE_PATH_PREFIXES.some((prefix) =>
+    pathname === prefix || pathname.startsWith(prefix.endsWith("/") ? prefix : `${prefix}/`),
+  );
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -33,6 +47,10 @@ self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
   if (request.method !== "GET" || url.origin !== self.location.origin) return;
+  // Authentication, account and multiplayer responses are personalized. Let
+  // the network handle them directly so no private page or API response can
+  // enter the shared app-shell cache.
+  if (isPrivatePath(url.pathname)) return;
 
   if (request.mode === "navigate") {
     event.respondWith(

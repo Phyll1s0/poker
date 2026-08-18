@@ -2,26 +2,42 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-async function render() {
+async function render(pathname = "/") {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
-    new Request("http://localhost/", { headers: { accept: "text/html" } }),
+    new Request(new URL(pathname, "http://localhost"), { headers: { accept: "text/html" } }),
     { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
     { waitUntil() {}, passThroughOnException() {} },
   );
 }
 
-test("server-renders the RangeCraft application shell", async () => {
+test("server-renders the anonymous multiplayer sign-in page", async () => {
+  const response = await render("/multiplayer");
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
+
+  const html = await response.text();
+  assert.match(html, /<title>多人牌桌 · RangeCraft<\/title>/i);
+  assert.match(html, /先确认身份，再坐上牌桌/);
+  assert.match(html, /使用 ChatGPT 登录/);
+  assert.match(html, /\/signin-with-chatgpt\?return_to=%2Fmultiplayer/);
+  assert.doesNotMatch(html, /codex-preview|Your site is taking shape/i);
+});
+
+test("server-renders the RangeCraft landing page before mounting a poker table", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
   assert.match(html, /<title>RangeCraft · 德州扑克训练室<\/title>/i);
-  assert.match(html, /正在洗牌/);
+  assert.match(html, /把每一手牌/);
+  assert.match(html, /进入单人训练/);
+  assert.match(html, /注册 \/ 登录/);
+  assert.doesNotMatch(html, /正在洗牌/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
 
@@ -42,6 +58,10 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
 
   assert.match(page, /function settleShowdown/);
   assert.match(page, /function chooseAiAction/);
+  assert.match(page, /function LandingHome/);
+  assert.match(page, /function SoloTrainer/);
+  assert.match(page, /portalViewFromHash/);
+  assert.match(page, /rangecraft-poker-trainer\.pigstd\.chatgpt\.site\/multiplayer/);
   assert.match(page, /近似 GTO 建议/);
   assert.match(page, /加注尺寸路线/);
   assert.match(page, /pokerRaiseTargetForFraction/);
@@ -64,6 +84,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(selfPlay, /estimateEquity/);
   assert.match(serviceWorker, /key\.startsWith\("rangecraft-"\)/);
   assert.match(pagesIndex, /https:\/\/phyll1s0\.com\/poker\//);
+  assert.match(pagesIndex, /在线多人入口/);
   assert.match(packageJson, /"name": "rangecraft-poker-trainer"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 });

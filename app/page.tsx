@@ -46,6 +46,17 @@ type InstallPromptEvent = Event & {
 };
 
 const APP_BASE_PATH = import.meta.env.BASE_URL || "/";
+const ONLINE_MULTIPLAYER_URL = "https://rangecraft-poker-trainer.pigstd.chatgpt.site/multiplayer";
+
+type PortalView = "landing" | "solo";
+
+function multiplayerEntryHref() {
+  return APP_BASE_PATH === "/" ? "/multiplayer" : ONLINE_MULTIPLAYER_URL;
+}
+
+function portalViewFromHash(hash: string): PortalView {
+  return hash === "#/solo" || hash === "#solo" ? "solo" : "landing";
+}
 
 type SquidState = {
   round: number;
@@ -959,7 +970,101 @@ function SquidScoreboard({ game, report = false }: { game: Game; report?: boolea
   );
 }
 
-export default function Home() {
+function LandingHome({ onEnterSolo }: { onEnterSolo: () => void }) {
+  const multiplayerHref = multiplayerEntryHref();
+
+  return (
+    <main className="landing-shell">
+      <div className="landing-glow landing-glow-one" aria-hidden="true" />
+      <div className="landing-glow landing-glow-two" aria-hidden="true" />
+
+      <header className="landing-nav">
+        <div className="brand landing-brand">
+          <div className="brand-mark">P</div>
+          <div><strong>RANGECRAFT</strong><span>德州扑克训练室</span></div>
+        </div>
+        <nav className="landing-nav-actions" aria-label="主页导航">
+          <a href={multiplayerHref}>多人模式</a>
+          <a className="landing-account-link" href={multiplayerHref}>注册 / 登录</a>
+        </nav>
+      </header>
+
+      <section className="landing-hero">
+        <div className="landing-hero-copy">
+          <span className="landing-eyebrow"><i /> RANGE DECISION LAB</span>
+          <h1>把每一手牌，<br />练成真正的判断力。</h1>
+          <p>在不泄露电脑底牌的前提下，训练范围、赔率、下注尺度与诈唬频率。单手即时点评，整局结束后再揭晓完整策略画像。</p>
+          <div className="landing-hero-actions">
+            <button type="button" onClick={onEnterSolo}>进入单人训练 <span>→</span></button>
+            <a href={multiplayerHref}>进入多人模式 <span>↗</span></a>
+          </div>
+          <div className="landing-signals" aria-label="训练功能">
+            <span><i /> 本地即可练习</span>
+            <span><i /> 6-MAX 混合频率 AI</span>
+            <span><i /> 逐街决策复盘</span>
+          </div>
+        </div>
+
+        <div className="landing-table-card" aria-label="RangeCraft 训练牌桌预览">
+          <div className="landing-card-heading">
+            <div><span>LIVE TRAINING</span><strong>标准现金 · 100 BB</strong></div>
+            <em><i /> READY</em>
+          </div>
+          <div className="landing-table-preview" aria-hidden="true">
+            <span className="preview-seat preview-seat-top">OR</span>
+            <span className="preview-seat preview-seat-left">AT</span>
+            <span className="preview-seat preview-seat-right">IV</span>
+            <div className="preview-board">
+              <small>底池 145</small>
+              <div><b>A<span>♠</span></b><b>J<span className="red">♥</span></b><b>7<span>♣</span></b></div>
+            </div>
+            <div className="preview-hero">
+              <div><b>K<span>♠</span></b><b>Q<span className="red">♦</span></b></div>
+              <strong>你的行动</strong>
+            </div>
+          </div>
+          <div className="landing-card-footer">
+            <div><span>范围胜率</span><strong>48%</strong></div>
+            <div><span>参考线路</span><strong>跟注 63% · 加注 24%</strong></div>
+          </div>
+        </div>
+      </section>
+
+      <section className="landing-modes" aria-labelledby="mode-heading">
+        <div className="landing-section-heading">
+          <span>CHOOSE YOUR TABLE</span>
+          <h2 id="mode-heading">选择你的练习方式</h2>
+        </div>
+        <div className="landing-mode-grid">
+          <a
+            className="landing-mode-card solo"
+            href="#/solo"
+            onClick={(event) => {
+              event.preventDefault();
+              onEnterSolo();
+            }}
+          >
+            <span className="mode-index">01</span>
+            <div><small>LOCAL TRAINING</small><h3>单人训练</h3><p>浅筹、标准、深筹与血战鱿鱼；电脑风格每桌随机，支持单手即时指导与整局统一复盘。</p></div>
+            <strong>立即开始 <span>→</span></strong>
+          </a>
+          <a className="landing-mode-card multiplayer" href={multiplayerHref}>
+            <span className="mode-index">02</span>
+            <div><small>ONLINE TABLE</small><h3>多人模式</h3><p>注册或登录后进入在线大厅，与真实玩家同桌。账号、房间和战绩由在线服务保存。</p></div>
+            <strong>前往大厅 <span>↗</span></strong>
+          </a>
+        </div>
+      </section>
+
+      <footer className="landing-footer">
+        <span>RANGECRAFT · DECISION FIRST</span>
+        <p>近似 GTO 训练工具，不代表求解器给出的精确 EV。</p>
+      </footer>
+    </main>
+  );
+}
+
+function SoloTrainer({ onExit }: { onExit: () => void }) {
   const [game, setGame] = useState<Game | null>(null);
   const [training, setTraining] = useState(true);
   const [raiseTo, setRaiseTo] = useState(30);
@@ -1144,6 +1249,11 @@ export default function Home() {
     || sessionResults.length > 0
   ));
 
+  const exitToLanding = useCallback(() => {
+    if (hasRunProgress && !window.confirm("返回主页会结束当前练习，确定继续吗？")) return;
+    onExit();
+  }, [hasRunProgress, onExit]);
+
   const switchMode = useCallback((nextMode: GameMode) => {
     if (nextMode === mode || (currentPresetKey === "squid" && nextMode === "hand")) return;
     if (hasRunProgress && !window.confirm("切换训练模式会重新开始当前练习，确定继续吗？")) return;
@@ -1309,9 +1419,12 @@ export default function Home() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div className="brand">
-          <div className="brand-mark">P</div>
-          <div><strong>RANGECRAFT</strong><span>德州扑克训练室</span></div>
+        <div className="table-brand-group">
+          <button className="table-home-button" type="button" onClick={exitToLanding} aria-label="返回 RangeCraft 主页">←</button>
+          <div className="brand">
+            <div className="brand-mark">P</div>
+            <div><strong>RANGECRAFT</strong><span>德州扑克训练室</span></div>
+          </div>
         </div>
         <div className="session-meta">
           <span className="status-dot" />
@@ -1693,4 +1806,38 @@ export default function Home() {
       )}
     </main>
   );
+}
+
+export default function Home() {
+  const [view, setView] = useState<PortalView>("landing");
+
+  useEffect(() => {
+    const syncView = () => setView(portalViewFromHash(window.location.hash));
+    const timer = window.setTimeout(syncView, 0);
+    window.addEventListener("hashchange", syncView);
+    window.addEventListener("popstate", syncView);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("hashchange", syncView);
+      window.removeEventListener("popstate", syncView);
+    };
+  }, []);
+
+  const enterSolo = useCallback(() => {
+    const url = new URL(window.location.href);
+    url.hash = "/solo";
+    window.history.pushState({ rangeCraftView: "solo" }, "", `${url.pathname}${url.search}${url.hash}`);
+    setView("solo");
+  }, []);
+
+  const returnToLanding = useCallback(() => {
+    const url = new URL(window.location.href);
+    url.hash = "";
+    window.history.replaceState({ rangeCraftView: "landing" }, "", `${url.pathname}${url.search}`);
+    setView("landing");
+  }, []);
+
+  return view === "solo"
+    ? <SoloTrainer onExit={returnToLanding} />
+    : <LandingHome onEnterSolo={enterSolo} />;
 }

@@ -1,0 +1,787 @@
+.authPage,
+.multiplayerPage {
+  --mp-bg: #0a0d0c;
+  --mp-panel: rgba(19, 23, 21, 0.94);
+  --mp-line: rgba(255, 255, 255, 0.085);
+  --mp-muted: #858b85;
+  --mp-green: #63c49c;
+  --mp-gold: #d8b774;
+  min-height: 100svh;
+  color: #ebe7dd;
+  background:
+    radial-gradient(circle at 78% 6%, rgba(43, 139, 101, 0.12), transparent 34%),
+    radial-gradient(circle at 10% 92%, rgba(216, 183, 116, 0.06), transparent 28%),
+    var(--mp-bg);
+}
+
+.authPage {
+  position: relative;
+  overflow: hidden;
+}
+
+.ambientOne,
+.ambientTwo {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  filter: blur(100px);
+}
+
+.ambientOne {
+  width: 380px;
+  height: 380px;
+  top: 10%;
+  right: -150px;
+  background: rgba(65, 174, 128, 0.1);
+}
+
+.ambientTwo {
+  width: 320px;
+  height: 320px;
+  bottom: 0;
+  left: -170px;
+  background: rgba(216, 183, 116, 0.055);
+}
+
+.authNav,
+.lobbyNav {
+  width: min(1180px, calc(100% - 48px));
+  min-height: 72px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  color: #dedad1;
+  text-decoration: none;
+  font: 600 10px/1 Georgia, serif;
+  letter-spacing: 0.15em;
+}
+
+.brandMark {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(99, 196, 156, 0.3);
+  border-radius: 50%;
+  color: var(--mp-green);
+  background: rgba(99, 196, 156, 0.06);
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.quietLink,
+.signOut,
+.textButton {
+  border: 0;
+  color: #8e938d;
+  background: transparent;
+  text-decoration: none;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.quietLink:hover,
+.signOut:hover,
+.textButton:hover {
+  color: #ddd9cf;
+}
+
+.authCard {
+  width: min(650px, calc(100% - 40px));
+  margin: clamp(82px, 14vh, 150px) auto 80px;
+  position: relative;
+  z-index: 2;
+  padding: clamp(32px, 6vw, 62px);
+  border: 1px solid rgba(216, 183, 116, 0.17);
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(26, 31, 28, 0.96), rgba(14, 17, 16, 0.96));
+  box-shadow: 0 42px 100px rgba(0, 0, 0, 0.42);
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--mp-green);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+}
+
+.authCard h1,
+.setupCard h1 {
+  margin: 20px 0 18px;
+  color: #f0ece2;
+  font: 500 clamp(34px, 6vw, 54px)/1.15 Georgia, "Songti SC", serif;
+  letter-spacing: -0.035em;
+}
+
+.authLead,
+.setupLead {
+  margin: 0;
+  color: var(--mp-muted);
+  font-size: 13px;
+  line-height: 1.9;
+}
+
+.primaryAction,
+.primaryButton,
+.secondaryButton,
+.dangerButton {
+  min-height: 44px;
+  padding: 0 17px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: transform 0.18s ease, opacity 0.18s ease, border-color 0.18s ease;
+}
+
+.primaryAction,
+.primaryButton {
+  border: 1px solid #499f7d;
+  color: #f3f4ed;
+  background: linear-gradient(135deg, #3e9d79, #2f785e);
+  box-shadow: 0 12px 30px rgba(31, 117, 84, 0.2);
+}
+
+.primaryAction {
+  width: 100%;
+  margin-top: 30px;
+}
+
+.primaryAction:hover,
+.primaryButton:hover,
+.secondaryButton:hover,
+.dangerButton:hover {
+  transform: translateY(-1px);
+}
+
+.primaryButton:disabled,
+.secondaryButton:disabled,
+.dangerButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  transform: none;
+}
+
+.secondaryButton {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #c8c5bc;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.dangerButton {
+  border: 1px solid rgba(211, 111, 97, 0.25);
+  color: #d88c81;
+  background: rgba(211, 111, 97, 0.06);
+}
+
+.authNotes {
+  margin-top: 24px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  color: #666c67;
+  font-size: 9px;
+}
+
+.authNotes span::before {
+  content: "·";
+  margin-right: 7px;
+  color: var(--mp-gold);
+}
+
+.multiplayerPage {
+  padding-bottom: 64px;
+}
+
+.navRight {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: #777d77;
+  font-size: 10px;
+}
+
+.navRight strong {
+  color: #b9b7af;
+  font-weight: 500;
+}
+
+.main {
+  width: min(1180px, calc(100% - 48px));
+  margin: 0 auto;
+  padding-top: 44px;
+}
+
+.loadingPanel,
+.setupCard,
+.panel,
+.tableShell {
+  border: 1px solid var(--mp-line);
+  border-radius: 12px;
+  background: var(--mp-panel);
+  box-shadow: 0 24px 62px rgba(0, 0, 0, 0.25);
+}
+
+.loadingPanel {
+  min-height: 360px;
+  display: grid;
+  place-content: center;
+  gap: 12px;
+  color: var(--mp-muted);
+  text-align: center;
+  font-size: 12px;
+}
+
+.pulse {
+  width: 9px;
+  height: 9px;
+  margin: 0 auto;
+  border-radius: 50%;
+  background: var(--mp-green);
+  box-shadow: 0 0 0 0 rgba(99, 196, 156, 0.4);
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  70% { box-shadow: 0 0 0 12px rgba(99, 196, 156, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(99, 196, 156, 0); }
+}
+
+.setupCard {
+  width: min(620px, 100%);
+  margin: 48px auto;
+  padding: clamp(30px, 5vw, 54px);
+}
+
+.setupCard h1 {
+  font-size: clamp(32px, 5vw, 48px);
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+}
+
+.field label {
+  color: #777d77;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+
+.field input,
+.field select,
+.raiseInput {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 13px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 6px;
+  outline: none;
+  color: #e7e3da;
+  background: #0f1311;
+  font-size: 12px;
+}
+
+.field input:focus,
+.field select:focus,
+.raiseInput:focus {
+  border-color: rgba(99, 196, 156, 0.48);
+}
+
+.setupForm {
+  margin-top: 28px;
+  display: grid;
+  gap: 17px;
+}
+
+.formHint {
+  margin: 0;
+  color: #666b66;
+  font-size: 9px;
+  line-height: 1.7;
+}
+
+.errorBox,
+.noticeBox {
+  padding: 11px 13px;
+  border-radius: 6px;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.errorBox {
+  border: 1px solid rgba(211, 111, 97, 0.22);
+  color: #d99085;
+  background: rgba(211, 111, 97, 0.055);
+}
+
+.noticeBox {
+  border: 1px solid rgba(99, 196, 156, 0.18);
+  color: #9fcdb9;
+  background: rgba(99, 196, 156, 0.045);
+}
+
+.lobbyHeader,
+.tableTopbar {
+  margin-bottom: 25px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.lobbyHeader h1,
+.tableTopbar h1 {
+  margin: 8px 0 0;
+  color: #e6e2d8;
+  font: 500 clamp(30px, 4.5vw, 46px)/1.15 Georgia, "Songti SC", serif;
+}
+
+.lobbyHeader p,
+.tableTopbar p {
+  margin: 0;
+  color: #707670;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.lobbyGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.7fr);
+  gap: 16px;
+}
+
+.panel {
+  padding: 24px;
+}
+
+.panelTitle {
+  margin: 0 0 18px;
+  color: #cfcac0;
+  font: 500 16px/1.3 Georgia, "Songti SC", serif;
+}
+
+.panelKicker {
+  margin: 0 0 7px;
+  color: #6e746e;
+  font-size: 8px;
+  letter-spacing: 0.14em;
+}
+
+.createForm {
+  display: grid;
+  grid-template-columns: 1fr 120px auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.joinForm {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.roomList {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 9px;
+  list-style: none;
+}
+
+.roomRow {
+  min-height: 76px;
+  padding: 14px 15px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.roomRow strong {
+  display: block;
+  color: #c8c5bc;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.roomRow small {
+  display: block;
+  margin-top: 7px;
+  color: #666c66;
+  font-size: 9px;
+}
+
+.emptyState {
+  min-height: 150px;
+  display: grid;
+  place-content: center;
+  color: #626862;
+  text-align: center;
+  font-size: 10px;
+  line-height: 1.7;
+}
+
+.tableShell {
+  padding: 18px;
+}
+
+.roomMeta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.codePill,
+.statusPill {
+  min-height: 27px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(216, 183, 116, 0.2);
+  border-radius: 999px;
+  color: #c9b98f;
+  background: rgba(216, 183, 116, 0.055);
+  font: 600 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.08em;
+}
+
+.statusPill {
+  border-color: rgba(99, 196, 156, 0.17);
+  color: #91bdaa;
+  background: rgba(99, 196, 156, 0.04);
+  letter-spacing: 0;
+}
+
+.pokerTable {
+  min-height: 520px;
+  position: relative;
+  margin: 8px 0 18px;
+  overflow: hidden;
+  border: 13px solid #28231c;
+  border-radius: 46% / 48%;
+  background:
+    radial-gradient(ellipse at center, rgba(95, 184, 146, 0.13), transparent 58%),
+    linear-gradient(145deg, #174f3e, #0c342a);
+  box-shadow: inset 0 0 0 2px #0b1e17, inset 0 0 80px rgba(0, 0, 0, 0.48), 0 24px 45px rgba(0, 0, 0, 0.3);
+}
+
+.pokerTable::after {
+  content: "RANGECRAFT · PRIVATE TABLE";
+  position: absolute;
+  left: 50%;
+  bottom: 28%;
+  transform: translateX(-50%);
+  color: rgba(235, 244, 239, 0.1);
+  font: 8px/1 Georgia, serif;
+  letter-spacing: 0.2em;
+  white-space: nowrap;
+}
+
+.boardArea {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  top: 48%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+}
+
+.potLabel {
+  color: rgba(227, 235, 230, 0.7);
+  font-size: 10px;
+}
+
+.cards {
+  display: flex;
+  gap: clamp(4px, 0.7vw, 8px);
+}
+
+.card,
+.cardBack,
+.cardSlot {
+  width: clamp(38px, 5vw, 58px);
+  aspect-ratio: 0.7;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  border-radius: 6px;
+  font: 700 clamp(14px, 2vw, 21px)/1 Georgia, serif;
+  box-shadow: 0 5px 11px rgba(0, 0, 0, 0.33);
+}
+
+.card {
+  color: #1c211e;
+  background: #f2f0ea;
+}
+
+.redCard {
+  color: #b7473e;
+}
+
+.cardSuit {
+  margin-top: 5px;
+  font-size: 1.05em;
+}
+
+.cardBack {
+  border: 2px solid #d2cdbc;
+  background: repeating-linear-gradient(45deg, #263d34 0 4px, #1b2d26 4px 8px);
+}
+
+.cardSlot {
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  box-shadow: none;
+}
+
+.seat {
+  width: clamp(128px, 17vw, 188px);
+  min-height: 88px;
+  padding: 11px;
+  position: absolute;
+  z-index: 3;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 9px;
+  background: rgba(18, 23, 20, 0.94);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.34);
+  transform: translate(-50%, -50%);
+}
+
+.seatActive {
+  border-color: rgba(99, 196, 156, 0.54);
+  box-shadow: 0 0 0 2px rgba(99, 196, 156, 0.08), 0 10px 25px rgba(0, 0, 0, 0.34);
+}
+
+.seatSelf {
+  background: rgba(24, 35, 30, 0.97);
+}
+
+.seatFolded {
+  opacity: 0.55;
+}
+
+.seatHeader,
+.seatStack {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+}
+
+.seatHeader strong {
+  overflow: hidden;
+  color: #d2cfc6;
+  font-size: 10px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seatHeader span,
+.seatStack span {
+  color: #6c726d;
+  font-size: 8px;
+}
+
+.seatStack {
+  margin-top: 7px;
+}
+
+.seatStack strong {
+  color: #bcae87;
+  font: 600 10px/1 ui-monospace, monospace;
+}
+
+.seatCards {
+  min-height: 28px;
+  margin-top: 7px;
+  display: flex;
+  gap: 4px;
+}
+
+.miniCard,
+.miniBack {
+  width: 22px;
+  height: 29px;
+  padding: 3px;
+  border-radius: 3px;
+  font: 700 9px/1 Georgia, serif;
+}
+
+.miniCard {
+  color: #1b1f1c;
+  background: #f1efe9;
+}
+
+.miniCard.redCard {
+  color: #b7473e;
+}
+
+.miniBack {
+  border: 1px solid #a8aa9e;
+  background: repeating-linear-gradient(45deg, #294238 0 3px, #1a2d25 3px 6px);
+}
+
+.seat0 { left: 50%; top: 89%; }
+.seat1 { left: 15%; top: 69%; }
+.seat2 { left: 17%; top: 25%; }
+.seat3 { left: 50%; top: 11%; }
+.seat4 { left: 83%; top: 25%; }
+.seat5 { left: 85%; top: 69%; }
+
+.tableControls {
+  padding: 17px;
+  display: grid;
+  gap: 13px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 9px;
+  background: rgba(10, 13, 12, 0.58);
+}
+
+.controlSummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: #777d77;
+  font-size: 10px;
+}
+
+.controlSummary strong {
+  color: #bab7ae;
+  font-weight: 500;
+}
+
+.actionRow {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.raiseGroup {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.raiseInput {
+  width: 92px;
+}
+
+.lobbyPlayers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 9px;
+}
+
+.lobbyPlayer {
+  min-height: 70px;
+  padding: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.lobbyPlayer strong {
+  color: #c9c6bd;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.lobbyPlayer span {
+  color: #6d736d;
+  font-size: 9px;
+}
+
+.readyDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #505550;
+}
+
+.readyDotOn {
+  background: var(--mp-green);
+  box-shadow: 0 0 9px rgba(99, 196, 156, 0.45);
+}
+
+.resultBanner {
+  padding: 12px 14px;
+  border: 1px solid rgba(216, 183, 116, 0.18);
+  border-radius: 7px;
+  color: #c9ba93;
+  background: rgba(216, 183, 116, 0.055);
+  font-size: 10px;
+  line-height: 1.7;
+}
+
+@media (max-width: 840px) {
+  .lobbyGrid { grid-template-columns: 1fr; }
+  .createForm { grid-template-columns: 1fr 100px; }
+  .createForm button { grid-column: 1 / -1; }
+  .pokerTable { min-height: 570px; border-radius: 35% / 44%; }
+  .seat { width: 132px; }
+  .seat1 { left: 18%; top: 72%; }
+  .seat2 { left: 19%; top: 25%; }
+  .seat4 { left: 81%; top: 25%; }
+  .seat5 { left: 82%; top: 72%; }
+}
+
+@media (max-width: 600px) {
+  .authNav,
+  .lobbyNav,
+  .main { width: min(100% - 28px, 1180px); }
+  .authNav,
+  .lobbyNav { min-height: 62px; }
+  .navRight > span { display: none; }
+  .main { padding-top: 28px; }
+  .lobbyHeader,
+  .tableTopbar { align-items: flex-start; flex-direction: column; }
+  .panel { padding: 17px; }
+  .createForm,
+  .joinForm { grid-template-columns: 1fr; }
+  .pokerTable { min-height: 620px; margin-inline: -6px; border-width: 8px; border-radius: 28% / 40%; }
+  .seat { width: 112px; min-height: 82px; padding: 8px; }
+  .seat0 { top: 92%; }
+  .seat1 { left: 21%; top: 75%; }
+  .seat2 { left: 21%; top: 23%; }
+  .seat3 { top: 8%; }
+  .seat4 { left: 79%; top: 23%; }
+  .seat5 { left: 79%; top: 75%; }
+  .boardArea { top: 49%; }
+  .card, .cardBack, .cardSlot { width: 36px; }
+  .controlSummary { align-items: flex-start; flex-direction: column; }
+  .actionRow { justify-content: stretch; }
+  .actionRow > button { flex: 1; }
+  .raiseGroup { width: 100%; }
+  .raiseInput { flex: 1; }
+}
