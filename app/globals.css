@@ -85,6 +85,21 @@ button { color: inherit; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green-bright); box-shadow: 0 0 10px var(--green-bright); }
 
 .header-actions { justify-self: end; display: flex; align-items: center; gap: 10px; }
+.install-app-button {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid rgba(101,198,159,.3);
+  border-radius: 6px;
+  background: rgba(101,198,159,.08);
+  color: #d9eee6;
+  cursor: pointer;
+}
+.install-app-button:hover { background: rgba(101,198,159,.14); border-color: rgba(101,198,159,.5); }
+.install-app-button span { color: var(--green-bright); font-size: 16px; line-height: 1; }
+.install-app-button b { font-size: 9px; font-weight: 600; letter-spacing: .04em; }
 .sound-toggle {
   height: 34px;
   display: flex;
@@ -787,6 +802,8 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
   .topbar { height: 62px; padding: 0 14px; }
   .brand strong { font-size: 12px; }.brand span { display: none; }
   .training-toggle span { display: none; }
+  .install-app-button b { display: none; }
+  .install-app-button { width: 34px; justify-content: center; padding: 0; }
   .sound-toggle b, .sound-toggle em { display: none; }
   .sound-toggle { width: 34px; justify-content: center; padding: 0; }
   .table-zone { min-height: 780px; padding: 170px 12px 190px; }

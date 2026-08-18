@@ -20,6 +20,10 @@ type ActionKind = "fold" | "check" | "call" | "raise";
 type GameMode = "hand" | "session";
 type TablePresetKey = "short" | "standard" | "deep" | "squid";
 type TableImage = { loose: number; aggressive: number; deceptive: number };
+type InstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+};
 
 type SquidState = {
   round: number;
@@ -838,8 +842,35 @@ export default function Home() {
   const [sessionEnded, setSessionEnded] = useState(false);
   const [sessionResults, setSessionResults] = useState<SessionHandResult[]>([]);
   const [heroImage, setHeroImage] = useState<TableImage>({ loose: 0.5, aggressive: 0.5, deceptive: 0.5 });
+  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
+  const [appInstalled, setAppInstalled] = useState(() => typeof window !== "undefined" && (
+    window.matchMedia("(display-mode: standalone)").matches
+    || Boolean((navigator as Navigator & { standalone?: boolean }).standalone)
+  ));
   const winSoundHand = useRef(0);
   const soundOnRef = useRef(true);
+
+  useEffect(() => {
+    if ("serviceWorker" in navigator) {
+      void navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+    }
+
+    const captureInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as InstallPromptEvent);
+    };
+    const markInstalled = () => {
+      setAppInstalled(true);
+      setInstallPrompt(null);
+    };
+
+    window.addEventListener("beforeinstallprompt", captureInstallPrompt);
+    window.addEventListener("appinstalled", markInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", captureInstallPrompt);
+      window.removeEventListener("appinstalled", markInstalled);
+    };
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setGame(freshGame(undefined, { shuffleStyles: true, presetKey: "standard" })), 0);
@@ -1038,6 +1069,14 @@ export default function Home() {
     });
   }, [soundOn]);
 
+  const installApp = useCallback(async () => {
+    if (!installPrompt) return;
+    await installPrompt.prompt();
+    const choice = await installPrompt.userChoice;
+    if (choice.outcome === "accepted") setAppInstalled(true);
+    setInstallPrompt(null);
+  }, [installPrompt]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const targetTag = (event.target as HTMLElement)?.tagName;
@@ -1105,6 +1144,11 @@ export default function Home() {
           <span>{TABLE_PRESETS[game.presetKey].shortLabel} · {mode === "session" ? game.presetKey === "squid" ? `第 ${game.handNo} 手 · 剩余 ${game.squid.remaining} 条` : `${Math.min(game.handNo, SESSION_HANDS)} / ${SESSION_HANDS} 手` : `第 ${game.handNo} 手`}</span>
         </div>
         <div className="header-actions">
+          {installPrompt && !appInstalled && (
+            <button className="install-app-button" onClick={() => void installApp()} aria-label="把 RangeCraft 安装到桌面">
+              <span>↓</span><b>安装到桌面</b>
+            </button>
+          )}
           <button className={`sound-toggle ${soundOn ? "on" : ""}`} onClick={toggleSound} aria-pressed={soundOn} aria-label={soundOn ? "关闭牌桌音效" : "开启牌桌音效"}>
             <span>{soundOn ? "♪" : "—"}</span><b>音效</b><em>{soundOn ? "ON" : "OFF"}</em>
           </button>
