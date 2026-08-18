@@ -1070,7 +1070,10 @@ export default function Home() {
   }, [soundOn]);
 
   const installApp = useCallback(async () => {
-    if (!installPrompt) return;
+    if (!installPrompt) {
+      setInfoOpen(true);
+      return;
+    }
     await installPrompt.prompt();
     const choice = await installPrompt.userChoice;
     if (choice.outcome === "accepted") setAppInstalled(true);
@@ -1144,9 +1147,9 @@ export default function Home() {
           <span>{TABLE_PRESETS[game.presetKey].shortLabel} · {mode === "session" ? game.presetKey === "squid" ? `第 ${game.handNo} 手 · 剩余 ${game.squid.remaining} 条` : `${Math.min(game.handNo, SESSION_HANDS)} / ${SESSION_HANDS} 手` : `第 ${game.handNo} 手`}</span>
         </div>
         <div className="header-actions">
-          {installPrompt && !appInstalled && (
+          {!appInstalled && (
             <button className="install-app-button" onClick={() => void installApp()} aria-label="把 RangeCraft 安装到桌面">
-              <span>↓</span><b>安装到桌面</b>
+              <span>↓</span><b>安装应用</b>
             </button>
           )}
           <button className={`sound-toggle ${soundOn ? "on" : ""}`} onClick={toggleSound} aria-pressed={soundOn} aria-label={soundOn ? "关闭牌桌音效" : "开启牌桌音效"}>
@@ -1496,6 +1499,8 @@ export default function Home() {
               <div><b>完整 GTO 的边界</b><span>任意 6 人动态牌局需要预计算策略库或外部求解服务；现有传输接口可在后续接入。</span></div>
               <div><b>形象博弈</b><span>你和 AI 都可选择亮牌或盖牌；AI 会用可见信息形成对你的松紧、侵略性与欺骗性判断。</span></div>
               <div><b>规则范围</b><span>6 人现金桌、边池、全下跑牌、不足额全下加注权与鱿鱼跨手结算均在本地处理。</span></div>
+              <div><b>安装成应用</b><span>Chrome 或 Edge 点顶栏“安装应用”；Mac Safari 选“文件 → 添加到程序坞”，iPhone/iPad 选“分享 → 添加到主屏幕”。</span></div>
+              <div><b>如何打开</b><span>线上地址无需启动服务器；本地地址只有运行开发服务时可用。安装后可直接从桌面或程序坞点图标进入。</span></div>
             </div>
             <button className="modal-primary" onClick={() => setInfoOpen(false)}>回到牌桌</button>
           </section>
