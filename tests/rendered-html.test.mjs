@@ -25,19 +25,24 @@ test("server-renders the RangeCraft application shell", async () => {
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
 
-test("keeps the multiplayer boundary and product metadata", async () => {
-  const [page, layout, transport, packageJson] = await Promise.all([
+test("keeps the multiplayer and strategy boundaries with product metadata", async () => {
+  const [page, layout, transport, strategy, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/poker-transport.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/poker-strategy.ts", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /function settleShowdown/);
   assert.match(page, /function chooseAiAction/);
-  assert.match(page, /GTO 启发式建议/);
+  assert.match(page, /近似 GTO 建议/);
+  assert.match(page, /20 手整局/);
+  assert.match(page, /function setHeroShowChoice/);
+  assert.match(page, /balancedBluffRate/);
   assert.match(layout, /RangeCraft · 德州扑克训练室/);
   assert.match(transport, /export interface PokerTransport/);
+  assert.match(strategy, /export interface PokerStrategyProvider/);
   assert.match(packageJson, /"name": "rangecraft-poker-trainer"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 });
