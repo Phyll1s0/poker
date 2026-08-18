@@ -1,10 +1,10 @@
 {
-  "id": "/",
+  "id": "./",
   "name": "RangeCraft 德州扑克训练室",
   "short_name": "RangeCraft",
   "description": "本地优先的 6 人桌德州扑克决策训练游戏。",
-  "start_url": "/",
-  "scope": "/",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "background_color": "#0d100f",
   "theme_color": "#111514",
@@ -12,13 +12,13 @@
   "categories": ["games", "education"],
   "icons": [
     {
-      "src": "/icon-192.png",
+      "src": "icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "/icon-512.png",
+      "src": "icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"

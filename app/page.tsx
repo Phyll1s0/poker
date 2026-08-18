@@ -25,6 +25,8 @@ type InstallPromptEvent = Event & {
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
 };
 
+const APP_BASE_PATH = import.meta.env.BASE_URL || "/";
+
 type SquidState = {
   round: number;
   total: number;
@@ -852,7 +854,7 @@ export default function Home() {
 
   useEffect(() => {
     if ("serviceWorker" in navigator) {
-      void navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+      void navigator.serviceWorker.register(`${APP_BASE_PATH}sw.js`, { scope: APP_BASE_PATH }).catch(() => undefined);
     }
 
     const captureInstallPrompt = (event: Event) => {

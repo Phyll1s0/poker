@@ -1,11 +1,13 @@
 const CACHE_NAME = "rangecraft-v2";
+const APP_SCOPE = new URL("./", self.registration.scope);
+const appAsset = (path) => new URL(path, APP_SCOPE).href;
 const STATIC_ASSETS = [
-  "/",
-  "/manifest.webmanifest",
-  "/favicon.svg",
-  "/icon-192.png",
-  "/icon-512.png",
-  "/apple-touch-icon.png",
+  appAsset("./"),
+  appAsset("manifest.webmanifest"),
+  appAsset("favicon.svg"),
+  appAsset("icon-192.png"),
+  appAsset("icon-512.png"),
+  appAsset("apple-touch-icon.png"),
 ];
 const CACHEABLE_DESTINATIONS = new Set(["font", "image", "script", "style"]);
 
@@ -36,10 +38,10 @@ self.addEventListener("fetch", (event) => {
         .then((response) => {
           if (!response.ok) return response;
           return caches.open(CACHE_NAME)
-            .then((cache) => cache.put("/", response.clone()))
+            .then((cache) => cache.put(appAsset("./"), response.clone()))
             .then(() => response);
         })
-        .catch(() => caches.match("/").then((cached) => cached || new Response(
+        .catch(() => caches.match(appAsset("./")).then((cached) => cached || new Response(
           "RangeCraft 暂时无法连接，请恢复网络后重试。",
           { status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" } },
         ))),
@@ -47,7 +49,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (!STATIC_ASSETS.includes(url.pathname) && !CACHEABLE_DESTINATIONS.has(request.destination)) return;
+  if (!STATIC_ASSETS.includes(request.url) && !CACHEABLE_DESTINATIONS.has(request.destination)) return;
 
   event.respondWith(
     caches.match(request).then((cached) => cached || fetch(request).then((response) => {
