@@ -26,7 +26,7 @@ test("server-renders the RangeCraft application shell", async () => {
 });
 
 test("keeps the multiplayer and strategy boundaries with product metadata", async () => {
-  const [page, layout, transport, strategy, policy, sizing, evaluator, selfPlay, packageJson] = await Promise.all([
+  const [page, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/poker-transport.ts", import.meta.url), "utf8"),
@@ -35,6 +35,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
     readFile(new URL("../lib/poker-sizing.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/poker-evaluator.ts", import.meta.url), "utf8"),
     readFile(new URL("../scripts/ai-self-play.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../public/sw.js", import.meta.url), "utf8"),
+    readFile(new URL("../github-pages/index.html", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
@@ -60,6 +62,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(evaluator, /export function estimateEquity/);
   assert.match(selfPlay, /choosePokerPolicyAction/);
   assert.match(selfPlay, /estimateEquity/);
+  assert.match(serviceWorker, /key\.startsWith\("rangecraft-"\)/);
+  assert.match(pagesIndex, /https:\/\/phyll1s0\.com\/poker\//);
   assert.match(packageJson, /"name": "rangecraft-poker-trainer"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 });
