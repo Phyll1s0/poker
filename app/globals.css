@@ -389,6 +389,7 @@ button { color: inherit; }
 
 .table-bet {
   position: absolute;
+  z-index: 7;
   display: flex;
   align-items: center;
   gap: 5px;
@@ -400,7 +401,7 @@ button { color: inherit; }
   white-space: nowrap;
 }
 .table-bet i { width: 8px; height: 8px; }
-.seat-0 .table-bet { left: 50%; top: -65px; transform: translateX(-50%); }
+.seat-0 .table-bet { left: 50%; top: -96px; transform: translateX(-50%); }
 .seat-1 .table-bet { right: -40px; top: -12px; }
 .seat-2 .table-bet { right: -45px; bottom: -9px; }
 .seat-3 .table-bet { left: 50%; bottom: -36px; transform: translateX(-50%); }
