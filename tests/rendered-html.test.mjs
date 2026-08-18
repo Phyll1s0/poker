@@ -40,6 +40,9 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /20 手整局/);
   assert.match(page, /function setHeroShowChoice/);
   assert.match(page, /balancedBluffRate/);
+  assert.match(page, /const TABLE_PRESETS/);
+  assert.match(page, /function grantSquid/);
+  assert.match(page, /血战鱿鱼计分/);
   assert.match(layout, /RangeCraft · 德州扑克训练室/);
   assert.match(transport, /export interface PokerTransport/);
   assert.match(strategy, /export interface PokerStrategyProvider/);

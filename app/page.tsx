@@ -2,12 +2,24 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { playPokerSound, setPokerAudioEnabled, unlockPokerAudio } from "../lib/poker-audio";
+import { settleSquidRound, squidMultiplier } from "../lib/poker-squid";
 
 type Suit = "♠" | "♥" | "♦" | "♣";
 type Street = "preflop" | "flop" | "turn" | "river";
 type ActionKind = "fold" | "check" | "call" | "raise";
 type GameMode = "hand" | "session";
+type TablePresetKey = "short" | "standard" | "deep" | "squid";
 type TableImage = { loose: number; aggressive: number; deceptive: number };
+
+type SquidState = {
+  round: number;
+  total: number;
+  remaining: number;
+  counts: number[];
+  bounty: number;
+  settled: boolean;
+  lastSettlement: string;
+};
 
 type Card = { rank: number; suit: Suit };
 type Player = {
@@ -27,6 +39,10 @@ type Player = {
 };
 
 type Game = {
+  presetKey: TablePresetKey;
+  startingStack: number;
+  cashInvested: number[];
+  squid: SquidState;
   players: Player[];
   community: Card[];
   deck: Card[];
@@ -70,6 +86,8 @@ type SessionHandResult = {
   hand: number;
   result: string;
   heroStack: number;
+  heroCashInvested: number;
+  heroNet: number;
   score: number | null;
   decisions: number;
   heroCards: string;
@@ -79,8 +97,20 @@ const SUITS: Suit[] = ["♠", "♥", "♦", "♣"];
 const RANKS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 const SMALL_BLIND = 5;
 const BIG_BLIND = 10;
-const STARTING_STACK = 1000;
 const SESSION_HANDS = 20;
+
+const TABLE_PRESETS: Record<TablePresetKey, {
+  label: string;
+  shortLabel: string;
+  description: string;
+  stackBb: number;
+  squid: boolean;
+}> = {
+  short: { label: "浅筹现金 · 40 BB", shortLabel: "浅筹 40BB", description: "更频繁面对全下与低 SPR 决策", stackBb: 40, squid: false },
+  standard: { label: "标准现金 · 100 BB", shortLabel: "标准 100BB", description: "常规六人桌训练深度", stackBb: 100, squid: false },
+  deep: { label: "深筹现金 · 200 BB", shortLabel: "深筹 200BB", description: "更多转牌、河牌与大底池决策", stackBb: 200, squid: false },
+  squid: { label: "血战鱿鱼 · 200 BB", shortLabel: "血战鱿鱼", description: "9 条鱿鱼 · 基础价值 5 BB", stackBb: 200, squid: true },
+};
 
 const AI_PROFILES = {
   gto: { aggression: 0.58, looseness: 0.28, bluff: 0.08 },
@@ -285,6 +315,10 @@ function visibleHandStrength(player: Player, community: Card[]) {
 
 function aiWantsToShow(player: Player, game: Game) {
   if (player.isHuman) return false;
+  if (game.presetKey === "squid" && game.squid.remaining > 0) {
+    const alreadyHasSquid = game.squid.counts[player.id] > 0;
+    return Math.random() < (alreadyHasSquid ? 0.76 : 0.94);
+  }
   const strength = visibleHandStrength(player, game.community);
   const weak = strength < 0.42;
   const chances: Record<keyof typeof AI_PROFILES, [number, number]> = {
@@ -298,15 +332,65 @@ function aiWantsToShow(player: Player, game: Game) {
   return Math.random() < (weak ? weakChance : strongChance);
 }
 
+function grantSquid(game: Game, players: Player[], winnerId: number) {
+  if (game.presetKey !== "squid" || game.squid.remaining <= 0) {
+    return { players, cashInvested: game.cashInvested, squid: game.squid, message: "" };
+  }
+
+  const counts = [...game.squid.counts];
+  counts[winnerId] += 1;
+  const remaining = game.squid.remaining - 1;
+  const winner = players[winnerId];
+  let nextPlayers = players;
+  let cashInvested = [...game.cashInvested];
+  let message = `${winner.name} 获得 1 条鱿鱼（共 ${counts[winnerId]} 条）`;
+  let settled = false;
+  let lastSettlement = "";
+
+  if (remaining === 0) {
+    settled = true;
+    const payers = players.filter((player) => counts[player.id] === 0);
+    const holders = players.filter((player) => counts[player.id] > 0);
+    if (payers.length === 0) {
+      lastSettlement = `第 ${game.squid.round} 轮结束 · 全桌都拿到过鱿鱼，无人支付`;
+    } else {
+      const settlement = settleSquidRound(players, counts, game.squid.bounty, cashInvested);
+      nextPlayers = settlement.players;
+      cashInvested = settlement.cashInvested;
+      const holderSummary = holders
+        .map((holder) => `${holder.name} +${(settlement.holderUnits.get(holder.id) ?? 0) * game.squid.bounty * payers.length}`)
+        .join("、");
+      lastSettlement = `第 ${game.squid.round} 轮结算 · ${payers.map((payer) => payer.name).join("、")} 每人支付 ${settlement.obligationPerPayer} · ${holderSummary}`;
+    }
+    message = `${message} · ${lastSettlement}`;
+  }
+
+  return {
+    players: nextPlayers,
+    cashInvested,
+    squid: { ...game.squid, counts, remaining, settled, lastSettlement },
+    message,
+  };
+}
+
 function freshGame(
   previous?: Game,
-  options: { resetStacks?: boolean; shuffleStyles?: boolean } = {},
+  options: { resetStacks?: boolean; shuffleStyles?: boolean; presetKey?: TablePresetKey } = {},
 ): Game {
+  const presetKey = options.presetKey ?? previous?.presetKey ?? "standard";
+  const preset = TABLE_PRESETS[presetKey];
+  const startingStack = preset.stackBb * BIG_BLIND;
   const deck = shuffle(makeDeck());
   const dealer = previous ? (previous.dealer + 1) % PLAYER_TEMPLATES.length : 0;
   const stacks = previous?.players.length && !options.resetStacks
-    ? previous.players.map((player) => (player.stack < BIG_BLIND ? STARTING_STACK : player.stack))
-    : PLAYER_TEMPLATES.map(() => STARTING_STACK);
+    ? previous.players.map((player) => (player.stack < BIG_BLIND ? startingStack : player.stack))
+    : PLAYER_TEMPLATES.map(() => startingStack);
+  const cashInvested = previous?.players.length && !options.resetStacks
+    ? previous.players.map((player, id) => (
+        (previous.cashInvested[id] ?? previous.startingStack)
+        + (player.stack < BIG_BLIND ? startingStack - player.stack : 0)
+      ))
+    : PLAYER_TEMPLATES.map(() => startingStack);
   const stylePool = options.shuffleStyles
     ? shuffle(PLAYER_TEMPLATES.slice(1).map(({ style, styleKey }) => ({ style, styleKey })))
     : previous?.players.length
@@ -344,7 +428,33 @@ function freshGame(
   const rebought = previous && !options.resetStacks
     ? previous.players.filter((player) => player.stack < BIG_BLIND).map((player) => player.name)
     : [];
+  const previousSquid = previous?.presetKey === "squid" ? previous.squid : undefined;
+  const squid: SquidState = preset.squid
+    ? previousSquid && !previousSquid.settled
+      ? { ...previousSquid, counts: [...previousSquid.counts] }
+      : {
+          round: (previousSquid?.round ?? 0) + 1,
+          total: PLAYER_TEMPLATES.length + 3,
+          remaining: PLAYER_TEMPLATES.length + 3,
+          counts: PLAYER_TEMPLATES.map(() => 0),
+          bounty: BIG_BLIND * 5,
+          settled: false,
+          lastSettlement: "",
+        }
+    : {
+        round: 0,
+        total: 0,
+        remaining: 0,
+        counts: PLAYER_TEMPLATES.map(() => 0),
+        bounty: 0,
+        settled: false,
+        lastSettlement: "",
+      };
   return {
+    presetKey,
+    startingStack,
+    cashInvested,
+    squid,
     players,
     community: [],
     deck,
@@ -365,8 +475,8 @@ function freshGame(
     status: "playing",
     result: "",
     log: [
-      ...(rebought.length ? [`自动补充筹码：${rebought.join("、")} 回到 ${STARTING_STACK}`] : []),
-      `第 ${(previous?.handNo ?? 0) + 1} 手开始 · 盲注 ${SMALL_BLIND}/${BIG_BLIND}`,
+      ...(rebought.length ? [`自动补充筹码：${rebought.join("、")} 回到 ${startingStack}`] : []),
+      `第 ${(previous?.handNo ?? 0) + 1} 手开始 · ${preset.shortLabel} · 盲注 ${SMALL_BLIND}/${BIG_BLIND}`,
     ],
   };
 }
@@ -378,10 +488,15 @@ function awardUncontested(game: Game, players: Player[]): Game {
     player.id === winner.id ? { ...player, stack: player.stack + total, bet: 0 } : { ...player, bet: 0 },
   );
   const aiShows = !winner.isHuman && aiWantsToShow(winner, game);
-  const result = `${winner.name} 收下底池 ${total}${aiShows ? " · 主动亮牌" : ""}`;
+  const squidAward = !winner.isHuman && aiShows
+    ? grantSquid(game, finalPlayers, winner.id)
+    : { players: finalPlayers, cashInvested: game.cashInvested, squid: game.squid, message: "" };
+  const result = `${winner.name} 收下底池 ${total}${aiShows ? " · 主动亮牌" : ""}${squidAward.message ? ` · ${squidAward.message}` : ""}`;
   return {
     ...game,
-    players: finalPlayers,
+    players: squidAward.players,
+    cashInvested: squidAward.cashInvested,
+    squid: squidAward.squid,
     pot: 0,
     current: -1,
     status: "showdown",
@@ -424,10 +539,17 @@ function settleShowdown(game: Game): Game {
     stack: player.stack + (payouts.get(player.id) ?? 0),
     bet: 0,
   }));
-  const result = `${headlineWinners.map((entry) => entry.player.name).join(" / ")} · ${headlineWinners[0]?.name ?? "胜出"} · 赢得 ${paid || total}`;
+  const mainWinnerIds = headlineWinners.map((entry) => entry.player.id);
+  const squidAward = mainWinnerIds.length === 1
+    ? grantSquid(game, finalPlayers, mainWinnerIds[0])
+    : { players: finalPlayers, cashInvested: game.cashInvested, squid: game.squid, message: "" };
+  const squidTieMessage = game.presetKey === "squid" && mainWinnerIds.length > 1 ? " · 主池平分，本手鱿鱼不发" : "";
+  const result = `${headlineWinners.map((entry) => entry.player.name).join(" / ")} · ${headlineWinners[0]?.name ?? "胜出"} · 赢得 ${paid || total}${squidAward.message ? ` · ${squidAward.message}` : ""}${squidTieMessage}`;
   return {
     ...game,
-    players: finalPlayers,
+    players: squidAward.players,
+    cashInvested: squidAward.cashInvested,
+    squid: squidAward.squid,
     pot: 0,
     current: -1,
     status: "showdown",
@@ -577,21 +699,35 @@ function chooseAiAction(game: Game, player: Player, heroImage: TableImage): { ki
     ? (heroImage.deceptive - 0.5) * 0.14 + (heroImage.loose - 0.5) * 0.08 + (heroImage.aggressive - 0.5) * 0.12
     : 0;
   const effectiveEquity = clamp(equity + heroCallAdjustment + (inPosition ? 0.012 : 0), 0.02, 0.98);
-  const strategyStrength = game.street === "preflop"
+  const squidCount = game.squid.counts[player.id] ?? 0;
+  const squidProgress = game.squid.total ? 1 - game.squid.remaining / game.squid.total : 0;
+  const nextSquidHitsMultiplier = squidCount === 2 || squidCount === 4 || squidCount === 6;
+  const squidPressure = game.presetKey === "squid"
+    ? (squidCount === 0 ? 0.035 + squidProgress * 0.07 : nextSquidHitsMultiplier ? 0.055 : 0.018)
+    : 0;
+  const strategyStrength = clamp((game.street === "preflop"
     ? clamp(effectiveEquity * 0.35 + preflopStrength(player.hole) * 0.65, 0.02, 0.98)
-    : effectiveEquity;
+    : effectiveEquity) + squidPressure, 0.02, 0.98);
   const betFraction = clamp((pot * (0.48 + profile.aggression * 0.5)) / Math.max(1, pot), 0.33, 1.1);
   // 河牌均衡 bluff:value 为 b/(1+b)，换算成下注范围中的诈唬占比是 b/(1+2b)。
   const balancedBluffRate = betFraction / (1 + 2 * betFraction);
   const bluffCandidate = draw > 0.03 || blockers > 0.04 || (game.street === "river" && blockers > 0.07);
-  const bluffFrequency = balancedBluffRate * (0.42 + profile.bluff * 2.8) * (inPosition ? 1.16 : 0.82);
+  const startingDepthBb = game.startingStack / BIG_BLIND;
+  const depthBluffFactor = startingDepthBb <= 45 ? 0.88 : startingDepthBb >= 180 ? (inPosition ? 1.08 : 0.94) : 1;
+  const bluffFrequency = balancedBluffRate * (0.42 + profile.bluff * 2.8) * (inPosition ? 1.16 : 0.82) * (1 + squidPressure * 2.4) * depthBluffFactor;
   const bluffing = bluffCandidate && Math.random() < bluffFrequency;
-  const valueThreshold = (game.street === "river" ? 0.61 : 0.57) - profile.aggression * 0.075;
+  const depthThreshold = startingDepthBb <= 45 ? -0.032 : startingDepthBb >= 180 ? 0.022 : 0;
+  const valueThreshold = (game.street === "river" ? 0.61 : 0.57) - profile.aggression * 0.075 + depthThreshold;
   const strong = strategyStrength + draw * 0.35 > valueThreshold;
-  const sizeOptions = game.street === "river" ? [0.5, 0.75, 1] : [0.33, 0.5, 0.75];
+  const sizeOptions = game.street === "river"
+    ? startingDepthBb >= 180 ? [0.5, 0.75, 1.25] : [0.5, 0.75, 1]
+    : startingDepthBb >= 180 ? [0.33, 0.66, 1] : [0.33, 0.5, 0.75];
   const sizeIndex = strong ? (profile.aggression > 0.68 ? 2 : 1) : blockers > 0.08 ? 2 : 0;
   const raiseSize = Math.max(game.minRaise, Math.round((pot * sizeOptions[sizeIndex]) / BIG_BLIND) * BIG_BLIND);
-  const target = Math.min(player.bet + player.stack, game.highestBet + raiseSize);
+  const maxTarget = player.bet + player.stack;
+  const effectiveDepthBb = maxTarget / BIG_BLIND;
+  const shortStackJam = strong && startingDepthBb <= 45 && effectiveDepthBb <= 55 && Math.random() < 0.28 + profile.aggression * 0.28;
+  const target = shortStackJam ? maxTarget : Math.min(maxTarget, game.highestBet + raiseSize);
   const mix = Math.random();
 
   if (toCall > 0) {
@@ -613,12 +749,18 @@ function chooseAiAction(game: Game, player: Player, heroImage: TableImage): { ki
 function setHeroShowChoice(game: Game, show: boolean): Game {
   if (!game.endedUncontested || game.winnerIds[0] !== 0 || game.showChoiceMade) return game;
   const text = show ? "你选择亮出手牌" : "你选择盖牌";
+  const squidAward = show
+    ? grantSquid(game, game.players, 0)
+    : { players: game.players, cashInvested: game.cashInvested, squid: game.squid, message: "" };
   return {
     ...game,
+    players: squidAward.players,
+    cashInvested: squidAward.cashInvested,
+    squid: squidAward.squid,
     shownPlayerIds: show ? [...new Set([...game.shownPlayerIds, 0])] : game.shownPlayerIds,
     showChoiceMade: true,
-    result: `${game.result} · 你选择${show ? "亮牌" : "盖牌"}`,
-    log: [text, ...game.log],
+    result: `${game.result} · 你选择${show ? "亮牌" : "盖牌"}${squidAward.message ? ` · ${squidAward.message}` : ""}`,
+    log: [squidAward.message ? `${text} · ${squidAward.message}` : text, ...game.log],
   };
 }
 
@@ -626,15 +768,23 @@ function getAdvice(game: Game, player: Player, equity: number) {
   const toCall = Math.max(0, game.highestBet - player.bet);
   const pot = committedPot(game);
   const potOdds = toCall > 0 ? toCall / (pot + toCall) : 0;
-  const strategyStrength = game.street === "preflop"
+  const squidCount = game.squid.counts[player.id] ?? 0;
+  const squidProgress = game.squid.total ? 1 - game.squid.remaining / game.squid.total : 0;
+  const squidIncentive = game.presetKey === "squid"
+    ? squidCount === 0 ? 0.035 + squidProgress * 0.065 : (squidCount === 2 || squidCount === 4 || squidCount === 6) ? 0.05 : 0.015
+    : 0;
+  const startingDepthBb = game.startingStack / BIG_BLIND;
+  const depthThreshold = startingDepthBb <= 45 ? -0.025 : startingDepthBb >= 180 ? 0.018 : 0;
+  const decisionEquity = clamp(equity + squidIncentive, 0, 1);
+  const strategyStrength = (game.street === "preflop"
     ? equity * 0.35 + preflopStrength(player.hole) * 0.65
-    : equity;
+    : equity) + squidIncentive;
   let action: ActionKind;
   let note: string;
-  if (toCall > 0 && equity < potOdds - 0.045) {
+  if (toCall > 0 && decisionEquity < potOdds - 0.045) {
     action = "fold";
     note = `胜率约 ${Math.round(equity * 100)}%，低于跟注所需 ${Math.round(potOdds * 100)}%。控制负 EV 跟注。`;
-  } else if (!player.raiseLocked && strategyStrength > (toCall > 0 ? 0.57 : 0.51)) {
+  } else if (!player.raiseLocked && strategyStrength > (toCall > 0 ? 0.57 : 0.51) + depthThreshold) {
     action = "raise";
     note = `胜率约 ${Math.round(equity * 100)}%，具备价值下注或保护范围的空间。`;
   } else {
@@ -645,6 +795,16 @@ function getAdvice(game: Game, player: Player, equity: number) {
       ? `底池赔率需要 ${Math.round(potOdds * 100)}%，当前估算胜率 ${Math.round(equity * 100)}%，继续范围合理。`
       : `中等牌力适合控制底池，保留对手的诈唬范围。`;
   }
+  if (game.presetKey === "squid") {
+    note += squidCount === 0
+      ? ` 你还没有鱿鱼，越接近发完，争夺主池的附加价值越高。`
+      : ` 你已有 ${squidCount} 条鱿鱼，当前倍率为 ×${squidMultiplier(squidCount)}。`;
+  }
+  if (game.presetKey === "short") {
+    note += ` 当前为 40 BB 浅筹，低 SPR 下强成牌与高权益听牌可以更早进入承诺线。`;
+  } else if (game.presetKey === "deep" || game.presetKey === "squid") {
+    note += ` 当前为 200 BB 深筹，边缘成牌要控制大底池，坚果优势与位置价值更高。`;
+  }
   const frequencies: Record<ActionKind, number> = { fold: 0, check: 0, call: 0, raise: 0 };
   if (toCall > 0) {
     if (action === "fold") Object.assign(frequencies, { fold: 0.72, call: player.raiseLocked ? 0.28 : 0.24, raise: player.raiseLocked ? 0 : 0.04 });
@@ -652,6 +812,18 @@ function getAdvice(game: Game, player: Player, equity: number) {
     else Object.assign(frequencies, { fold: 0.12, call: player.raiseLocked ? 0.88 : 0.68, raise: player.raiseLocked ? 0 : 0.2 });
   } else if (action === "raise") Object.assign(frequencies, { check: 0.36, raise: 0.64 });
   else Object.assign(frequencies, { check: 0.7, raise: player.raiseLocked ? 0 : 0.3 });
+  if (squidIncentive > 0) {
+    const shift = Math.min(frequencies.fold, 0.05 + squidIncentive * 0.4);
+    frequencies.fold -= shift;
+    if (toCall > 0) {
+      frequencies.call += player.raiseLocked ? shift : shift * 0.65;
+      if (!player.raiseLocked) frequencies.raise += shift * 0.35;
+    } else if (!player.raiseLocked) {
+      const pressureShift = Math.min(frequencies.check, 0.04 + squidIncentive * 0.35);
+      frequencies.check -= pressureShift;
+      frequencies.raise += pressureShift;
+    }
+  }
   const labels: Record<ActionKind, string> = { fold: "弃牌", check: "过牌", call: "跟注", raise: "加注" };
   const mix = (Object.entries(frequencies) as [ActionKind, number][])
     .filter(([, frequency]) => frequency > 0)
@@ -661,6 +833,29 @@ function getAdvice(game: Game, player: Player, equity: number) {
 }
 
 const ACTION_LABELS: Record<ActionKind, string> = { fold: "弃牌", check: "过牌", call: "跟注", raise: "加注" };
+
+function isSessionComplete(game: Game) {
+  return game.presetKey === "squid" ? game.squid.settled : game.handNo >= SESSION_HANDS;
+}
+
+function buildSessionHandResult(game: Game, review: Review[]): SessionHandResult {
+  const decisions = review.filter((item) => item.hand === game.handNo);
+  const score = decisions.length
+    ? Math.round(decisions.reduce((sum, item) => sum + item.score, 0) / decisions.length)
+    : null;
+  const heroStack = game.players[0].stack;
+  const heroCashInvested = game.cashInvested[0];
+  return {
+    hand: game.handNo,
+    result: game.result,
+    heroStack,
+    heroCashInvested,
+    heroNet: heroStack - heroCashInvested,
+    score,
+    decisions: decisions.length,
+    heroCards: game.players[0].hole.map(cardText).join(" "),
+  };
+}
 
 function PlayingCard({ card, ghost = false, dealDelay }: { card?: Card; ghost?: boolean; dealDelay?: number }) {
   if (!card) return <div className={ghost ? "card card-ghost" : "card card-back"}><span>♠</span></div>;
@@ -698,11 +893,48 @@ function PlayerSeat({ player, game, index, thinking, revealReady }: { player: Pl
           <span>{player.isHuman ? player.style : "策略隐藏"}</span>
         </div>
         <div className="stack"><i />{player.stack}</div>
+        {game.presetKey === "squid" && (
+          <div className={`squid-seat-badge ${game.squid.counts[player.id] > 0 ? "has-squid" : ""}`} title={`${player.name} 已获得 ${game.squid.counts[player.id]} 条鱿鱼`}>
+            <span>🦑</span><b>{game.squid.counts[player.id]}</b>
+          </div>
+        )}
       </div>
       {player.bet > 0 && <div className="table-bet"><i />{player.bet}</div>}
       {thinking && isCurrent && <div className="thinking"><b /><b /><b /></div>}
       {player.folded && <div className="fold-label">已弃牌</div>}
     </div>
+  );
+}
+
+function SquidScoreboard({ game, report = false }: { game: Game; report?: boolean }) {
+  if (game.presetKey !== "squid") return null;
+  return (
+    <section className={`squid-scoreboard ${report ? "is-report" : ""}`}>
+      <div className="section-label">
+        <span>血战鱿鱼计分</span>
+        <small>公开附加赛 · 第 {game.squid.round} 轮</small>
+      </div>
+      <div className="squid-score-meta">
+        <div><span>待争夺</span><strong>{game.squid.remaining}<small> / {game.squid.total}</small></strong></div>
+        <div><span>基础价值</span><strong>{game.squid.bounty / BIG_BLIND}<small> BB</small></strong></div>
+        <div><span>倍率门槛</span><strong>3 / 5 / 7<small> 条</small></strong></div>
+      </div>
+      <div className="squid-count-grid">
+        {game.players.map((player) => {
+          const count = game.squid.counts[player.id] ?? 0;
+          return (
+            <div className={count > 0 ? "has-squid" : ""} key={player.id}>
+              <span>{player.monogram}</span>
+              <b>{player.name}</b>
+              <strong>🦑 {count}</strong>
+              <small>{count > 0 ? `当前 ×${squidMultiplier(count)}` : "尚未获得"}</small>
+            </div>
+          );
+        })}
+      </div>
+      <p className="squid-rule-note">独赢主池获得鱿鱼；无人跟注时必须亮牌，平分主池不发。9 条发完后，零条玩家按持有数量与倍率向持有者结算。</p>
+      {game.squid.lastSettlement && <div className="squid-settlement">{game.squid.lastSettlement}</div>}
+    </section>
   );
 }
 
@@ -724,7 +956,7 @@ export default function Home() {
   const soundOnRef = useRef(true);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setGame(freshGame(undefined, { shuffleStyles: true })), 0);
+    const timer = window.setTimeout(() => setGame(freshGame(undefined, { shuffleStyles: true, presetKey: "standard" })), 0);
     return () => window.clearTimeout(timer);
   }, []);
 
@@ -738,6 +970,7 @@ export default function Home() {
   const communityLength = game?.community.length ?? 0;
   const dealCount = game?.dealCount ?? 0;
   const currentHandNo = game?.handNo ?? 0;
+  const currentPresetKey = game?.presetKey ?? "standard";
 
   useEffect(() => {
     if (communityLength === 0 || dealCount === 0) {
@@ -756,28 +989,21 @@ export default function Home() {
     };
   }, [communityLength, dealCount, currentHandNo]);
 
+  const recordSessionHand = useCallback((finishedGame: Game) => {
+    if (mode !== "session" || finishedGame.status !== "showdown" || !finishedGame.showChoiceMade) return;
+    const entry = buildSessionHandResult(finishedGame, review);
+    setSessionResults((items) => [
+      ...items.filter((item) => item.hand !== finishedGame.handNo),
+      entry,
+    ]);
+  }, [mode, review]);
+
   useEffect(() => {
     if (game?.status === "showdown" && !dealing) {
       const timer = window.setTimeout(() => {
-        const decisions = review.filter((item) => item.hand === game.handNo);
-        const score = decisions.length
-          ? Math.round(decisions.reduce((sum, item) => sum + item.score, 0) / decisions.length)
-          : null;
-        if (mode === "session") {
-          setSessionResults((items) => [
-            ...items.filter((item) => item.hand !== game.handNo),
-            {
-              hand: game.handNo,
-              result: game.result,
-              heroStack: game.players[0].stack,
-              score,
-              decisions: decisions.length,
-              heroCards: game.players[0].hole.map(cardText).join(" "),
-            },
-          ]);
-        }
+        recordSessionHand(game);
         if (mode === "hand" && game.showChoiceMade) setShowLog(true);
-        if (mode === "session" && game.handNo >= SESSION_HANDS && game.showChoiceMade) {
+        if (mode === "session" && isSessionComplete(game) && game.showChoiceMade) {
           setSessionEnded(true);
           setShowLog(true);
         }
@@ -788,7 +1014,7 @@ export default function Home() {
       }, 0);
       return () => window.clearTimeout(timer);
     }
-  }, [game, dealing, mode, review]);
+  }, [game, dealing, mode, recordSessionHand]);
 
   useEffect(() => {
     if (!isHumanTurn || maxTarget <= 0) return;
@@ -819,17 +1045,17 @@ export default function Home() {
   }, [game, dealing, soundOn, heroImage]);
 
   const startNextHand = useCallback(() => {
-    if (mode === "session" && (sessionEnded || (game?.handNo ?? 0) >= SESSION_HANDS)) return;
+    if (mode === "session" && (sessionEnded || (game ? isSessionComplete(game) : false))) return;
+    if (game) recordSessionHand(game);
     setFeedback(null);
     setShowLog(false);
     setGame((current) => freshGame(current ?? undefined, {
       resetStacks: mode === "hand",
       shuffleStyles: mode === "hand",
     }));
-  }, [mode, sessionEnded, game?.handNo]);
+  }, [mode, sessionEnded, game, recordSessionHand]);
 
-  const switchMode = useCallback((nextMode: GameMode) => {
-    if (nextMode === mode) return;
+  const resetRun = useCallback((nextMode: GameMode, nextPreset: TablePresetKey) => {
     setMode(nextMode);
     setTraining(nextMode === "hand");
     setReview([]);
@@ -838,9 +1064,37 @@ export default function Home() {
     setSessionEnded(false);
     setSessionResults([]);
     setHeroImage({ loose: 0.5, aggressive: 0.5, deceptive: 0.5 });
+    setDealing(false);
+    setRaiseTo(BIG_BLIND * 3);
     winSoundHand.current = 0;
-    setGame(freshGame(undefined, { shuffleStyles: true }));
-  }, [mode]);
+    setGame(freshGame(undefined, { shuffleStyles: true, presetKey: nextPreset }));
+  }, []);
+
+  const hasRunProgress = Boolean(game && (
+    game.handNo > 1
+    || game.status === "showdown"
+    || game.community.length > 0
+    || game.players.some((player) => player.hasActed)
+    || review.length > 0
+    || sessionResults.length > 0
+  ));
+
+  const switchMode = useCallback((nextMode: GameMode) => {
+    if (nextMode === mode || (currentPresetKey === "squid" && nextMode === "hand")) return;
+    if (hasRunProgress && !window.confirm("切换训练模式会重新开始当前练习，确定继续吗？")) return;
+    resetRun(nextMode, currentPresetKey);
+  }, [mode, currentPresetKey, hasRunProgress, resetRun]);
+
+  const switchPreset = useCallback((nextPreset: TablePresetKey) => {
+    if (nextPreset === currentPresetKey) return;
+    if (hasRunProgress && !window.confirm("切换桌型会清空当前牌局、复盘和桌上形象，确定继续吗？")) return;
+    const nextMode: GameMode = nextPreset === "squid" ? "session" : mode;
+    resetRun(nextMode, nextPreset);
+  }, [mode, currentPresetKey, hasRunProgress, resetRun]);
+
+  const restartCurrentRun = useCallback(() => {
+    resetRun(currentPresetKey === "squid" ? "session" : mode, currentPresetKey);
+  }, [currentPresetKey, mode, resetRun]);
 
   const chooseHeroShow = useCallback((show: boolean) => {
     if (!game || !game.endedUncontested || game.winnerIds[0] !== 0 || game.showChoiceMade) return;
@@ -900,11 +1154,12 @@ export default function Home() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.target as HTMLElement)?.tagName === "INPUT") return;
+      const targetTag = (event.target as HTMLElement)?.tagName;
+      if (targetTag === "INPUT" || targetTag === "SELECT") return;
       const key = event.key.toLowerCase();
       if (game?.status === "showdown" && !dealing && key === "n") {
         if (!game.showChoiceMade) return;
-        if (mode === "session" && game.handNo >= SESSION_HANDS) setShowLog(true);
+        if (mode === "session" && isSessionComplete(game)) setShowLog(true);
         else startNextHand();
         return;
       }
@@ -934,8 +1189,13 @@ export default function Home() {
   const reportReview = [...(mode === "hand" ? handReview : review)].reverse();
   const reportScore = mode === "hand" ? handScore : sessionScore;
   const completedHands = mode === "session"
-    ? Math.max(sessionResults.length, handFinished ? Math.min(game.handNo, SESSION_HANDS) : game.handNo - 1)
+    ? Math.max(sessionResults.length, handFinished ? game.handNo : game.handNo - 1)
     : game.handNo;
+  const squidAwarded = game.squid.total - game.squid.remaining;
+  const sessionProgressDone = game.presetKey === "squid" ? squidAwarded : Math.min(completedHands, SESSION_HANDS);
+  const sessionProgressGoal = game.presetKey === "squid" ? game.squid.total : SESSION_HANDS;
+  const sessionIsComplete = isSessionComplete(game);
+  const heroNet = human.stack - game.cashInvested[0];
   const showDecisionPending = handFinished && game.endedUncontested && game.winnerIds[0] === 0 && !game.showChoiceMade;
   const imageLabel = (value: number, low: string, middle: string, high: string) => value < 0.42 ? low : value > 0.58 ? high : middle;
   const streetScores = (["翻牌前", "翻牌", "转牌", "河牌"] as const).map((street) => {
@@ -954,9 +1214,9 @@ export default function Home() {
           <span className="status-dot" />
           <span>本地单机</span>
           <i />
-          <span>NL10 · 6-MAX</span>
+          <span>盲注 {SMALL_BLIND}/{BIG_BLIND} · 6-MAX</span>
           <i />
-          <span>{mode === "session" ? `${Math.min(game.handNo, SESSION_HANDS)} / ${SESSION_HANDS} 手` : `第 ${game.handNo} 手`}</span>
+          <span>{TABLE_PRESETS[game.presetKey].shortLabel} · {mode === "session" ? game.presetKey === "squid" ? `第 ${game.handNo} 手 · 剩余 ${game.squid.remaining} 条` : `${Math.min(game.handNo, SESSION_HANDS)} / ${SESSION_HANDS} 手` : `第 ${game.handNo} 手`}</span>
         </div>
         <div className="header-actions">
           <button className={`sound-toggle ${soundOn ? "on" : ""}`} onClick={toggleSound} aria-pressed={soundOn} aria-label={soundOn ? "关闭牌桌音效" : "开启牌桌音效"}>
@@ -966,7 +1226,7 @@ export default function Home() {
             className={`training-toggle ${training && mode === "hand" ? "on" : ""}`}
             onClick={() => setTraining((value) => !value)}
             disabled={mode === "session"}
-            title={mode === "session" ? "整局模式在第 20 手后统一点评" : undefined}
+            title={mode === "session" ? game.presetKey === "squid" ? "鱿鱼整局在 9 条发完后统一点评" : "整局模式在第 20 手后统一点评" : undefined}
           >
             <span>{mode === "session" ? "赛后点评" : "训练提示"}</span><b>{mode === "session" ? "LOCK" : training ? "ON" : "OFF"}</b>
           </button>
@@ -977,15 +1237,37 @@ export default function Home() {
       <div className="workspace">
         <section className="table-zone">
           <div className="table-toolbar">
-            <div className="mode-switch" aria-label="训练模式">
-              <button className={mode === "hand" ? "active" : ""} aria-pressed={mode === "hand"} onClick={() => switchMode("hand")}>
-                <b>单手训练</b><span>每手结束立即点评</span>
-              </button>
-              <button className={mode === "session" ? "active" : ""} aria-pressed={mode === "session"} onClick={() => switchMode("session")}>
-                <b>20 手整局</b><span>结束后统一点评</span>
-              </button>
+            <div className="table-setup-row">
+              <label className="preset-select">
+                <span>桌型</span>
+                <select value={currentPresetKey} onChange={(event) => switchPreset(event.target.value as TablePresetKey)} aria-label="选择牌桌类型">
+                  {(Object.entries(TABLE_PRESETS) as [TablePresetKey, (typeof TABLE_PRESETS)[TablePresetKey]][]).map(([key, preset]) => (
+                    <option key={key} value={key}>{preset.label}</option>
+                  ))}
+                </select>
+                <small>{TABLE_PRESETS[currentPresetKey].description}</small>
+              </label>
+              <div className="mode-switch" aria-label="训练模式">
+                <button
+                  className={mode === "hand" ? "active" : ""}
+                  aria-pressed={mode === "hand"}
+                  onClick={() => switchMode("hand")}
+                  disabled={currentPresetKey === "squid"}
+                  title={currentPresetKey === "squid" ? "血战鱿鱼需要跨手记录，使用整局模式" : undefined}
+                >
+                  <b>单手训练</b><span>每手结束立即点评</span>
+                </button>
+                <button className={mode === "session" ? "active" : ""} aria-pressed={mode === "session"} onClick={() => switchMode("session")}>
+                  <b>{currentPresetKey === "squid" ? "鱿鱼整局" : "20 手整局"}</b><span>{currentPresetKey === "squid" ? "9 条发完统一点评" : "结束后统一点评"}</span>
+                </button>
+              </div>
             </div>
-            {mode === "session" && <div className="session-progress"><i style={{ width: `${completedHands / SESSION_HANDS * 100}%` }} /><span>{completedHands}/{SESSION_HANDS}</span></div>}
+            <div className="table-status-row">
+              {mode === "session" && <div className="session-progress"><i style={{ width: `${sessionProgressDone / Math.max(1, sessionProgressGoal) * 100}%` }} /><span>{sessionProgressDone}/{sessionProgressGoal}</span></div>}
+              {game.presetKey === "squid" && (
+                <div className="squid-race-status"><span>🦑 第 {game.squid.round} 轮</span><b>剩余 {game.squid.remaining}/{game.squid.total}</b><em>基础 {game.squid.bounty / BIG_BLIND} BB</em></div>
+              )}
+            </div>
           </div>
           <div className="ambient ambient-one" />
           <div className="ambient ambient-two" />
@@ -1019,17 +1301,19 @@ export default function Home() {
             {handFinished ? (
               <div className="hand-end-dock">
                 <div className="hand-end-copy">
-                  <span>{mode === "session" ? `整局进度 ${Math.min(game.handNo, SESSION_HANDS)}/${SESSION_HANDS}` : "本手结束"}</span>
+                  <span>{mode === "session" ? game.presetKey === "squid" ? `第 ${game.handNo} 手 · 本轮已发 ${squidAwarded}/${game.squid.total}` : `整局进度 ${Math.min(game.handNo, SESSION_HANDS)}/${SESSION_HANDS}` : "本手结束"}</span>
                   <strong>{game.result}</strong>
-                  {showDecisionPending && <p>要公开这两张手牌来塑造桌上形象吗？AI 会记住你的选择。</p>}
+                  {showDecisionPending && (
+                    <p>{game.presetKey === "squid" ? "亮牌可获得本手鱿鱼；盖牌能隐藏信息，但会放弃这条鱿鱼。" : "要公开这两张手牌来塑造桌上形象吗？AI 会记住你的选择。"}</p>
+                  )}
                 </div>
                 {showDecisionPending ? (
                   <div className="show-choice">
                     <button className="show-cards" onClick={() => chooseHeroShow(true)}>亮出手牌</button>
                     <button className="muck-cards" onClick={() => chooseHeroShow(false)}>盖牌</button>
                   </div>
-                ) : mode === "session" && game.handNo >= SESSION_HANDS ? (
-                  <button className="next-hand-button" onClick={() => setShowLog(true)}>查看整局复盘</button>
+                ) : mode === "session" && sessionIsComplete ? (
+                  <button className="next-hand-button" onClick={() => setShowLog(true)}>查看{game.presetKey === "squid" ? "鱿鱼" : ""}整局复盘</button>
                 ) : (
                   <button className="next-hand-button" onClick={startNextHand}>下一手 <kbd>N</kbd></button>
                 )}
@@ -1093,7 +1377,7 @@ export default function Home() {
           <div className="tabs" role="tablist">
             <button className={!showLog ? "active" : ""} onClick={() => setShowLog(false)}>{mode === "session" ? "整局进行中" : "实时教练"}</button>
             <button className={showLog ? "active" : ""} onClick={() => setShowLog(true)} aria-disabled={!reviewUnlocked}>
-              {mode === "session" ? `整局复盘 · ${completedHands}/${SESSION_HANDS}` : `本手复盘${reviewUnlocked ? " · 已解锁" : ""}`}
+              {mode === "session" ? game.presetKey === "squid" ? `鱿鱼复盘 · ${squidAwarded}/${game.squid.total}` : `整局复盘 · ${completedHands}/${SESSION_HANDS}` : `本手复盘${reviewUnlocked ? " · 已解锁" : ""}`}
             </button>
           </div>
 
@@ -1102,12 +1386,12 @@ export default function Home() {
               <section className="session-lock">
                 <div className="lock-orbit">◇</div>
                 <span>SESSION REVIEW LOCKED</span>
-                <h3>答案留到第 20 手之后</h3>
+                <h3>{game.presetKey === "squid" ? "答案留到 9 条鱿鱼发完之后" : "答案留到第 20 手之后"}</h3>
                 <p>整局模式不显示实时胜率、推荐动作、决策分数和对手类型，避免答案影响你的下一次判断。</p>
                 <div className="session-progress-card">
-                  <div><b>{completedHands}</b><span>已完成</span></div>
-                  <i><em style={{ width: `${completedHands / SESSION_HANDS * 100}%` }} /></i>
-                  <strong>{SESSION_HANDS}</strong>
+                  <div><b>{sessionProgressDone}</b><span>{game.presetKey === "squid" ? "已发出" : "已完成"}</span></div>
+                  <i><em style={{ width: `${sessionProgressDone / Math.max(1, sessionProgressGoal) * 100}%` }} /></i>
+                  <strong>{sessionProgressGoal}</strong>
                 </div>
               </section>
               <section className="public-state">
@@ -1118,6 +1402,7 @@ export default function Home() {
                   <div><span>当前街</span><strong>{STREET_LABELS[game.street]}</strong></div>
                 </div>
               </section>
+              <SquidScoreboard game={game} />
               <section className="locked-profile">
                 <span>◇</span>
                 <div><b>桌上形象正在形成</b><p>AI 会根据你的松紧、侵略性和亮牌行为调整应对；具体画像只在整局结束后公开。</p></div>
@@ -1173,7 +1458,7 @@ export default function Home() {
               <section className="session-lock compact">
                 <div className="lock-orbit">◇</div>
                 <span>REVIEW LOCKED</span>
-                <h3>{showDecisionPending ? "请先选择亮牌或盖牌" : mode === "session" ? `还需完成 ${SESSION_HANDS - completedHands} 手` : "本手尚未结束"}</h3>
+                <h3>{showDecisionPending ? "请先选择亮牌或盖牌" : mode === "session" ? game.presetKey === "squid" ? `还剩 ${game.squid.remaining} 条鱿鱼` : `还需完成 ${Math.max(0, SESSION_HANDS - completedHands)} 手` : "本手尚未结束"}</h3>
                 <p>{showDecisionPending ? "完成本手的展示决策后再生成报告，避免复盘信息影响你的选择。" : mode === "session" ? "整局结束后一次生成完整报告，不显示中途答案、分数和对手类型。" : "牌局结束后会自动生成这手牌的决策点评。"}</p>
                 <button onClick={() => setShowLog(false)}>回到牌桌</button>
               </section>
@@ -1182,8 +1467,8 @@ export default function Home() {
             <div className="log-content">
               <div className="review-summary unlocked">
                 <div>
-                  <span>{mode === "session" ? "20 手整局报告已生成" : "本手复盘已生成"}</span>
-                  <h3>{mode === "session" ? `${SESSION_HANDS} 手 · ${review.length} 个决策节点` : `第 ${game.handNo} 手 · ${STREET_LABELS[game.street]}`}</h3>
+                  <span>{mode === "session" ? game.presetKey === "squid" ? "鱿鱼整局报告已生成" : "20 手整局报告已生成" : "本手复盘已生成"}</span>
+                  <h3>{TABLE_PRESETS[game.presetKey].shortLabel} · {mode === "session" ? `${sessionResults.length} 手 · ${review.length} 个决策节点` : `第 ${game.handNo} 手 · ${STREET_LABELS[game.street]}`}</h3>
                 </div>
                 <strong>{reportScore}<small>{reportReview.length ? "策略匹配度" : "暂无决策"}</small></strong>
               </div>
@@ -1191,17 +1476,20 @@ export default function Home() {
               {mode === "session" && (
                 <>
                   <div className="session-stats">
-                    <div><span>完成手数</span><strong>{sessionResults.length}/{SESSION_HANDS}</strong></div>
-                    <div><span>当前筹码</span><strong>{human.stack}</strong></div>
+                    <div><span>完成手数</span><strong>{sessionResults.length}{game.presetKey === "squid" ? "" : `/${SESSION_HANDS}`}</strong></div>
+                    <div><span>桌面筹码</span><strong>{human.stack}</strong></div>
+                    <div><span>本局总投入</span><strong>{game.cashInvested[0]}</strong></div>
+                    <div><span>净结果（含鱿鱼）</span><strong className={heroNet >= 0 ? "good" : "bad"}>{heroNet >= 0 ? "+" : ""}{heroNet}</strong></div>
                     <div><span>AI 眼中的松紧</span><strong>{imageLabel(heroImage.loose, "偏紧", "均衡", "偏松")}</strong></div>
                     <div><span>AI 眼中的风格</span><strong>{imageLabel(heroImage.aggressive, "偏被动", "均衡", "偏激进")}</strong></div>
                   </div>
+                  <SquidScoreboard game={game} report />
                   <div className="session-hand-list">
-                    <div className="section-label"><span>逐手结果</span><small>低于 1 BB 自动补充筹码</small></div>
+                    <div className="section-label"><span>逐手结果</span><small>低于 1 BB 自动补至当前桌型</small></div>
                     {[...sessionResults].sort((a, b) => a.hand - b.hand).map((item) => (
                       <div key={item.hand}>
                         <span>{String(item.hand).padStart(2, "0")}</span>
-                        <p><b>{item.heroCards}</b><small>{item.result}</small></p>
+                        <p><b>{item.heroCards}</b><small>{item.result} · 桌面 {item.heroStack} / 投入 {item.heroCashInvested} / 净 {item.heroNet >= 0 ? "+" : ""}{item.heroNet}</small></p>
                         <em>{item.score ?? "—"}<small>{item.decisions ? "分" : "无决策"}</small></em>
                       </div>
                     ))}
@@ -1242,6 +1530,12 @@ export default function Home() {
                 </div>
               </div>
 
+              {mode === "session" && (
+                <button className="session-restart" onClick={restartCurrentRun}>
+                  {game.presetKey === "squid" ? "开始新一轮鱿鱼" : "开始新的 20 手整局"}
+                </button>
+              )}
+
               {mode === "hand" && (
                 <div className="hand-log">
                   <div className="section-label"><span>整手行动线</span><small>{game.log.length} 个事件</small></div>
@@ -1266,10 +1560,12 @@ export default function Home() {
             <h2 id="info-title">更强的混合频率对手，<br />但不冒充“完整 GTO”。</h2>
             <p>当前本地引擎综合 Monte Carlo 胜率、底池赔率、位置、听牌、阻断牌、下注尺度与价值/诈唬频率，并根据你的公开行动和亮牌选择调整应对。评分是策略匹配度，不是求解器计算出的精确 EV 损失。</p>
             <div className="modal-grid">
-              <div><b>两种训练</b><span>单手模式逐手点评；20 手整局模式隐藏答案，最后统一复盘。</span></div>
+              <div><b>四种桌型</b><span>浅筹 40 BB、标准 100 BB、深筹 200 BB，以及 200 BB 的血战鱿鱼。</span></div>
+              <div><b>两种训练</b><span>单手模式逐手点评；常规整局固定 20 手，鱿鱼整局以 9 条全部发完为终点，答案都在结束后统一公开。</span></div>
+              <div><b>血战鱿鱼</b><span>六人桌争夺 9 条；3/5/7 条触发 ×2/×3/×4。无人跟注时亮牌才获得。</span></div>
               <div><b>完整 GTO 的边界</b><span>任意 6 人动态牌局需要预计算策略库或外部求解服务；现有传输接口可在后续接入。</span></div>
               <div><b>形象博弈</b><span>你和 AI 都可选择亮牌或盖牌；AI 会用可见信息形成对你的松紧、侵略性与欺骗性判断。</span></div>
-              <div><b>规则范围</b><span>6 人现金桌、边池、全下跑牌与不足额全下加注权均在本地处理。</span></div>
+              <div><b>规则范围</b><span>6 人现金桌、边池、全下跑牌、不足额全下加注权与鱿鱼跨手结算均在本地处理。</span></div>
             </div>
             <button className="modal-primary" onClick={() => setInfoOpen(false)}>回到牌桌</button>
           </section>
