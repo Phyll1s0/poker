@@ -26,12 +26,13 @@ test("server-renders the RangeCraft application shell", async () => {
 });
 
 test("keeps the multiplayer and strategy boundaries with product metadata", async () => {
-  const [page, layout, transport, strategy, policy, evaluator, selfPlay, packageJson] = await Promise.all([
+  const [page, layout, transport, strategy, policy, sizing, evaluator, selfPlay, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/poker-transport.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/poker-strategy.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/poker-policy.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/poker-sizing.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/poker-evaluator.ts", import.meta.url), "utf8"),
     readFile(new URL("../scripts/ai-self-play.mjs", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -40,6 +41,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /function settleShowdown/);
   assert.match(page, /function chooseAiAction/);
   assert.match(page, /近似 GTO 建议/);
+  assert.match(page, /加注尺寸路线/);
+  assert.match(page, /pokerRaiseTargetForFraction/);
   assert.match(page, /20 手整局/);
   assert.match(page, /function setHeroShowChoice/);
   assert.match(page, /choosePokerPolicyAction/);
@@ -52,6 +55,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(transport, /export interface PokerTransport/);
   assert.match(strategy, /export interface PokerStrategyProvider/);
   assert.match(policy, /balancedBluffRate/);
+  assert.match(sizing, /跟注后底池/);
+  assert.match(sizing, /scorePokerRaiseSize/);
   assert.match(evaluator, /export function estimateEquity/);
   assert.match(selfPlay, /choosePokerPolicyAction/);
   assert.match(selfPlay, /estimateEquity/);

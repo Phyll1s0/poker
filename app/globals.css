@@ -543,6 +543,7 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
 .quick-bets button { border: 1px solid var(--line); border-radius: 3px; background: transparent; color: #8e918c; padding: 5px 2px; font-size: 8px; cursor: pointer; }
 .quick-bets button:hover:not(:disabled) { color: #e3e0d8; border-color: rgba(255,255,255,.2); }
 .quick-bets button:disabled { opacity: .3; cursor: not-allowed; }
+.sizing-basis-note { display: block; margin-top: 6px; color: #666a65; font-size: 8px; text-align: right; }
 
 .action-dock.hand-ended { min-height: 108px; grid-template-columns: 1fr; }
 .hand-end-dock { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 22px; }

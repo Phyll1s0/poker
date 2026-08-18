@@ -11,8 +11,27 @@ import {
   preflopPercentile,
   preflopStrength,
 } from "../lib/poker-evaluator";
-import { choosePokerPolicyAction, sixMaxPreflopPositionFactor } from "../lib/poker-policy";
+import {
+  choosePokerPolicyAction,
+  evaluatePokerPolicy,
+  sixMaxPreflopPositionFactor,
+  type PokerPolicyInput,
+  type PokerPolicyProfile,
+} from "../lib/poker-policy";
 import { createPublicOpponentRanges, type PublicBettingAction } from "../lib/poker-range";
+import {
+  buildPokerSizingRoutes,
+  formatPokerSizingRoute,
+  legalPokerRaiseTarget,
+  pokerRaiseFraction,
+  pokerRaiseSizeVerdict,
+  pokerRaiseTargetForFraction,
+  pokerSizingMaxTarget,
+  preferredPokerSizingRoute,
+  roundedPokerRaiseTarget,
+  scorePokerRaiseSize,
+  type PokerSizingContext,
+} from "../lib/poker-sizing";
 import { settleSquidRound, squidMultiplier } from "../lib/poker-squid";
 
 type Suit = "♠" | "♥" | "♦" | "♣";
@@ -95,8 +114,17 @@ type Review = {
   equity: number;
   potOdds: number;
   action: string;
+  actionKind: ActionKind;
+  actualRaiseTo: number | null;
+  actualBetFraction: number | null;
   recommended: string;
+  recommendedAction: ActionKind;
+  recommendedRaiseTo: number | null;
+  recommendedBetFraction: number | null;
   mix: string;
+  sizingMix: string;
+  sizeScore: number | null;
+  sizeVerdict: string;
   score: number;
   note: string;
 };
@@ -117,6 +145,7 @@ const RANKS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 const SMALL_BLIND = 5;
 const BIG_BLIND = 10;
 const SESSION_HANDS = 20;
+const COACH_PROFILE: PokerPolicyProfile = { aggression: 0.62, looseness: 0.3, bluff: 0.16 };
 
 const TABLE_PRESETS: Record<TablePresetKey, {
   label: string;
@@ -218,6 +247,79 @@ function visibleHandStrength(player: Player, community: Card[]) {
   if (community.length + player.hole.length < 5) return preflopStrength(player.hole);
   const category = bestHand([...player.hole, ...community]).category;
   return clamp(category / 7 + Math.max(...player.hole.map((card) => card.rank)) / 140, 0, 1);
+}
+
+function pokerSizingContext(game: Game, player: Player): PokerSizingContext {
+  return {
+    street: game.street,
+    pot: committedPot(game),
+    toCall: Math.max(0, game.highestBet - player.bet),
+    highestBet: game.highestBet,
+    playerBet: player.bet,
+    playerStack: player.stack,
+    minRaise: game.minRaise,
+    bigBlind: BIG_BLIND,
+    preflopRaiseCount: game.raiseCount,
+  };
+}
+
+function isPlayerInPosition(game: Game, player: Player) {
+  if (game.street === "preflop") return player.id === game.dealer;
+  const activePlayers = game.players.filter((candidate) => !candidate.folded && candidate.stack > 0);
+  const actionOrderRank = (candidate: Player) => {
+    const offset = (candidate.id - game.dealer + game.players.length) % game.players.length;
+    return offset === 0 ? game.players.length : offset;
+  };
+  const lastPostflopActor = [...activePlayers]
+    .sort((left, right) => actionOrderRank(left) - actionOrderRank(right))
+    .at(-1);
+  return lastPostflopActor?.id === player.id;
+}
+
+function playerSquidPressure(game: Game, player: Player) {
+  if (game.presetKey !== "squid") return 0;
+  const squidCount = game.squid.counts[player.id] ?? 0;
+  const squidProgress = game.squid.total ? 1 - game.squid.remaining / game.squid.total : 0;
+  const nextSquidHitsMultiplier = squidCount === 2 || squidCount === 4 || squidCount === 6;
+  return squidCount === 0 ? 0.035 + squidProgress * 0.07 : nextSquidHitsMultiplier ? 0.055 : 0.018;
+}
+
+function buildPokerPolicyInput(
+  game: Game,
+  player: Player,
+  equity: number,
+  profile: PokerPolicyProfile,
+): PokerPolicyInput {
+  const context = pokerSizingContext(game, player);
+  const opponentStacks = game.players
+    .filter((candidate) => !candidate.folded && candidate.id !== player.id)
+    .map((candidate) => candidate.stack);
+  const effectiveStack = Math.min(player.stack, Math.max(0, ...opponentStacks));
+  return {
+    profile,
+    street: game.street,
+    equity,
+    handStrength: game.street === "preflop" ? preflopStrength(player.hole) : visibleHandStrength(player, game.community),
+    draw: drawPotential(player.hole, game.community),
+    blockers: blockerValue(player.hole, game.community),
+    pot: context.pot,
+    toCall: context.toCall,
+    potOdds: context.toCall > 0 ? context.toCall / (context.pot + context.toCall) : 0,
+    inPosition: isPlayerInPosition(game, player),
+    activeOpponents: game.players.filter((candidate) => !candidate.folded && candidate.id !== player.id).length,
+    effectiveStackBb: effectiveStack / BIG_BLIND,
+    startingDepthBb: game.startingStack / BIG_BLIND,
+    highestBet: game.highestBet,
+    playerBet: player.bet,
+    playerStack: player.stack,
+    minRaise: game.minRaise,
+    raiseLocked: player.raiseLocked,
+    squidPressure: playerSquidPressure(game, player),
+    bigBlind: BIG_BLIND,
+    preflopPercentile: preflopPercentile(player.hole),
+    preflopPositionFactor: sixMaxPreflopPositionFactor(player.id, game.dealer),
+    preflopRaiseCount: game.raiseCount,
+  };
 }
 
 function aiWantsToShow(player: Player, game: Game) {
@@ -559,9 +661,10 @@ function act(game: Game, playerId: number, kind: ActionKind, raiseTo?: number): 
     amount = paid;
   } else if (kind === "raise") {
     if (player.raiseLocked) return game;
-    const maxTarget = player.bet + player.stack;
-    const legalFloor = game.highestBet + game.minRaise;
-    const target = Math.max(player.bet, Math.min(maxTarget, Math.max(raiseTo ?? legalFloor, Math.min(legalFloor, maxTarget))));
+    const target = legalPokerRaiseTarget(
+      pokerSizingContext(game, player),
+      raiseTo ?? game.highestBet + game.minRaise,
+    );
     const paid = target - player.bet;
     const increase = target - game.highestBet;
     player.stack -= paid;
@@ -630,59 +733,12 @@ function act(game: Game, playerId: number, kind: ActionKind, raiseTo?: number): 
 function chooseAiAction(game: Game, player: Player, heroImage: TableImage): { kind: ActionKind; raiseTo?: number } {
   const profile = AI_PROFILES[player.styleKey as keyof typeof AI_PROFILES];
   const equity = currentEquity(game, player, game.street === "preflop" ? 70 : 82);
-  const toCall = Math.max(0, game.highestBet - player.bet);
-  const pot = committedPot(game);
-  const potOdds = toCall > 0 ? toCall / (pot + toCall) : 0;
-  const draw = drawPotential(player.hole, game.community);
-  const blockers = blockerValue(player.hole, game.community);
-  const activePlayers = game.players.filter((candidate) => !candidate.folded && candidate.stack > 0);
-  const actionOrderRank = (candidate: Player) => {
-    const offset = (candidate.id - game.dealer + game.players.length) % game.players.length;
-    return offset === 0 ? game.players.length : offset;
-  };
-  const lastPostflopActor = [...activePlayers].sort((left, right) => actionOrderRank(left) - actionOrderRank(right)).at(-1);
-  const inPosition = game.street === "preflop" ? player.id === game.dealer : lastPostflopActor?.id === player.id;
   const facingHero = game.lastAggressor === 0;
   const heroCallAdjustment = facingHero
     ? (heroImage.deceptive - 0.5) * 0.14 + (heroImage.loose - 0.5) * 0.08 + (heroImage.aggressive - 0.5) * 0.12
     : 0;
   const effectiveEquity = clamp(equity + heroCallAdjustment, 0.02, 0.98);
-  const squidCount = game.squid.counts[player.id] ?? 0;
-  const squidProgress = game.squid.total ? 1 - game.squid.remaining / game.squid.total : 0;
-  const nextSquidHitsMultiplier = squidCount === 2 || squidCount === 4 || squidCount === 6;
-  const squidPressure = game.presetKey === "squid"
-    ? (squidCount === 0 ? 0.035 + squidProgress * 0.07 : nextSquidHitsMultiplier ? 0.055 : 0.018)
-    : 0;
-  const opponentStacks = game.players
-    .filter((candidate) => !candidate.folded && candidate.id !== player.id)
-    .map((candidate) => candidate.stack);
-  const effectiveStack = Math.min(player.stack, Math.max(0, ...opponentStacks));
-
-  return choosePokerPolicyAction({
-    profile,
-    street: game.street,
-    equity: effectiveEquity,
-    handStrength: game.street === "preflop" ? preflopStrength(player.hole) : visibleHandStrength(player, game.community),
-    draw,
-    blockers,
-    pot,
-    toCall,
-    potOdds,
-    inPosition,
-    activeOpponents: game.players.filter((candidate) => !candidate.folded && candidate.id !== player.id).length,
-    effectiveStackBb: effectiveStack / BIG_BLIND,
-    startingDepthBb: game.startingStack / BIG_BLIND,
-    highestBet: game.highestBet,
-    playerBet: player.bet,
-    playerStack: player.stack,
-    minRaise: game.minRaise,
-    raiseLocked: player.raiseLocked,
-    squidPressure,
-    bigBlind: BIG_BLIND,
-    preflopPercentile: preflopPercentile(player.hole),
-    preflopPositionFactor: sixMaxPreflopPositionFactor(player.id, game.dealer),
-    preflopRaiseCount: game.raiseCount,
-  });
+  return choosePokerPolicyAction(buildPokerPolicyInput(game, player, effectiveEquity, profile));
 }
 
 function setHeroShowChoice(game: Game, show: boolean): Game {
@@ -707,6 +763,8 @@ function getAdvice(game: Game, player: Player, equity: number) {
   const toCall = Math.max(0, game.highestBet - player.bet);
   const pot = committedPot(game);
   const potOdds = toCall > 0 ? toCall / (pot + toCall) : 0;
+  const sizingContext = pokerSizingContext(game, player);
+  const policyPlan = evaluatePokerPolicy(buildPokerPolicyInput(game, player, equity, COACH_PROFILE));
   const squidCount = game.squid.counts[player.id] ?? 0;
   const squidProgress = game.squid.total ? 1 - game.squid.remaining / game.squid.total : 0;
   const squidIncentive = game.presetKey === "squid"
@@ -768,7 +826,31 @@ function getAdvice(game: Game, player: Player, equity: number) {
     .filter(([, frequency]) => frequency > 0)
     .map(([kind, frequency]) => `${labels[kind]} ${Math.round(frequency * 100)}%`)
     .join(" · ");
-  return { action, note, potOdds, frequencies, mix };
+  const sizingRoutes = frequencies.raise > 0 && !player.raiseLocked
+    ? buildPokerSizingRoutes(sizingContext, policyPlan.raiseTo, policyPlan.shortStackJamFrequency)
+    : [];
+  const sizingMix = sizingRoutes
+    .map((route) => `${formatPokerSizingRoute(sizingContext, route)} ${Math.round(route.frequency * 100)}%`)
+    .join(" · ");
+  const preferredSizingRoute = preferredPokerSizingRoute(sizingRoutes);
+  const recommendedRaiseTo = preferredSizingRoute?.target ?? null;
+  const recommendedBetFraction = preferredSizingRoute?.fraction ?? null;
+  const recommendedLabel = action === "raise" && preferredSizingRoute
+    ? formatPokerSizingRoute(sizingContext, preferredSizingRoute)
+    : ACTION_LABELS[action];
+  return {
+    action,
+    note,
+    potOdds,
+    frequencies,
+    mix,
+    sizingContext,
+    sizingRoutes,
+    sizingMix,
+    recommendedRaiseTo,
+    recommendedBetFraction,
+    recommendedLabel,
+  };
 }
 
 const ACTION_LABELS: Record<ActionKind, string> = { fold: "弃牌", check: "过牌", call: "跟注", raise: "加注" };
@@ -930,8 +1012,25 @@ export default function Home() {
   const isHumanTurn = Boolean(game && human && !dealing && game.status === "playing" && game.current === human.id);
   const thinking = Boolean(game && !dealing && game.status === "playing" && game.current >= 0 && !game.players[game.current]?.isHuman);
   const toCall = game && human ? Math.max(0, game.highestBet - human.bet) : 0;
-  const minTarget = game && human ? Math.min(human.bet + human.stack, game.highestBet + game.minRaise) : 0;
-  const maxTarget = human ? human.bet + human.stack : 0;
+  const humanSizingContext = game && human ? pokerSizingContext(game, human) : null;
+  const minTarget = humanSizingContext
+    ? legalPokerRaiseTarget(humanSizingContext, humanSizingContext.highestBet + humanSizingContext.minRaise)
+    : 0;
+  const maxTarget = humanSizingContext ? pokerSizingMaxTarget(humanSizingContext) : 0;
+  const quickRaiseOptions = game && humanSizingContext
+    ? game.street === "preflop"
+      ? [2.5, 3, 4, 5].map((multiple) => ({
+          label: game.raiseCount === 0 ? `${multiple}BB` : `${multiple}×`,
+          target: roundedPokerRaiseTarget(
+            humanSizingContext,
+            (game.raiseCount === 0 ? BIG_BLIND : game.highestBet) * multiple,
+          ),
+        }))
+      : [0.33, 0.5, 0.75, 1].map((ratio) => ({
+          label: ratio === 1 ? "底池" : `${Math.round(ratio * 100)}%`,
+          target: pokerRaiseTargetForFraction(humanSizingContext, ratio),
+        }))
+    : [];
   const raiseDisabled = !game || maxTarget <= game.highestBet || !isHumanTurn || Boolean(human?.raiseLocked);
   const communityLength = game?.community.length ?? 0;
   const dealCount = game?.dealCount ?? 0;
@@ -1078,7 +1177,25 @@ export default function Home() {
     if (soundOn) void unlockPokerAudio().then((ready) => { if (ready) playPokerSound(kind); });
     const bestFrequency = Math.max(...Object.values(advice.frequencies));
     const selectedFrequency = advice.frequencies[kind];
-    const score = selectedFrequency > 0 ? Math.round(45 + 55 * selectedFrequency / bestFrequency) : 35;
+    const actionScore = selectedFrequency > 0 ? Math.round(45 + 55 * selectedFrequency / bestFrequency) : 35;
+    const sizingContext = pokerSizingContext(game, human);
+    const actualRaiseTo = kind === "raise" ? legalPokerRaiseTarget(sizingContext, raiseTo) : null;
+    const actualBetFraction = actualRaiseTo === null ? null : pokerRaiseFraction(sizingContext, actualRaiseTo);
+    const sizeScore = actualRaiseTo === null
+      ? null
+      : scorePokerRaiseSize(sizingContext, actualRaiseTo, advice.sizingRoutes);
+    const sizeVerdict = actualRaiseTo === null
+      ? ""
+      : pokerRaiseSizeVerdict(sizingContext, actualRaiseTo, advice.sizingRoutes);
+    const score = sizeScore === null ? actionScore : Math.round(actionScore * 0.6 + sizeScore * 0.4);
+    const actionLabel = actualRaiseTo === null
+      ? ACTION_LABELS[kind]
+      : formatPokerSizingRoute(sizingContext, {
+          target: actualRaiseTo,
+          fraction: actualBetFraction ?? 0,
+          frequency: 1,
+          allIn: actualRaiseTo === pokerSizingMaxTarget(sizingContext),
+        });
     const entry: Review = {
       id: Date.now(),
       hand: game.handNo,
@@ -1089,9 +1206,18 @@ export default function Home() {
       toCall,
       equity,
       potOdds: advice.potOdds,
-      action: kind === "raise" ? `加注至 ${raiseTo}` : ACTION_LABELS[kind],
-      recommended: ACTION_LABELS[advice.action],
+      action: actionLabel,
+      actionKind: kind,
+      actualRaiseTo,
+      actualBetFraction,
+      recommended: advice.recommendedLabel,
+      recommendedAction: advice.action,
+      recommendedRaiseTo: advice.recommendedRaiseTo,
+      recommendedBetFraction: advice.recommendedBetFraction,
       mix: advice.mix,
+      sizingMix: advice.sizingMix,
+      sizeScore,
+      sizeVerdict,
       score,
       note: advice.note,
     };
@@ -1106,7 +1232,7 @@ export default function Home() {
         deceptive: image.deceptive,
       };
     });
-    setGame((current) => (current ? act(current, human.id, kind, kind === "raise" ? raiseTo : undefined) : current));
+    setGame((current) => (current ? act(current, human.id, kind, actualRaiseTo ?? undefined) : current));
   }, [game, human, isHumanTurn, advice, raiseTo, toCall, equity, soundOn, mode]);
 
   const toggleSound = useCallback(() => {
@@ -1326,7 +1452,7 @@ export default function Home() {
                       type="range"
                       min={Math.max(0, minTarget)}
                       max={Math.max(minTarget, maxTarget)}
-                      step={BIG_BLIND}
+                      step={Math.max(1, BIG_BLIND / 2)}
                       value={Math.min(Math.max(raiseTo, minTarget), Math.max(minTarget, maxTarget))}
                       onChange={(event) => setRaiseTo(Number(event.target.value))}
                       disabled={raiseDisabled}
@@ -1334,13 +1460,19 @@ export default function Home() {
                     <span>{maxTarget}</span>
                   </div>
                   <div className="quick-bets">
-                    {[0.33, 0.5, 0.75, 1].map((ratio) => (
-                      <button key={ratio} disabled={raiseDisabled} onClick={() => setRaiseTo(Math.min(maxTarget, Math.max(minTarget, Math.round((game.highestBet + committedPot(game) * ratio) / 10) * 10)))}>
-                        {ratio === 1 ? "底池" : `${Math.round(ratio * 100)}%`}
+                    {quickRaiseOptions.map((option) => (
+                      <button
+                        key={option.label}
+                        disabled={raiseDisabled || !humanSizingContext}
+                        onClick={() => setRaiseTo(option.target)}
+                      >
+                        {option.label}
                       </button>
                     ))}
                     <button disabled={raiseDisabled} onClick={() => setRaiseTo(maxTarget)}>全下</button>
                   </div>
+                  {toCall > 0 && game.street !== "preflop" && <small className="sizing-basis-note">快捷百分比按跟注后的底池计算</small>}
+                  {game.street === "preflop" && game.raiseCount > 0 && <small className="sizing-basis-note">快捷倍数按对手当前加注额计算</small>}
                 </div>
               </>
             )}
@@ -1413,8 +1545,10 @@ export default function Home() {
                 <div className="coach-icon">◆</div>
                 <div>
                   <span>近似 GTO 建议</span>
-                  <h3>{training && isHumanTurn && advice ? `优先考虑 · ${ACTION_LABELS[advice.action]}` : training ? "等待你的行动点" : "训练提示已关闭"}</h3>
-                  <p>{training && isHumanTurn && advice ? `${advice.mix}。${advice.note}` : training ? "AI 行动结束后，这里会给出范围、赔率与混合频率参考。" : "关闭提示时仍会记录你的决策，方便牌后复盘。"}</p>
+                  <h3>{training && isHumanTurn && advice ? `优先考虑 · ${advice.recommendedLabel}` : training ? "等待你的行动点" : "训练提示已关闭"}</h3>
+                  <p>{training && isHumanTurn && advice
+                    ? `${advice.mix}。${advice.sizingMix ? `加注尺寸路线：${advice.sizingMix}。` : ""}${advice.note}`
+                    : training ? "AI 行动结束后，这里会给出范围、赔率、动作频率与加注尺寸参考。" : "关闭提示时仍会记录你的决策，方便牌后复盘。"}</p>
                 </div>
               </section>
 
@@ -1422,7 +1556,7 @@ export default function Home() {
                 <section className="last-decision">
                   <div className="decision-top"><span>上一决策</span><b className={feedback.score >= 85 ? "good" : feedback.score >= 65 ? "ok" : "bad"}>{feedback.score} 分</b></div>
                   <h3>{feedback.score >= 85 ? "线路漂亮，继续保持" : feedback.score >= 65 ? "可执行，但有更优选择" : "这里值得重点复盘"}</h3>
-                  <p>你选择了{feedback.action}。参考混合：{feedback.mix}。{feedback.note}</p>
+                  <p>你选择了{feedback.action}。参考混合：{feedback.mix}。{feedback.sizingMix ? `加注尺寸路线：${feedback.sizingMix}。` : ""}{feedback.sizeVerdict ? `${feedback.sizeVerdict}。` : ""}{feedback.note}</p>
                 </section>
               ) : (
                 <section className="last-decision empty-decision"><span>完成第一个决策后，这里会出现即时反馈。</span></section>
@@ -1494,6 +1628,7 @@ export default function Home() {
                       <p>公共牌 {item.board} · 底池 {item.pot} · 面对 {item.toCall}</p>
                       <p>你的选择：{item.action}；最高频线路：{item.recommended}</p>
                       <p>参考混合：{item.mix}</p>
+                      {item.sizingMix && <p>加注尺寸路线：{item.sizingMix}{item.sizeVerdict ? `；${item.sizeVerdict}` : ""}</p>}
                       <small>范围胜率 {Math.round(item.equity * 100)}% / 所需赔率 {Math.round(item.potOdds * 100)}% · {item.note}</small>
                     </div>
                   </div>
