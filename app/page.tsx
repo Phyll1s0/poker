@@ -32,6 +32,8 @@ type Game = {
   current: number;
   highestBet: number;
   minRaise: number;
+  dealFrom: number;
+  dealCount: number;
   handNo: number;
   status: "playing" | "showdown";
   result: string;
@@ -43,6 +45,11 @@ type Review = {
   hand: number;
   street: string;
   cards: string;
+  board: string;
+  pot: number;
+  toCall: number;
+  equity: number;
+  potOdds: number;
   action: string;
   recommended: string;
   score: number;
@@ -61,6 +68,14 @@ const AI_PROFILES = {
   tag: { aggression: 0.64, looseness: 0.22, bluff: 0.05 },
   adaptive: { aggression: 0.54, looseness: 0.31, bluff: 0.11 },
   nit: { aggression: 0.38, looseness: 0.16, bluff: 0.02 },
+};
+
+const AI_REVIEW_NOTES: Record<keyof typeof AI_PROFILES, string> = {
+  gto: "频率均衡，下注尺度稳定，很少暴露明显漏洞。",
+  lag: "入池范围宽、主动施压多，会用更多边缘牌制造困难。",
+  tag: "入池谨慎但进攻坚决，持续下注通常代表较强范围。",
+  adaptive: "会根据底池、牌面和行动压力动态调整进攻频率。",
+  nit: "范围偏强、诈唬较少，大额投入通常需要认真对待。",
 };
 
 const PLAYER_TEMPLATES = [
@@ -258,6 +273,8 @@ function freshGame(previous?: Game): Game {
     current: nextEligible(players, bigBlind),
     highestBet: BIG_BLIND,
     minRaise: BIG_BLIND,
+    dealFrom: 0,
+    dealCount: 0,
     handNo: (previous?.handNo ?? 0) + 1,
     status: "playing",
     result: "",
@@ -314,6 +331,7 @@ function advanceStreet(game: Game, players: Player[]): Game {
   const resetPlayers = players.map((player) => ({ ...player, bet: 0, hasActed: false }));
   const deck = [...game.deck];
   const community = [...game.community];
+  const dealFrom = community.length;
   let nextStreet: Street = game.street;
 
   if (game.street === "preflop") {
@@ -339,6 +357,8 @@ function advanceStreet(game: Game, players: Player[]): Game {
       community,
       street: "river",
       pot: game.pot + collected,
+      dealFrom,
+      dealCount: community.length - dealFrom,
     });
   }
 
@@ -352,6 +372,8 @@ function advanceStreet(game: Game, players: Player[]): Game {
     current: nextEligible(resetPlayers, game.dealer),
     highestBet: 0,
     minRaise: BIG_BLIND,
+    dealFrom,
+    dealCount: community.length - dealFrom,
     log: [`进入${STREET_LABELS[nextStreet]} · 底池 ${game.pot + collected}`, ...game.log],
   };
 }
@@ -458,19 +480,23 @@ function getAdvice(game: Game, player: Player, equity: number) {
 
 const ACTION_LABELS: Record<ActionKind, string> = { fold: "弃牌", check: "过牌", call: "跟注", raise: "加注" };
 
-function PlayingCard({ card, ghost = false }: { card?: Card; ghost?: boolean }) {
+function PlayingCard({ card, ghost = false, dealDelay }: { card?: Card; ghost?: boolean; dealDelay?: number }) {
   if (!card) return <div className={ghost ? "card card-ghost" : "card card-back"}><span>♠</span></div>;
   const red = card.suit === "♥" || card.suit === "♦";
   return (
-    <div className={`card ${red ? "red" : "black"}`} aria-label={cardText(card)}>
+    <div
+      className={`card ${red ? "red" : "black"} ${dealDelay !== undefined ? "dealt-card" : ""}`}
+      style={dealDelay !== undefined ? { animationDelay: `${dealDelay}ms` } : undefined}
+      aria-label={cardText(card)}
+    >
       <span className="card-rank">{rankLabel(card.rank)}</span>
       <span className="card-suit">{card.suit}</span>
     </div>
   );
 }
 
-function PlayerSeat({ player, game, index, thinking }: { player: Player; game: Game; index: number; thinking: boolean }) {
-  const reveal = game.status === "showdown" && !player.folded;
+function PlayerSeat({ player, game, index, thinking, revealReady }: { player: Player; game: Game; index: number; thinking: boolean; revealReady: boolean }) {
+  const reveal = game.status === "showdown" && revealReady && !player.folded;
   const isCurrent = game.current === index;
   const role = index === game.dealer ? "D" : index === (game.dealer + 1) % 6 ? "SB" : index === (game.dealer + 2) % 6 ? "BB" : "";
   return (
@@ -487,7 +513,7 @@ function PlayerSeat({ player, game, index, thinking }: { player: Player; game: G
             <strong>{player.name}</strong>
             {role && <span className="role-chip">{role}</span>}
           </div>
-          <span>{player.style}</span>
+          <span>{player.isHuman ? player.style : "策略隐藏"}</span>
         </div>
         <div className="stack"><i />{player.stack}</div>
       </div>
@@ -507,15 +533,31 @@ export default function Home() {
   const [feedback, setFeedback] = useState<Review | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [dealing, setDealing] = useState(false);
 
   useEffect(() => setGame(freshGame()), []);
 
   const human = game?.players[0];
-  const isHumanTurn = Boolean(game && human && game.status === "playing" && game.current === human.id);
+  const isHumanTurn = Boolean(game && human && !dealing && game.status === "playing" && game.current === human.id);
   const toCall = game && human ? Math.max(0, game.highestBet - human.bet) : 0;
   const minTarget = game && human ? Math.min(human.bet + human.stack, game.highestBet + game.minRaise) : 0;
   const maxTarget = human ? human.bet + human.stack : 0;
   const raiseDisabled = !game || maxTarget <= game.highestBet || !isHumanTurn;
+
+  useEffect(() => {
+    if (!game || game.community.length === 0 || game.dealCount === 0) {
+      setDealing(false);
+      return;
+    }
+    setDealing(true);
+    const duration = 520 + Math.max(0, game.dealCount - 1) * 300;
+    const timer = window.setTimeout(() => setDealing(false), duration);
+    return () => window.clearTimeout(timer);
+  }, [game?.community.length, game?.handNo]);
+
+  useEffect(() => {
+    if (game?.status === "showdown" && !dealing) setShowLog(true);
+  }, [game?.status, dealing]);
 
   useEffect(() => {
     if (isHumanTurn && maxTarget > 0) setRaiseTo(Math.max(minTarget, Math.min(maxTarget, Math.max(30, minTarget))));
@@ -529,7 +571,7 @@ export default function Home() {
   const advice = useMemo(() => (game && human && isHumanTurn ? getAdvice(game, human, equity) : null), [game, human, isHumanTurn, equity]);
 
   useEffect(() => {
-    if (!game || game.status !== "playing" || game.current < 0) return;
+    if (!game || dealing || game.status !== "playing" || game.current < 0) return;
     const player = game.players[game.current];
     if (!player || player.isHuman) return;
     setThinking(true);
@@ -542,7 +584,13 @@ export default function Home() {
       setThinking(false);
     }, 520 + Math.random() * 620);
     return () => window.clearTimeout(timer);
-  }, [game]);
+  }, [game, dealing]);
+
+  const startNextHand = useCallback(() => {
+    setFeedback(null);
+    setShowLog(false);
+    setGame((current) => freshGame(current ?? undefined));
+  }, []);
 
   const handleAction = useCallback((kind: ActionKind) => {
     if (!game || !human || !isHumanTurn || !advice) return;
@@ -556,7 +604,12 @@ export default function Home() {
       hand: game.handNo,
       street: STREET_LABELS[game.street],
       cards: human.hole.map(cardText).join(" "),
-      action: ACTION_LABELS[kind],
+      board: game.community.length ? game.community.map(cardText).join(" ") : "—",
+      pot: committedPot(game),
+      toCall,
+      equity,
+      potOdds: advice.potOdds,
+      action: kind === "raise" ? `加注至 ${raiseTo}` : ACTION_LABELS[kind],
       recommended: ACTION_LABELS[advice.action],
       score,
       note: advice.note,
@@ -564,15 +617,14 @@ export default function Home() {
     setReview((items) => [entry, ...items].slice(0, 12));
     setFeedback(entry);
     setGame((current) => (current ? act(current, human.id, kind, kind === "raise" ? raiseTo : undefined) : current));
-  }, [game, human, isHumanTurn, advice, raiseTo]);
+  }, [game, human, isHumanTurn, advice, raiseTo, toCall, equity]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.target as HTMLElement)?.tagName === "INPUT") return;
       const key = event.key.toLowerCase();
-      if (game?.status === "showdown" && key === "n") {
-        setFeedback(null);
-        setGame((current) => freshGame(current ?? undefined));
+      if (game?.status === "showdown" && !dealing && key === "n") {
+        startNextHand();
         return;
       }
       if (!isHumanTurn) return;
@@ -582,7 +634,7 @@ export default function Home() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [game?.status, isHumanTurn, toCall, raiseDisabled, handleAction]);
+  }, [game?.status, dealing, isHumanTurn, toCall, raiseDisabled, handleAction, startNextHand]);
 
   if (!game || !human) {
     return (
@@ -594,6 +646,9 @@ export default function Home() {
   }
 
   const sessionScore = review.length ? Math.round(review.reduce((sum, item) => sum + item.score, 0) / review.length) : "—";
+  const handReview = review.filter((item) => item.hand === game.handNo);
+  const handScore = handReview.length ? Math.round(handReview.reduce((sum, item) => sum + item.score, 0) / handReview.length) : "—";
+  const reviewUnlocked = game.status === "showdown" && !dealing;
 
   return (
     <main className="app-shell">
@@ -631,24 +686,34 @@ export default function Home() {
                 <strong><i />{committedPot(game)}</strong>
               </div>
               <div className="community-cards">
-                {[0, 1, 2, 3, 4].map((index) => <PlayingCard key={index} card={game.community[index]} ghost={!game.community[index]} />)}
+                {[0, 1, 2, 3, 4].map((index) => {
+                  const newlyDealt = index >= game.dealFrom && index < game.dealFrom + game.dealCount;
+                  return (
+                    <PlayingCard
+                      key={index}
+                      card={game.community[index]}
+                      ghost={!game.community[index]}
+                      dealDelay={newlyDealt ? (index - game.dealFrom) * 300 : undefined}
+                    />
+                  );
+                })}
               </div>
               <div className="table-signature">RANGECRAFT <span>◆</span> TRAINING CLUB</div>
-              {game.status === "showdown" && (
+              {reviewUnlocked && (
                 <div className="result-banner">
                   <span>本手结束</span>
                   <strong>{game.result}</strong>
-                  <button onClick={() => { setFeedback(null); setGame((current) => freshGame(current ?? undefined)); }}>下一手 <kbd>N</kbd></button>
+                  <button onClick={startNextHand}>下一手 <kbd>N</kbd></button>
                 </div>
               )}
             </div>
-            {game.players.map((player, index) => <PlayerSeat key={player.id} player={player} game={game} index={index} thinking={thinking} />)}
+            {game.players.map((player, index) => <PlayerSeat key={player.id} player={player} game={game} index={index} thinking={thinking} revealReady={!dealing} />)}
           </div>
 
-          <div className={`action-dock ${isHumanTurn ? "active" : ""}`}>
+          <div className={`action-dock ${isHumanTurn ? "active" : ""} ${dealing ? "is-dealing" : ""}`}>
             <div className="turn-summary">
               <div>
-                <span>{isHumanTurn ? "轮到你行动" : game.status === "showdown" ? "牌局已结束" : "对手思考中"}</span>
+                <span>{dealing ? "正在发牌" : isHumanTurn ? "轮到你行动" : game.status === "showdown" ? "牌局已结束" : "对手思考中"}</span>
                 <strong>{STREET_LABELS[game.street]}</strong>
               </div>
               {isHumanTurn && <div className="timer-ring"><span>∞</span></div>}
@@ -696,8 +761,8 @@ export default function Home() {
           </div>
 
           <div className="tabs" role="tablist">
-            <button className={!showLog ? "active" : ""} onClick={() => setShowLog(false)}>实时分析</button>
-            <button className={showLog ? "active" : ""} onClick={() => setShowLog(true)}>行动记录</button>
+            <button className={!showLog ? "active" : ""} onClick={() => setShowLog(false)}>实时教练</button>
+            <button className={showLog ? "active" : ""} onClick={() => setShowLog(true)}>本手复盘{reviewUnlocked ? " · 已解锁" : ""}</button>
           </div>
 
           {!showLog ? (
@@ -738,28 +803,52 @@ export default function Home() {
               )}
 
               <section className="opponent-grid">
-                <div className="section-label"><span>对手池</span><small>5 种策略画像</small></div>
-                <div className="profile-list">
-                  {game.players.slice(1).map((player) => (
-                    <div key={player.id}><span className={`profile-dot p-${player.id}`} /><b>{player.name}</b><em>{player.style}</em></div>
-                  ))}
+                <div className="section-label"><span>对手画像</span><small>牌后解锁</small></div>
+                <div className="locked-profile">
+                  <span>◇</span>
+                  <div><b>本手保持未知</b><p>结束后进入“本手复盘”，再查看每位电脑的策略倾向。</p></div>
                 </div>
               </section>
             </div>
           ) : (
             <div className="log-content">
-              <div className="hand-log">
-                <div className="section-label"><span>当前牌局</span><small>{game.log.length} 个事件</small></div>
-                {game.log.map((line, index) => <div key={`${line}-${index}`}><time>{String(game.log.length - index).padStart(2, "0")}</time><p>{line}</p></div>)}
+              <div className={`review-summary ${reviewUnlocked ? "unlocked" : ""}`}>
+                <div><span>{reviewUnlocked ? "本手复盘已生成" : "正在记录本手"}</span><h3>第 {game.handNo} 手 · {STREET_LABELS[game.street]}</h3></div>
+                <strong>{handScore}<small>{handReview.length ? "分" : "暂无决策"}</small></strong>
               </div>
               <div className="review-log">
-                <div className="section-label"><span>你的决策</span><small>{review.length} 次</small></div>
-                {review.length ? review.map((item) => (
+                <div className="section-label"><span>你的决策路径</span><small>{handReview.length} 个节点</small></div>
+                {handReview.length ? handReview.map((item) => (
                   <div className="review-row" key={item.id}>
                     <span className={item.score >= 85 ? "good" : item.score >= 65 ? "ok" : "bad"}>{item.score}</span>
-                    <div><b>第 {item.hand} 手 · {item.street}</b><p>{item.cards} · {item.action} / 推荐 {item.recommended}</p></div>
+                    <div>
+                      <b>{item.street} · 手牌 {item.cards}</b>
+                      <p>公共牌 {item.board} · 底池 {item.pot} · 面对 {item.toCall}</p>
+                      <p>你的选择：{item.action}　推荐：{item.recommended}</p>
+                      <small>胜率 {Math.round(item.equity * 100)}% / 所需赔率 {Math.round(item.potOdds * 100)}% · {item.note}</small>
+                    </div>
                   </div>
-                )) : <p className="empty-log">还没有可复盘的决策。</p>}
+                )) : <p className="empty-log">你还没有在本手做出决策。每次行动后都会记录选择、推荐线路和原因。</p>}
+              </div>
+              <div className="opponent-review">
+                <div className="section-label"><span>对手策略画像</span><small>{reviewUnlocked ? "已解锁" : "本手结束后解锁"}</small></div>
+                {reviewUnlocked ? (
+                  <div className="profile-list revealed">
+                    {game.players.slice(1).map((player) => (
+                      <div key={player.id}>
+                        <span className={`profile-dot p-${player.id}`} />
+                        <b>{player.name}</b>
+                        <em><strong>{player.style}</strong>{AI_REVIEW_NOTES[player.styleKey as keyof typeof AI_PROFILES]}</em>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="review-lock"><span>◇</span><p>为了避免标签影响你的判断，对手风格将在本手结束后显示。</p></div>
+                )}
+              </div>
+              <div className="hand-log">
+                <div className="section-label"><span>整手行动线</span><small>{game.log.length} 个事件</small></div>
+                {game.log.map((line, index) => <div key={`${line}-${index}`}><time>{String(game.log.length - index).padStart(2, "0")}</time><p>{line}</p></div>)}
               </div>
             </div>
           )}
