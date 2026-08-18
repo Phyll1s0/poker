@@ -744,6 +744,103 @@
   line-height: 1.7;
 }
 
+.winningHands {
+  min-width: 0;
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  align-items: center;
+  gap: 13px;
+  border: 1px solid rgba(216, 183, 116, 0.13);
+  border-radius: 7px;
+  background: rgba(216, 183, 116, 0.035);
+}
+
+.winningHandsHeading,
+.winningHandPlayer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.winningHandsHeading span {
+  color: var(--mp-gold);
+  font-size: 7px;
+  letter-spacing: 0.14em;
+}
+
+.winningHandsHeading strong {
+  color: #e1ddd2;
+  font: 500 13px/1.1 Georgia, serif;
+}
+
+.winningHandList {
+  min-width: 0;
+  display: flex;
+  gap: 9px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.winningHand {
+  flex: 0 0 auto;
+  min-width: 196px;
+  min-height: 70px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 13px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 7px;
+  background: rgba(8, 12, 10, 0.34);
+}
+
+.winningHandPlayer strong {
+  color: #d8d4ca;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.winningHandPlayer span {
+  color: #9c9176;
+  font-size: 8px;
+}
+
+.winningHandCards,
+.winningHandHidden {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.winningHandCards .card {
+  width: 39px;
+  padding: 5px;
+  font-size: 16px;
+}
+
+.winningHandCards .cardSuit {
+  margin-top: 3px;
+  font-size: 19px;
+}
+
+.winningHandHidden > span {
+  width: 28px;
+  aspect-ratio: 0.7;
+  border: 1px solid #999584;
+  border-radius: 4px;
+  background: repeating-linear-gradient(45deg, #294238 0 3px, #1a2d25 3px 6px);
+}
+
+.winningHandHidden b {
+  margin-left: 3px;
+  color: #717771;
+  font-size: 7px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
 @media (max-width: 840px) {
   .lobbyGrid { grid-template-columns: 1fr; }
   .createForm { grid-template-columns: 1fr 100px; }
@@ -780,6 +877,7 @@
   .boardArea { top: 49%; }
   .card, .cardBack, .cardSlot { width: 36px; }
   .controlSummary { align-items: flex-start; flex-direction: column; }
+  .winningHands { grid-template-columns: 1fr; }
   .actionRow { justify-content: stretch; }
   .actionRow > button { flex: 1; }
   .raiseGroup { width: 100%; }

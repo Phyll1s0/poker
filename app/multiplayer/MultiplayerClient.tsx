@@ -176,6 +176,46 @@ function PlayerSeat({
   );
 }
 
+function WinningHands({ game }: { game: PublicGame }) {
+  if (!game.result) return null;
+  const winners = game.result.winners
+    .map((accountId) => game.players.find((player) => player.accountId === accountId))
+    .filter((player): player is PublicPlayer => Boolean(player));
+
+  if (winners.length === 0) return null;
+
+  return (
+    <section className={styles.winningHands} aria-label="本手赢家手牌">
+      <div className={styles.winningHandsHeading}>
+        <span>WINNING HAND</span>
+        <strong>赢家手牌</strong>
+      </div>
+      <div className={styles.winningHandList}>
+        {winners.map((player) => {
+          const cards = player.holeCards ?? [];
+          return (
+            <article className={styles.winningHand} key={player.accountId}>
+              <div className={styles.winningHandPlayer}>
+                <strong>{player.handle}</strong>
+                <span>{cards.length ? "获胜底牌" : "手牌未公开"}</span>
+              </div>
+              {cards.length ? (
+                <div className={styles.winningHandCards} aria-label={`${player.handle} 的赢家手牌`}>
+                  {cards.map((card, index) => <CardView key={`${card.rank}-${card.suit}-${index}`} card={card} />)}
+                </div>
+              ) : (
+                <div className={styles.winningHandHidden} aria-label={`${player.handle} 选择盖牌`}>
+                  <span /><span /><b>已盖牌</b>
+                </div>
+              )}
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 export default function MultiplayerClient({
   displayName,
   signOutHref,
@@ -542,6 +582,7 @@ export default function MultiplayerClient({
 
                 <div className={styles.tableControls}>
                   {game.result && <div className={styles.resultBanner}>{game.result.summary}</div>}
+                  <WinningHands game={game} />
                   <div className={styles.controlSummary}>
                     <span>第 {game.handNo} 手 · <strong>{game.street.toUpperCase()}</strong> · 当前下注 {game.currentBet}</span>
                     <span>

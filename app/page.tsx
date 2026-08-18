@@ -938,6 +938,51 @@ function PlayerSeat({ player, game, index, thinking, revealReady }: { player: Pl
   );
 }
 
+function WinningHands({ game }: { game: Game }) {
+  if (game.status !== "showdown" || game.winnerIds.length === 0) return null;
+
+  const winners = game.winnerIds
+    .map((winnerId) => game.players.find((player) => player.id === winnerId))
+    .filter((player): player is Player => Boolean(player));
+
+  if (winners.length === 0) return null;
+
+  return (
+    <section className="winning-hands" aria-label="本手赢家手牌">
+      <div className="winning-hands-heading">
+        <span>WINNING HAND</span>
+        <strong>赢家手牌</strong>
+      </div>
+      <div className="winning-hand-list">
+        {winners.map((player) => {
+          const publiclyShown = game.shownPlayerIds.includes(player.id);
+          const visibleToHero = player.isHuman || publiclyShown;
+          const cards = [...player.hole, ...game.community];
+          const handName = !game.endedUncontested && cards.length >= 5 ? bestHand(cards).name : "未摊牌赢池";
+          return (
+            <article className="winning-hand" key={player.id}>
+              <div className="winning-hand-player">
+                <strong>{player.name}</strong>
+                <span>{visibleToHero ? handName : "手牌未公开"}</span>
+                {player.isHuman && !publiclyShown && <em>仅你可见</em>}
+              </div>
+              {visibleToHero ? (
+                <div className="winning-hand-cards" aria-label={`${player.name} 的赢家手牌`}>
+                  {player.hole.map((card) => <PlayingCard key={cardKey(card)} card={card} />)}
+                </div>
+              ) : (
+                <div className="winning-hand-hidden" aria-label={`${player.name} 选择盖牌`}>
+                  <span /><span /><b>已盖牌</b>
+                </div>
+              )}
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function SquidScoreboard({ game, report = false }: { game: Game; report?: boolean }) {
   if (game.presetKey !== "squid") return null;
   return (
@@ -1538,6 +1583,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                 ) : (
                   <button className="next-hand-button" onClick={startNextHand}>下一手 <kbd>N</kbd></button>
                 )}
+                <WinningHands game={game} />
               </div>
             ) : (
               <>

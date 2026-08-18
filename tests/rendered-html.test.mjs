@@ -42,8 +42,9 @@ test("server-renders the RangeCraft landing page before mounting a poker table",
 });
 
 test("keeps the multiplayer and strategy boundaries with product metadata", async () => {
-  const [page, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, packageJson] = await Promise.all([
+  const [page, multiplayerClient, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/multiplayer/MultiplayerClient.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/poker-transport.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/poker-strategy.ts", import.meta.url), "utf8"),
@@ -67,6 +68,10 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /pokerRaiseTargetForFraction/);
   assert.match(page, /20 手整局/);
   assert.match(page, /function setHeroShowChoice/);
+  assert.match(page, /function WinningHands/);
+  assert.match(page, /赢家手牌/);
+  assert.match(multiplayerClient, /function WinningHands/);
+  assert.match(multiplayerClient, /手牌未公开/);
   assert.match(page, /choosePokerPolicyAction/);
   assert.match(page, /const TABLE_PRESETS/);
   assert.match(page, /function grantSquid/);

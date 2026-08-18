@@ -715,8 +715,8 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
 .quick-bets button:disabled { opacity: .3; cursor: not-allowed; }
 .sizing-basis-note { display: block; margin-top: 6px; color: #666a65; font-size: 8px; text-align: right; }
 
-.action-dock.hand-ended { min-height: 108px; grid-template-columns: 1fr; }
-.hand-end-dock { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 22px; }
+.action-dock.hand-ended { min-height: 176px; grid-template-columns: 1fr; }
+.hand-end-dock { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 13px 22px; }
 .hand-end-copy { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .hand-end-copy > span { color: var(--gold); font-size: 8px; letter-spacing: .12em; text-transform: uppercase; }
 .hand-end-copy > strong { overflow: hidden; color: #e7e2d8; font: 500 16px/1.3 Georgia, serif; text-overflow: ellipsis; white-space: nowrap; }
@@ -733,6 +733,44 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
 .show-cards { border: 1px solid var(--green-bright); background: linear-gradient(135deg, #79cfac, #51aa86); color: #14251e; }
 .muck-cards { border: 1px solid var(--line); background: transparent; color: #b9b5ab; }
 .next-hand-button { flex: 0 0 auto; border: 0; background: #e5ddca; color: #1a1d1b; }
+.winning-hands {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding-top: 11px;
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+}
+.winning-hands-heading { display: flex; flex-direction: column; gap: 4px; }
+.winning-hands-heading span { color: var(--gold); font-size: 7px; letter-spacing: .13em; }
+.winning-hands-heading strong { color: #ded9cd; font: 500 12px/1.1 Georgia, serif; }
+.winning-hand-list { min-width: 0; display: flex; gap: 8px; overflow-x: auto; scrollbar-width: thin; }
+.winning-hand {
+  flex: 0 0 auto;
+  min-width: 176px;
+  min-height: 57px;
+  padding: 7px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 11px;
+  border: 1px solid rgba(216,183,116,.14);
+  border-radius: 6px;
+  background: rgba(216,183,116,.045);
+}
+.winning-hand-player { min-width: 58px; display: flex; flex-direction: column; gap: 3px; }
+.winning-hand-player strong { color: #e8e2d5; font: 600 10px/1 Georgia, serif; }
+.winning-hand-player span { color: var(--gold); font-size: 8px; }
+.winning-hand-player em { color: #6f7570; font-size: 7px; font-style: normal; }
+.winning-hand-cards { display: flex; gap: 4px; }
+.winning-hand-cards .card { width: 34px; border-radius: 4px; box-shadow: 0 4px 9px rgba(0,0,0,.3), inset 0 0 0 1px rgba(65,55,45,.12); }
+.winning-hand-cards .card-rank { font-size: 15px; }
+.winning-hand-cards .card-suit { margin-top: 0; font-size: 18px; }
+.winning-hand-hidden { display: flex; align-items: center; gap: 4px; }
+.winning-hand-hidden > span { width: 25px; aspect-ratio: .69; border: 1px solid #8e8a7c; border-radius: 3px; background: repeating-linear-gradient(45deg, #263a35 0 3px, #314940 3px 6px); }
+.winning-hand-hidden b { margin-left: 3px; color: #747872; font-size: 7px; font-weight: 500; white-space: nowrap; }
 
 .coach-panel {
   position: relative;
@@ -951,7 +989,7 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
   .action-dock { grid-template-columns: 120px 1fr; }
   .raise-control { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 220px; align-items: center; }
   .action-dock { min-height: 128px; }
-  .action-dock.hand-ended { grid-template-columns: 1fr; min-height: 108px; }
+  .action-dock.hand-ended { grid-template-columns: 1fr; min-height: 176px; }
   .table-zone { padding-bottom: 172px; }
 }
 
@@ -1019,13 +1057,15 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
   .seat-3 { transform: translateX(-50%) scale(.8); }
   .seat-1 { left: -80px; }.seat-5 { right: -80px; }
   .action-dock { grid-template-columns: 1fr; gap: 9px; padding: 11px; }
-  .action-dock.hand-ended { min-height: 142px; }
-  .hand-end-dock { flex-direction: column; align-items: stretch; gap: 12px; }
+  .action-dock.hand-ended { min-height: 224px; }
+  .hand-end-dock { grid-template-columns: 1fr; align-items: stretch; gap: 12px; }
   .hand-end-copy { text-align: center; }
   .hand-end-copy > strong { font-size: 13px; white-space: normal; }
   .hand-end-copy > p { line-height: 1.45; }
   .show-choice { flex: 0 0 auto; width: 100%; }
   .show-choice button, .next-hand-button { min-height: 44px; }
+  .winning-hands { grid-column: 1; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; }
+  .winning-hand { min-width: 166px; }
   .turn-summary { display: none; }
   .raise-control { grid-column: auto; display: block; }
   .range-row { margin-bottom: 6px; }
