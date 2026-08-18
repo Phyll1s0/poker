@@ -475,7 +475,7 @@ function PlayerSeat({ player, game, index, thinking }: { player: Player; game: G
   const role = index === game.dealer ? "D" : index === (game.dealer + 1) % 6 ? "SB" : index === (game.dealer + 2) % 6 ? "BB" : "";
   return (
     <div className={`player-seat seat-${index} ${isCurrent ? "is-current" : ""} ${player.folded ? "is-folded" : ""}`}>
-      <div className="seat-cards" aria-label={reveal ? `${player.name} 的手牌` : `${player.name} 的手牌未公开`}>
+      <div className={`seat-cards ${reveal || player.isHuman ? "is-revealed" : ""}`} aria-label={reveal ? `${player.name} 的手牌` : `${player.name} 的手牌未公开`}>
         {player.hole.map((card, cardIndex) => (
           <PlayingCard key={cardKey(card)} card={reveal || player.isHuman ? card : undefined} />
         ))}

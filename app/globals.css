@@ -265,6 +265,7 @@ button { color: inherit; }
   background: rgba(22,26,24,.96);
   box-shadow: 0 9px 26px rgba(0,0,0,.42);
   position: relative;
+  z-index: 3;
 }
 .is-current .player-panel { border-color: rgba(216,183,116,.62); box-shadow: 0 0 0 2px rgba(216,183,116,.08), 0 9px 26px rgba(0,0,0,.42); }
 .is-current .player-panel::before { content: ""; position: absolute; inset: -1px; border-radius: 7px; border-top: 2px solid var(--gold); pointer-events: none; }
@@ -292,16 +293,26 @@ button { color: inherit; }
 .seat-cards {
   position: absolute;
   left: 50%;
-  top: -27px;
+  top: -52px;
   transform: translateX(-50%);
   display: flex;
   gap: 3px;
-  z-index: -1;
+  z-index: 2;
 }
 .seat-cards .card { width: 34px; border-radius: 4px; transform: rotate(-3deg); }
 .seat-cards .card + .card { transform: rotate(3deg); }
 .seat-cards .card-rank { font-size: 14px; }
 .seat-cards .card-suit { font-size: 11px; }
+.seat-cards.is-revealed { top: -64px; gap: 5px; }
+.seat-cards.is-revealed .card { width: 42px; border-radius: 5px; }
+.seat-cards.is-revealed .card-rank { font-size: 18px; }
+.seat-cards.is-revealed .card-suit { margin-top: 2px; font-size: 15px; }
+.seat-2 .seat-cards,
+.seat-3 .seat-cards,
+.seat-4 .seat-cards { top: auto; bottom: -53px; }
+.seat-2 .seat-cards.is-revealed,
+.seat-3 .seat-cards.is-revealed,
+.seat-4 .seat-cards.is-revealed { top: auto; bottom: -67px; }
 
 .table-bet {
   position: absolute;
