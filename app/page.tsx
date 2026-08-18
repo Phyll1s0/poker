@@ -1,7 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AI_PROFILES, sampleAiLineup } from "../lib/poker-ai";
 import { playPokerSound, setPokerAudioEnabled, unlockPokerAudio } from "../lib/poker-audio";
+import {
+  bestHand,
+  blockerValue,
+  drawPotential,
+  estimateEquity,
+  preflopPercentile,
+  preflopStrength,
+} from "../lib/poker-evaluator";
+import { choosePokerPolicyAction, sixMaxPreflopPositionFactor } from "../lib/poker-policy";
 import { settleSquidRound, squidMultiplier } from "../lib/poker-squid";
 
 type Suit = "♠" | "♥" | "♦" | "♣";
@@ -55,6 +65,7 @@ type Game = {
   dealFrom: number;
   dealCount: number;
   lastAggressor: number | null;
+  raiseCount: number;
   winnerIds: number[];
   endedUncontested: boolean;
   shownPlayerIds: number[];
@@ -112,14 +123,6 @@ const TABLE_PRESETS: Record<TablePresetKey, {
   squid: { label: "血战鱿鱼 · 200 BB", shortLabel: "血战鱿鱼", description: "9 条鱿鱼 · 基础价值 5 BB", stackBb: 200, squid: true },
 };
 
-const AI_PROFILES = {
-  gto: { aggression: 0.58, looseness: 0.28, bluff: 0.08 },
-  lag: { aggression: 0.78, looseness: 0.4, bluff: 0.2 },
-  tag: { aggression: 0.64, looseness: 0.22, bluff: 0.05 },
-  adaptive: { aggression: 0.54, looseness: 0.31, bluff: 0.11 },
-  nit: { aggression: 0.38, looseness: 0.16, bluff: 0.02 },
-};
-
 const AI_REVIEW_NOTES: Record<keyof typeof AI_PROFILES, string> = {
   gto: "频率均衡，下注尺度稳定，很少暴露明显漏洞。",
   lag: "入池范围宽、主动施压多，会用更多边缘牌制造困难。",
@@ -131,10 +134,10 @@ const AI_REVIEW_NOTES: Record<keyof typeof AI_PROFILES, string> = {
 const PLAYER_TEMPLATES = [
   { name: "你", monogram: "ME", style: "训练席", styleKey: "human" as const, isHuman: true },
   { name: "ORION", monogram: "OR", style: "GTO 平衡", styleKey: "gto" as const, isHuman: false },
-  { name: "SHARK", monogram: "SK", style: "松凶压迫", styleKey: "lag" as const, isHuman: false },
+  { name: "ATLAS", monogram: "AT", style: "松凶压迫", styleKey: "lag" as const, isHuman: false },
   { name: "IVY", monogram: "IV", style: "紧凶价值", styleKey: "tag" as const, isHuman: false },
   { name: "MIRA", monogram: "MI", style: "动态适应", styleKey: "adaptive" as const, isHuman: false },
-  { name: "ROCK", monogram: "RK", style: "稳健保守", styleKey: "nit" as const, isHuman: false },
+  { name: "NOVA", monogram: "NV", style: "稳健保守", styleKey: "nit" as const, isHuman: false },
 ];
 
 const STREET_LABELS: Record<Street, string> = {
@@ -169,96 +172,6 @@ function cardKey(card: Card) {
   return `${card.rank}-${card.suit}`;
 }
 
-function scoreFive(cards: Card[]): { score: number; name: string } {
-  const ranks = cards.map((c) => c.rank).sort((a, b) => b - a);
-  const counts = new Map<number, number>();
-  ranks.forEach((rank) => counts.set(rank, (counts.get(rank) ?? 0) + 1));
-  const groups = [...counts.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0]);
-  const unique = [...new Set(ranks)];
-  if (unique[0] === 14) unique.push(1);
-  let straightHigh = 0;
-  for (let i = 0; i <= unique.length - 5; i += 1) {
-    if (unique[i] - unique[i + 4] === 4) {
-      straightHigh = unique[i];
-      break;
-    }
-  }
-  const flush = cards.every((card) => card.suit === cards[0].suit);
-  const pack = (category: number, values: number[]) =>
-    [category, ...values, 0, 0, 0, 0, 0].slice(0, 6).reduce((total, value) => total * 15 + value, 0);
-
-  if (flush && straightHigh) return { score: pack(8, [straightHigh]), name: "同花顺" };
-  if (groups[0][1] === 4) return { score: pack(7, [groups[0][0], groups[1][0]]), name: "四条" };
-  if (groups[0][1] === 3 && groups[1]?.[1] === 2)
-    return { score: pack(6, [groups[0][0], groups[1][0]]), name: "葫芦" };
-  if (flush) return { score: pack(5, ranks), name: "同花" };
-  if (straightHigh) return { score: pack(4, [straightHigh]), name: "顺子" };
-  if (groups[0][1] === 3) {
-    const kickers = groups.filter((g) => g[1] === 1).map((g) => g[0]);
-    return { score: pack(3, [groups[0][0], ...kickers]), name: "三条" };
-  }
-  if (groups[0][1] === 2 && groups[1]?.[1] === 2) {
-    const pairs = groups.filter((g) => g[1] === 2).map((g) => g[0]).sort((a, b) => b - a);
-    const kicker = groups.find((g) => g[1] === 1)?.[0] ?? 0;
-    return { score: pack(2, [pairs[0], pairs[1], kicker]), name: "两对" };
-  }
-  if (groups[0][1] === 2) {
-    const kickers = groups.filter((g) => g[1] === 1).map((g) => g[0]);
-    return { score: pack(1, [groups[0][0], ...kickers]), name: "一对" };
-  }
-  return { score: pack(0, ranks), name: "高牌" };
-}
-
-function bestHand(cards: Card[]): { score: number; name: string } {
-  let best = { score: -1, name: "" };
-  const choose = (start: number, picked: Card[]) => {
-    if (picked.length === 5) {
-      const result = scoreFive(picked);
-      if (result.score > best.score) best = result;
-      return;
-    }
-    for (let i = start; i <= cards.length - (5 - picked.length); i += 1) choose(i + 1, [...picked, cards[i]]);
-  };
-  choose(0, []);
-  return best;
-}
-
-function preflopStrength(hole: Card[]): number {
-  if (hole.length < 2) return 0;
-  const [high, low] = [...hole].sort((a, b) => b.rank - a.rank);
-  const pair = high.rank === low.rank;
-  const suited = high.suit === low.suit;
-  const gap = high.rank - low.rank;
-  let value = (high.rank - 2) / 12 * 0.36 + (low.rank - 2) / 12 * 0.18;
-  if (pair) value += 0.3 + (high.rank - 2) / 12 * 0.18;
-  if (suited) value += 0.08;
-  if (gap === 1) value += 0.07;
-  else if (gap === 2) value += 0.035;
-  if (high.rank === 14) value += 0.08;
-  return Math.min(0.98, Math.max(0.08, value));
-}
-
-function estimateEquity(hole: Card[], community: Card[], opponents: number, iterations = 90): number {
-  if (hole.length !== 2) return 0;
-  const known = new Set([...hole, ...community].map(cardKey));
-  const available = makeDeck().filter((card) => !known.has(cardKey(card)));
-  let share = 0;
-  for (let run = 0; run < iterations; run += 1) {
-    const sample = shuffle(available).slice(0, 5 - community.length + opponents * 2);
-    const board = [...community, ...sample.slice(0, 5 - community.length)];
-    let cursor = 5 - community.length;
-    const hero = bestHand([...hole, ...board]).score;
-    const rivals: number[] = [];
-    for (let i = 0; i < opponents; i += 1) {
-      rivals.push(bestHand([sample[cursor], sample[cursor + 1], ...board]).score);
-      cursor += 2;
-    }
-    const top = Math.max(hero, ...rivals);
-    if (hero === top) share += 1 / (rivals.filter((score) => score === top).length + 1);
-  }
-  return share / iterations;
-}
-
 function currentEquity(game: Game, player: Player, iterations = 80): number {
   const opponents = Math.max(1, game.players.filter((p) => !p.folded && p.id !== player.id).length);
   if (game.street === "preflop") return estimateEquity(player.hole, [], opponents, Math.max(48, iterations));
@@ -281,35 +194,9 @@ function clamp(value: number, minimum = 0, maximum = 1) {
   return Math.max(minimum, Math.min(maximum, value));
 }
 
-function drawPotential(hole: Card[], community: Card[]) {
-  if (community.length >= 5) return 0;
-  const cards = [...hole, ...community];
-  const suits = new Map<Suit, number>();
-  cards.forEach((card) => suits.set(card.suit, (suits.get(card.suit) ?? 0) + 1));
-  const flushDraw = Math.max(...suits.values()) === 4 ? 0.11 : 0;
-  const ranks = [...new Set(cards.map((card) => card.rank))];
-  if (ranks.includes(14)) ranks.push(1);
-  let straightDraw = 0;
-  for (let low = 1; low <= 10; low += 1) {
-    const hits = [low, low + 1, low + 2, low + 3, low + 4].filter((rank) => ranks.includes(rank)).length;
-    if (hits >= 4) straightDraw = Math.max(straightDraw, 0.09);
-    else if (hits === 3) straightDraw = Math.max(straightDraw, 0.035);
-  }
-  return flushDraw + straightDraw;
-}
-
-function blockerValue(hole: Card[], community: Card[]) {
-  const suitCounts = new Map<Suit, number>();
-  community.forEach((card) => suitCounts.set(card.suit, (suitCounts.get(card.suit) ?? 0) + 1));
-  const blockedSuit = [...suitCounts.entries()].sort((a, b) => b[1] - a[1])[0];
-  const nutSuitBlocker = blockedSuit?.[1] >= 3 && hole.some((card) => card.suit === blockedSuit[0] && card.rank === 14);
-  const highBlockers = hole.filter((card) => card.rank >= 13).length;
-  return clamp((nutSuitBlocker ? 0.1 : 0) + highBlockers * 0.025, 0, 0.15);
-}
-
 function visibleHandStrength(player: Player, community: Card[]) {
   if (community.length + player.hole.length < 5) return preflopStrength(player.hole);
-  const category = Math.floor(bestHand([...player.hole, ...community]).score / 15 ** 5);
+  const category = bestHand([...player.hole, ...community]).category;
   return clamp(category / 7 + Math.max(...player.hole.map((card) => card.rank)) / 140, 0, 1);
 }
 
@@ -392,10 +279,10 @@ function freshGame(
       ))
     : PLAYER_TEMPLATES.map(() => startingStack);
   const stylePool = options.shuffleStyles
-    ? shuffle(PLAYER_TEMPLATES.slice(1).map(({ style, styleKey }) => ({ style, styleKey })))
+    ? sampleAiLineup(PLAYER_TEMPLATES.length - 1)
     : previous?.players.length
       ? previous.players.slice(1).map(({ style, styleKey }) => ({ style, styleKey }))
-      : PLAYER_TEMPLATES.slice(1).map(({ style, styleKey }) => ({ style, styleKey }));
+      : sampleAiLineup(PLAYER_TEMPLATES.length - 1);
   const players: Player[] = PLAYER_TEMPLATES.map((template, id) => ({
     ...template,
     ...(id > 0 ? stylePool[id - 1] : {}),
@@ -467,6 +354,7 @@ function freshGame(
     dealFrom: 0,
     dealCount: 0,
     lastAggressor: null,
+    raiseCount: 0,
     winnerIds: [],
     endedUncontested: false,
     shownPlayerIds: [],
@@ -609,6 +497,7 @@ function advanceStreet(game: Game, players: Player[]): Game {
     highestBet: 0,
     minRaise: BIG_BLIND,
     lastAggressor: null,
+    raiseCount: 0,
     dealFrom,
     dealCount: community.length - dealFrom,
     log: [`进入${STREET_LABELS[nextStreet]} · 底池 ${game.pot + collected}`, ...game.log],
@@ -623,6 +512,7 @@ function act(game: Game, playerId: number, kind: ActionKind, raiseTo?: number): 
   let highestBet = game.highestBet;
   let minRaise = game.minRaise;
   let lastAggressor = game.lastAggressor;
+  let raiseCount = game.raiseCount;
   let actionText = "";
 
   if (kind === "fold") {
@@ -653,6 +543,7 @@ function act(game: Game, playerId: number, kind: ActionKind, raiseTo?: number): 
     if (target > game.highestBet) {
       highestBet = target;
       lastAggressor = player.id;
+      raiseCount += 1;
       const fullRaise = increase >= game.minRaise;
       if (fullRaise) minRaise = increase;
       players.forEach((other) => {
@@ -673,7 +564,7 @@ function act(game: Game, playerId: number, kind: ActionKind, raiseTo?: number): 
     return game;
   }
 
-  const withLog = { ...game, players, highestBet, minRaise, lastAggressor, log: [actionText, ...game.log] };
+  const withLog = { ...game, players, highestBet, minRaise, lastAggressor, raiseCount, log: [actionText, ...game.log] };
   const remaining = players.filter((candidate) => !candidate.folded);
   if (remaining.length === 1) return awardUncontested(withLog, players);
   const actors = remaining.filter((candidate) => candidate.stack > 0);
@@ -689,61 +580,56 @@ function chooseAiAction(game: Game, player: Player, heroImage: TableImage): { ki
   const toCall = Math.max(0, game.highestBet - player.bet);
   const pot = committedPot(game);
   const potOdds = toCall > 0 ? toCall / (pot + toCall) : 0;
-  const pressure = toCall / Math.max(1, player.stack + player.bet);
   const draw = drawPotential(player.hole, game.community);
   const blockers = blockerValue(player.hole, game.community);
-  const positionOffset = (player.id - game.dealer + game.players.length) % game.players.length;
-  const inPosition = player.id === game.dealer || positionOffset === game.players.length - 1;
+  const activePlayers = game.players.filter((candidate) => !candidate.folded && candidate.stack > 0);
+  const actionOrderRank = (candidate: Player) => {
+    const offset = (candidate.id - game.dealer + game.players.length) % game.players.length;
+    return offset === 0 ? game.players.length : offset;
+  };
+  const lastPostflopActor = [...activePlayers].sort((left, right) => actionOrderRank(left) - actionOrderRank(right)).at(-1);
+  const inPosition = game.street === "preflop" ? player.id === game.dealer : lastPostflopActor?.id === player.id;
   const facingHero = game.lastAggressor === 0;
   const heroCallAdjustment = facingHero
     ? (heroImage.deceptive - 0.5) * 0.14 + (heroImage.loose - 0.5) * 0.08 + (heroImage.aggressive - 0.5) * 0.12
     : 0;
-  const effectiveEquity = clamp(equity + heroCallAdjustment + (inPosition ? 0.012 : 0), 0.02, 0.98);
+  const effectiveEquity = clamp(equity + heroCallAdjustment, 0.02, 0.98);
   const squidCount = game.squid.counts[player.id] ?? 0;
   const squidProgress = game.squid.total ? 1 - game.squid.remaining / game.squid.total : 0;
   const nextSquidHitsMultiplier = squidCount === 2 || squidCount === 4 || squidCount === 6;
   const squidPressure = game.presetKey === "squid"
     ? (squidCount === 0 ? 0.035 + squidProgress * 0.07 : nextSquidHitsMultiplier ? 0.055 : 0.018)
     : 0;
-  const strategyStrength = clamp((game.street === "preflop"
-    ? clamp(effectiveEquity * 0.35 + preflopStrength(player.hole) * 0.65, 0.02, 0.98)
-    : effectiveEquity) + squidPressure, 0.02, 0.98);
-  const betFraction = clamp((pot * (0.48 + profile.aggression * 0.5)) / Math.max(1, pot), 0.33, 1.1);
-  // 河牌均衡 bluff:value 为 b/(1+b)，换算成下注范围中的诈唬占比是 b/(1+2b)。
-  const balancedBluffRate = betFraction / (1 + 2 * betFraction);
-  const bluffCandidate = draw > 0.03 || blockers > 0.04 || (game.street === "river" && blockers > 0.07);
-  const startingDepthBb = game.startingStack / BIG_BLIND;
-  const depthBluffFactor = startingDepthBb <= 45 ? 0.88 : startingDepthBb >= 180 ? (inPosition ? 1.08 : 0.94) : 1;
-  const bluffFrequency = balancedBluffRate * (0.42 + profile.bluff * 2.8) * (inPosition ? 1.16 : 0.82) * (1 + squidPressure * 2.4) * depthBluffFactor;
-  const bluffing = bluffCandidate && Math.random() < bluffFrequency;
-  const depthThreshold = startingDepthBb <= 45 ? -0.032 : startingDepthBb >= 180 ? 0.022 : 0;
-  const valueThreshold = (game.street === "river" ? 0.61 : 0.57) - profile.aggression * 0.075 + depthThreshold;
-  const strong = strategyStrength + draw * 0.35 > valueThreshold;
-  const sizeOptions = game.street === "river"
-    ? startingDepthBb >= 180 ? [0.5, 0.75, 1.25] : [0.5, 0.75, 1]
-    : startingDepthBb >= 180 ? [0.33, 0.66, 1] : [0.33, 0.5, 0.75];
-  const sizeIndex = strong ? (profile.aggression > 0.68 ? 2 : 1) : blockers > 0.08 ? 2 : 0;
-  const raiseSize = Math.max(game.minRaise, Math.round((pot * sizeOptions[sizeIndex]) / BIG_BLIND) * BIG_BLIND);
-  const maxTarget = player.bet + player.stack;
-  const effectiveDepthBb = maxTarget / BIG_BLIND;
-  const shortStackJam = strong && startingDepthBb <= 45 && effectiveDepthBb <= 55 && Math.random() < 0.28 + profile.aggression * 0.28;
-  const target = shortStackJam ? maxTarget : Math.min(maxTarget, game.highestBet + raiseSize);
-  const mix = Math.random();
+  const opponentStacks = game.players
+    .filter((candidate) => !candidate.folded && candidate.id !== player.id)
+    .map((candidate) => candidate.stack);
+  const effectiveStack = Math.min(player.stack, Math.max(0, ...opponentStacks));
 
-  if (toCall > 0) {
-    const continueEdge = strategyStrength + draw + profile.looseness * 0.1 - potOdds - pressure * 0.12;
-    if (!bluffing && continueEdge < -0.055) return { kind: "fold" };
-    if (!bluffing && continueEdge < 0.015 && mix > 0.28 + profile.looseness * 0.42) return { kind: "fold" };
-    const raiseFrequency = strong ? 0.42 + profile.aggression * 0.48 : bluffing ? 0.28 + profile.aggression * 0.36 : 0;
-    if (!player.raiseLocked && (strong || bluffing) && target > game.highestBet && mix < raiseFrequency)
-      return { kind: "raise", raiseTo: target };
-    return { kind: "call" };
-  }
-  const probe = inPosition && strategyStrength > 0.34 && mix < 0.12 + profile.aggression * 0.12;
-  const betFrequency = strong ? 0.48 + profile.aggression * 0.46 : bluffing ? 0.34 + profile.aggression * 0.42 : probe ? 1 : 0;
-  if (!player.raiseLocked && (strong || bluffing || probe) && target > game.highestBet && mix < betFrequency)
-    return { kind: "raise", raiseTo: target };
-  return { kind: "check" };
+  return choosePokerPolicyAction({
+    profile,
+    street: game.street,
+    equity: effectiveEquity,
+    handStrength: game.street === "preflop" ? preflopStrength(player.hole) : visibleHandStrength(player, game.community),
+    draw,
+    blockers,
+    pot,
+    toCall,
+    potOdds,
+    inPosition,
+    activeOpponents: game.players.filter((candidate) => !candidate.folded && candidate.id !== player.id).length,
+    effectiveStackBb: effectiveStack / BIG_BLIND,
+    startingDepthBb: game.startingStack / BIG_BLIND,
+    highestBet: game.highestBet,
+    playerBet: player.bet,
+    playerStack: player.stack,
+    minRaise: game.minRaise,
+    raiseLocked: player.raiseLocked,
+    squidPressure,
+    bigBlind: BIG_BLIND,
+    preflopPercentile: preflopPercentile(player.hole),
+    preflopPositionFactor: sixMaxPreflopPositionFactor(player.id, game.dealer),
+    preflopRaiseCount: game.raiseCount,
+  });
 }
 
 function setHeroShowChoice(game: Game, show: boolean): Game {

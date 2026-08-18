@@ -322,7 +322,7 @@ button { color: inherit; }
   user-select: none;
 }
 .card-rank { font: 600 clamp(19px, 2vw, 28px)/1 Georgia, serif; }
-.card-suit { margin-top: 3px; font-size: clamp(14px, 1.5vw, 21px); }
+.card-suit { margin-top: 1px; font: 700 clamp(20px, 2.15vw, 30px)/.86 Georgia, "Times New Roman", serif; }
 .card.red { color: #b33d36; }
 .card-ghost { background: rgba(0,0,0,.1); border: 1px solid rgba(226,239,232,.13); box-shadow: inset 0 0 14px rgba(0,0,0,.12); }
 .card-ghost > * { display: none; }
@@ -430,11 +430,11 @@ button { color: inherit; }
 .seat-cards .card { width: 34px; border-radius: 4px; transform: rotate(-3deg); }
 .seat-cards .card + .card { transform: rotate(3deg); }
 .seat-cards .card-rank { font-size: 14px; }
-.seat-cards .card-suit { font-size: 11px; }
+.seat-cards .card-suit { margin-top: 0; font-size: 16px; }
 .seat-cards.is-revealed { top: -64px; gap: 5px; }
 .seat-cards.is-revealed .card { width: 42px; border-radius: 5px; }
 .seat-cards.is-revealed .card-rank { font-size: 18px; }
-.seat-cards.is-revealed .card-suit { margin-top: 2px; font-size: 15px; }
+.seat-cards.is-revealed .card-suit { margin-top: 0; font-size: 20px; }
 .seat-2 .seat-cards,
 .seat-3 .seat-cards,
 .seat-4 .seat-cards { top: auto; bottom: -53px; }

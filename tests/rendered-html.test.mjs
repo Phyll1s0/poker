@@ -26,11 +26,14 @@ test("server-renders the RangeCraft application shell", async () => {
 });
 
 test("keeps the multiplayer and strategy boundaries with product metadata", async () => {
-  const [page, layout, transport, strategy, packageJson] = await Promise.all([
+  const [page, layout, transport, strategy, policy, evaluator, selfPlay, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/poker-transport.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/poker-strategy.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/poker-policy.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/poker-evaluator.ts", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/ai-self-play.mjs", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
@@ -39,13 +42,19 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /近似 GTO 建议/);
   assert.match(page, /20 手整局/);
   assert.match(page, /function setHeroShowChoice/);
-  assert.match(page, /balancedBluffRate/);
+  assert.match(page, /choosePokerPolicyAction/);
   assert.match(page, /const TABLE_PRESETS/);
   assert.match(page, /function grantSquid/);
   assert.match(page, /血战鱿鱼计分/);
+  assert.match(page, /sampleAiLineup\(PLAYER_TEMPLATES\.length - 1\)/);
+  assert.doesNotMatch(page, /shuffle\(PLAYER_TEMPLATES\.slice\(1\)/);
   assert.match(layout, /RangeCraft · 德州扑克训练室/);
   assert.match(transport, /export interface PokerTransport/);
   assert.match(strategy, /export interface PokerStrategyProvider/);
+  assert.match(policy, /balancedBluffRate/);
+  assert.match(evaluator, /export function estimateEquity/);
+  assert.match(selfPlay, /choosePokerPolicyAction/);
+  assert.match(selfPlay, /estimateEquity/);
   assert.match(packageJson, /"name": "rangecraft-poker-trainer"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 });

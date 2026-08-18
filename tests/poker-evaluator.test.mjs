@@ -1,0 +1,136 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  bestHand,
+  blockerValue,
+  drawPotential,
+  estimateEquity,
+  makeDeck,
+  preflopPercentile,
+  preflopStrength,
+  score,
+  scoreFive,
+} from "../lib/poker-evaluator.ts";
+
+const c = (rank, suit) => ({ rank, suit });
+
+function seeded(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 0x1_0000_0000;
+  };
+}
+
+test("scores all hand classes in strict poker order", () => {
+  const hands = [
+    [c(14, "♠"), c(11, "♥"), c(9, "♦"), c(6, "♣"), c(3, "♠")],
+    [c(14, "♠"), c(14, "♥"), c(9, "♦"), c(6, "♣"), c(3, "♠")],
+    [c(14, "♠"), c(14, "♥"), c(9, "♦"), c(9, "♣"), c(3, "♠")],
+    [c(14, "♠"), c(14, "♥"), c(14, "♦"), c(6, "♣"), c(3, "♠")],
+    [c(9, "♠"), c(8, "♥"), c(7, "♦"), c(6, "♣"), c(5, "♠")],
+    [c(14, "♠"), c(11, "♠"), c(9, "♠"), c(6, "♠"), c(3, "♠")],
+    [c(14, "♠"), c(14, "♥"), c(14, "♦"), c(9, "♣"), c(9, "♠")],
+    [c(14, "♠"), c(14, "♥"), c(14, "♦"), c(14, "♣"), c(9, "♠")],
+    [c(9, "♠"), c(8, "♠"), c(7, "♠"), c(6, "♠"), c(5, "♠")],
+  ].map(scoreFive);
+
+  assert.deepEqual(hands.map(({ category }) => category), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  for (let index = 1; index < hands.length; index += 1) {
+    assert.ok(hands[index].score > hands[index - 1].score);
+  }
+});
+
+test("handles the wheel and selects the best five cards from seven", () => {
+  const wheel = scoreFive([c(14, 0), c(5, 1), c(4, 2), c(3, 3), c(2, 0)]);
+  const sixHigh = scoreFive([c(6, 0), c(5, 1), c(4, 2), c(3, 3), c(2, 0)]);
+  assert.equal(wheel.name, "顺子");
+  assert.ok(sixHigh.score > wheel.score);
+
+  const seven = [c(14, 0), c(14, 1), c(14, 2), c(13, 0), c(13, 1), c(2, 2), c(3, 3)];
+  assert.deepEqual(bestHand(seven), score(seven));
+  assert.equal(bestHand(seven).name, "葫芦");
+});
+
+test("preflop strength and percentile preserve useful ordering", () => {
+  const aces = [c(14, 0), c(14, 1)];
+  const aceKingSuited = [c(14, 0), c(13, 0)];
+  const aceKingOffsuit = [c(14, 0), c(13, 1)];
+  const sevenDeuce = [c(7, 0), c(2, 1)];
+
+  assert.ok(preflopStrength(aces) > preflopStrength(aceKingSuited));
+  assert.ok(preflopStrength(aceKingSuited) > preflopStrength(aceKingOffsuit));
+  assert.equal(preflopPercentile(aces), 1);
+  assert.ok(preflopPercentile(aceKingSuited) > preflopPercentile(aceKingOffsuit));
+  assert.ok(preflopPercentile(sevenDeuce) < 0.2);
+});
+
+test("reports draws and nut-suit blockers from public cards only", () => {
+  assert.equal(
+    drawPotential([c(8, "c"), c(9, "d")], [c(10, "h"), c(11, "c"), c(2, "s")]),
+    0.09,
+  );
+  assert.ok(Math.abs(
+    drawPotential([c(14, "s"), c(12, "s")], [c(2, "s"), c(7, "s"), c(13, "d")]) - 0.145,
+  ) < 1e-12);
+  assert.equal(
+    blockerValue([c(14, "s"), c(13, "d")], [c(2, "s"), c(7, "s"), c(11, "s")]),
+    0.15,
+  );
+});
+
+test("equity is deterministic with injected RNG and splits a locked board", () => {
+  const lockedBoard = [c(10, "♠"), c(11, "♠"), c(12, "♠"), c(13, "♠"), c(14, "♠")];
+  const split = estimateEquity([c(2, "♥"), c(3, "♦")], lockedBoard, {
+    opponents: 2,
+    iterations: 20,
+    random: seeded(7),
+  });
+  assert.ok(Math.abs(split - 1 / 3) < 1e-12);
+
+  const spot = {
+    opponents: 3,
+    iterations: 120,
+  };
+  const first = estimateEquity([c(14, 0), c(13, 0)], [c(12, 0), c(7, 1), c(2, 2)], {
+    ...spot,
+    random: seeded(90210),
+  });
+  const replay = estimateEquity([c(14, 0), c(13, 0)], [c(12, 0), c(7, 1), c(2, 2)], {
+    ...spot,
+    random: seeded(90210),
+  });
+  assert.equal(first, replay);
+  assert.ok(first >= 0 && first <= 1);
+});
+
+test("equity never samples known cards and supports both suit formats", () => {
+  const symbolNuts = estimateEquity(
+    [c(10, "♠"), c(3, "♣")],
+    [c(14, "♠"), c(13, "♠"), c(12, "♠"), c(11, "♠"), c(2, "♦")],
+    5,
+    25,
+    seeded(11),
+  );
+  const numericNuts = estimateEquity(
+    [c(10, 0), c(3, 3)],
+    [c(14, 0), c(13, 0), c(12, 0), c(11, 0), c(2, 2)],
+    5,
+    25,
+    seeded(11),
+  );
+  assert.equal(symbolNuts, 1);
+  assert.equal(numericNuts, 1);
+  assert.equal(makeDeck().length, 52);
+  assert.equal(makeDeck([0, 1, 2, 3]).length, 52);
+});
+
+test("rejects duplicate cards and invalid equity requests", () => {
+  assert.throws(() => scoreFive([c(14, 0), c(14, 0), c(4, 1), c(3, 2), c(2, 3)]), /重复牌/);
+  assert.throws(
+    () => estimateEquity([c(14, 0), c(13, 0)], [], { opponents: 30, iterations: 1, random: seeded(1) }),
+    /剩余牌不足/,
+  );
+  assert.throws(() => makeDeck([0, 1, 1, 3]), /互不相同/);
+});
