@@ -1,0 +1,297 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  estimateEquity,
+  makeDeck,
+  preflopPercentile,
+} from "../lib/poker-evaluator.ts";
+import {
+  createPublicOpponentRanges,
+  opponentHoldingWeight,
+} from "../lib/poker-range.ts";
+
+const c = (rank, suit) => ({ rank, suit });
+
+function seeded(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 0x1_0000_0000;
+  };
+}
+
+function action(overrides = {}) {
+  return {
+    playerId: 1,
+    street: "preflop",
+    kind: "raise",
+    amount: 30,
+    toCall: 10,
+    stackBefore: 1000,
+    isAllIn: false,
+    potBefore: 15,
+    raiseCountBefore: 0,
+    activeOpponents: 5,
+    ...overrides,
+  };
+}
+
+function weightedMeanPreflopPercentile(evidence) {
+  const deck = makeDeck([0, 1, 2, 3]);
+  let weightedTotal = 0;
+  let totalWeight = 0;
+  for (let first = 0; first < deck.length - 1; first += 1) {
+    for (let second = first + 1; second < deck.length; second += 1) {
+      const hole = [deck[first], deck[second]];
+      const weight = opponentHoldingWeight(hole, [], evidence);
+      weightedTotal += preflopPercentile(hole) * weight;
+      totalWeight += weight;
+    }
+  }
+  return weightedTotal / totalWeight;
+}
+
+function holdingKey(cards) {
+  return cards.map((card) => `${card.rank}:${card.suit}`).sort().join("|");
+}
+
+function onlyHolding(cards) {
+  const expected = holdingKey(cards);
+  return (candidate) => holdingKey(candidate) === expected ? 1 : 0;
+}
+
+function weightedRange(entries, floor = 0) {
+  const weights = new Map(entries.map(([cards, weight]) => [holdingKey(cards), weight]));
+  return (candidate) => weights.get(holdingKey(candidate)) ?? floor;
+}
+
+test("preflop raises narrow the range while retaining bluff candidates", () => {
+  const smallRaise = {
+    actions: [action()],
+    positionFactor: 0.86,
+    bigBlind: 10,
+  };
+  const largeRaise = {
+    ...smallRaise,
+    actions: [action({ amount: 100 })],
+  };
+  const aces = [c(14, 0), c(14, 1)];
+  const aceFiveSuited = [c(14, 0), c(5, 0)];
+  const sevenDeuce = [c(7, 0), c(2, 1)];
+
+  assert.ok(opponentHoldingWeight(aces, [], smallRaise) > opponentHoldingWeight(sevenDeuce, [], smallRaise));
+  assert.ok(opponentHoldingWeight(aceFiveSuited, [], smallRaise) > 0);
+  assert.ok(weightedMeanPreflopPercentile(largeRaise) > weightedMeanPreflopPercentile(smallRaise));
+});
+
+test("postflop betting is polarized between value and live bluffs", () => {
+  const board = [c(13, "♠"), c(7, "♠"), c(2, "♦")];
+  const evidence = {
+    actions: [action({ street: "flop", amount: 75, toCall: 0, potBefore: 100 })],
+    positionFactor: 1,
+    bigBlind: 10,
+  };
+  const value = opponentHoldingWeight([c(13, "♣"), c(13, "♦")], board, evidence);
+  const flushDraw = opponentHoldingWeight([c(14, "♠"), c(12, "♠")], board, evidence);
+  const air = opponentHoldingWeight([c(9, "♣"), c(3, "♥")], board, evidence);
+
+  assert.ok(value > flushDraw);
+  assert.ok(flushDraw > air);
+  assert.ok(air > 0, "pure bluffs must retain non-zero posterior mass");
+});
+
+test("calling a larger wager concentrates the continuing range", () => {
+  const board = [c(13, "♠"), c(7, "♠"), c(2, "♦")];
+  const smallCall = {
+    actions: [action({ street: "flop", kind: "call", amount: 33, toCall: 33, potBefore: 100, activeOpponents: 1 })],
+    positionFactor: 1,
+    bigBlind: 10,
+  };
+  const largeCall = {
+    ...smallCall,
+    actions: [action({ street: "flop", kind: "call", amount: 125, toCall: 125, potBefore: 100, activeOpponents: 1 })],
+  };
+  const set = [c(13, "♣"), c(13, "♦")];
+  const secondPair = [c(7, "♣"), c(6, "♥")];
+  const smallRatio = opponentHoldingWeight(set, board, smallCall) / opponentHoldingWeight(secondPair, board, smallCall);
+  const largeRatio = opponentHoldingWeight(set, board, largeCall) / opponentHoldingWeight(secondPair, board, largeCall);
+  assert.ok(largeRatio > smallRatio);
+});
+
+test("weighted equity uses every opponent range and rejects card collisions", () => {
+  const hero = [c(14, "♥"), c(12, "♥")];
+  const board = [c(14, "♣"), c(13, "♣"), c(7, "♠"), c(4, "♦"), c(2, "♠")];
+  const aceJack = [c(14, "♦"), c(11, "♦")];
+  const sevens = [c(7, "♣"), c(7, "♦")];
+
+  assert.equal(estimateEquity(hero, board, {
+    opponents: 1,
+    iterations: 4,
+    random: seeded(1),
+    opponentRanges: [onlyHolding(aceJack)],
+  }), 1);
+  assert.equal(estimateEquity(hero, board, {
+    opponents: 2,
+    iterations: 4,
+    random: seeded(1),
+    opponentRanges: [onlyHolding(aceJack), onlyHolding(sevens)],
+  }), 0);
+  assert.throws(() => estimateEquity(hero, board, {
+    opponents: 2,
+    iterations: 1,
+    random: seeded(1),
+    opponentRanges: [onlyHolding(aceJack), onlyHolding([c(14, "♦"), c(10, "♦")])],
+  }), /正权重手牌/);
+});
+
+test("multiway range equity is deterministic with an injected RNG", () => {
+  const hero = [c(11, 0), c(10, 0)];
+  const board = [c(9, 1), c(7, 2), c(2, 3)];
+  const ranges = [
+    (hole) => 0.05 + preflopPercentile(hole) ** 3,
+    (hole) => 0.05 + (hole[0].suit === hole[1].suit ? 0.8 : 0.15),
+  ];
+  const first = estimateEquity(hero, board, {
+    opponents: 2,
+    iterations: 180,
+    random: seeded(90210),
+    opponentRanges: ranges,
+  });
+  const replay = estimateEquity(hero, board, {
+    opponents: 2,
+    iterations: 180,
+    random: seeded(90210),
+    opponentRanges: ranges,
+  });
+  assert.equal(first, replay);
+  assert.ok(first >= 0 && first <= 1);
+});
+
+test("multiway weighted sampling uses a product joint range without seat-order bias", () => {
+  const hero = [c(14, "s"), c(14, "h")];
+  const board = [c(2, "c"), c(3, "d"), c(7, "d"), c(9, "c"), c(11, "c")];
+  const firstRange = weightedRange([
+    [[c(11, "d"), c(11, "h")], 100],
+    [[c(12, "d"), c(13, "d")], 1],
+  ]);
+  const secondRange = weightedRange([
+    [[c(11, "d"), c(4, "h")], 100],
+    [[c(4, "s"), c(5, "s")], 1],
+  ]);
+  const options = {
+    opponents: 2,
+    iterations: 10_000,
+    random: seeded(1),
+    suits: ["s", "h", "d", "c"],
+    opponentRanges: [firstRange, secondRange],
+  };
+  const forward = estimateEquity(hero, board, options);
+  const reversed = estimateEquity(hero, board, {
+    ...options,
+    random: seeded(1),
+    opponentRanges: [secondRange, firstRange],
+  });
+  const exactHeroEquity = 101 / 201;
+
+  assert.ok(Math.abs(forward - exactHeroEquity) < 0.025, `${forward} should be near ${exactHeroEquity}`);
+  assert.ok(Math.abs(reversed - exactHeroEquity) < 0.025, `${reversed} should be near ${exactHeroEquity}`);
+  assert.ok(Math.abs(forward - reversed) < 0.025, `${forward} and ${reversed} should agree`);
+});
+
+test("importance-corrected broad ranges recover collision modes across seat orders", () => {
+  const hero = [c(14, "s"), c(14, "h")];
+  const board = [c(2, "c"), c(3, "d"), c(7, "d"), c(9, "c"), c(11, "c")];
+  const firstRange = weightedRange([
+    [[c(11, "d"), c(11, "h")], 100],
+    [[c(12, "d"), c(13, "d")], 1],
+  ], 1e-10);
+  const secondRange = weightedRange([
+    [[c(11, "d"), c(4, "h")], 100],
+    [[c(4, "s"), c(5, "s")], 1],
+  ], 1e-10);
+  const estimates = Array.from({ length: 12 }, (_, index) => estimateEquity(hero, board, {
+    opponents: 2,
+    iterations: 110,
+    random: seeded(index + 1),
+    suits: ["s", "h", "d", "c"],
+    opponentRanges: [firstRange, secondRange],
+  }));
+  const mean = estimates.reduce((total, value) => total + value, 0) / estimates.length;
+
+  assert.ok(Math.abs(mean - 101 / 201) < 0.04, `${mean} should recover both collision modes`);
+});
+
+test("a feasible sparse joint range never fails because an early draw blocks a later seat", () => {
+  const hero = [c(14, "s"), c(14, "h")];
+  const board = [c(2, "c"), c(3, "d"), c(7, "d"), c(9, "c"), c(11, "c")];
+  const sometimesBlocking = weightedRange([
+    [[c(11, "d"), c(11, "h")], 1_000_000],
+    [[c(12, "d"), c(13, "d")], 1],
+  ]);
+  const laterSeat = onlyHolding([c(11, "d"), c(4, "h")]);
+
+  assert.equal(estimateEquity(hero, board, {
+    opponents: 2,
+    iterations: 20,
+    random: () => 0,
+    suits: ["s", "h", "d", "c"],
+    opponentRanges: [sometimesBlocking, laterSeat],
+  }), 1);
+});
+
+test("weighted equity splits ties between hero and every tied opponent", () => {
+  const hero = [c(2, "h"), c(3, "d")];
+  const board = [c(10, "s"), c(11, "s"), c(12, "s"), c(13, "s"), c(14, "s")];
+  const opponent = [c(4, "h"), c(5, "d")];
+
+  assert.equal(estimateEquity(hero, board, {
+    opponents: 1,
+    iterations: 3,
+    random: seeded(5),
+    suits: ["s", "h", "d", "c"],
+    opponentRanges: [onlyHolding(opponent)],
+  }), 0.5);
+});
+
+test("broad, strongly overlapping multiway ranges do not fail on card collisions", () => {
+  const hero = [c(14, "s"), c(14, "h")];
+  const board = [c(2, "c"), c(3, "d"), c(7, "d"), c(9, "c"), c(11, "c")];
+  const favorite = holdingKey([c(13, "h"), c(13, "d")]);
+  const concentrated = (candidate) => holdingKey(candidate) === favorite ? 1 : 1e-8;
+  const equity = estimateEquity(hero, board, {
+    opponents: 5,
+    iterations: 4,
+    random: seeded(77),
+    suits: ["s", "h", "d", "c"],
+    opponentRanges: Array.from({ length: 5 }, () => concentrated),
+  });
+
+  assert.ok(Number.isFinite(equity));
+  assert.ok(equity >= 0 && equity <= 1);
+});
+
+test("public range inference never reads real opponent hole cards", () => {
+  const guardedOpponent = { id: 1, folded: false };
+  Object.defineProperty(guardedOpponent, "hole", {
+    get() { throw new Error("hidden cards were read"); },
+  });
+  const publicState = {
+    players: [{ id: 0, folded: false }, guardedOpponent],
+    viewerId: 0,
+    community: [c(13, "♠"), c(7, "♠"), c(2, "♦")],
+    actions: [action({ street: "flop", amount: 66, toCall: 0, potBefore: 100 })],
+    bigBlind: 10,
+    positionFactor: () => 1,
+  };
+  const inferred = createPublicOpponentRanges(publicState);
+  assert.equal(inferred.length, 1);
+  assert.ok(inferred[0].weight([c(14, "♠"), c(12, "♠")]) > 0);
+
+  const withSecretAces = { ...guardedOpponent, hole: [c(14, 0), c(14, 1)] };
+  const withSecretTrash = { ...guardedOpponent, hole: [c(7, 0), c(2, 1)] };
+  const first = createPublicOpponentRanges({ ...publicState, players: [publicState.players[0], withSecretAces] });
+  const second = createPublicOpponentRanges({ ...publicState, players: [publicState.players[0], withSecretTrash] });
+  const candidate = [c(13, "♣"), c(13, "♦")];
+  assert.equal(first[0].weight(candidate), second[0].weight(candidate));
+});

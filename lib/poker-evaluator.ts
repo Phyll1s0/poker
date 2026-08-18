@@ -14,9 +14,10 @@ export type PokerHandEvaluation = {
 };
 
 export type PokerRandom = () => number;
+export type OpponentRangeWeight = (hole: readonly [PokerCard, PokerCard]) => number;
 
 export type EstimateEquityOptions = {
-  /** Number of live opponents. Their unknown cards are sampled uniformly. */
+  /** Number of live opponents. Their cards are uniform unless opponentRanges is supplied. */
   opponents: number;
   /** Monte Carlo samples. Higher values reduce variance but take longer. */
   iterations?: number;
@@ -24,6 +25,8 @@ export type EstimateEquityOptions = {
   random?: PokerRandom;
   /** Explicit four-suit domain when using a custom string representation. */
   suits?: readonly PokerSuit[];
+  /** One public-information range likelihood function per opponent. */
+  opponentRanges?: readonly OpponentRangeWeight[];
 };
 
 const HAND_NAMES = ["高牌", "一对", "两对", "三条", "顺子", "同花", "葫芦", "四条", "同花顺"] as const;
@@ -275,6 +278,181 @@ function sampleCards(source: readonly PokerCard[], count: number, random: PokerR
   return cards.slice(0, count);
 }
 
+type WeightedHolding = {
+  cards: readonly [PokerCard, PokerCard];
+  keys: readonly [string, string];
+  weight: number;
+};
+
+type WeightedRange = {
+  holdings: readonly WeightedHolding[];
+  totalWeight: number;
+};
+
+type WeightedJoint = {
+  holes: readonly (readonly [PokerCard, PokerCard])[];
+  cumulativeWeight: number;
+};
+
+type WeightedJointDistribution = {
+  joints: readonly WeightedJoint[];
+  totalWeight: number;
+};
+
+const EXACT_JOINT_ENUMERATION_LIMIT = 50_000;
+const JOINT_CONSTRUCTION_ATTEMPTS = 64;
+
+function buildWeightedRange(
+  available: readonly PokerCard[],
+  range: OpponentRangeWeight,
+  index: number,
+): WeightedRange {
+  const candidates: Array<{
+    cards: readonly [PokerCard, PokerCard];
+    keys: readonly [string, string];
+    weight: number;
+  }> = [];
+  let maximumWeight = 0;
+  for (let first = 0; first < available.length - 1; first += 1) {
+    for (let second = first + 1; second < available.length; second += 1) {
+      const cards = [available[first], available[second]] as const;
+      const rawWeight = range(cards);
+      const weight = Number.isFinite(rawWeight) ? Math.max(0, rawWeight) : 0;
+      if (weight <= 0) continue;
+      maximumWeight = Math.max(maximumWeight, weight);
+      candidates.push({ cards, keys: [cardKey(cards[0]), cardKey(cards[1])], weight });
+    }
+  }
+  if (maximumWeight <= 0) throw new RangeError(`opponentRanges[${index}] 没有正权重手牌`);
+
+  // Scaling each range by its own maximum does not change the joint
+  // distribution and avoids overflow when callers return very large weights.
+  let totalWeight = 0;
+  const holdings = candidates.map((candidate) => {
+    const weight = candidate.weight / maximumWeight;
+    totalWeight += weight;
+    return { ...candidate, weight };
+  });
+  return { holdings, totalWeight };
+}
+
+function sampleConditionalHolding(
+  range: WeightedRange,
+  unavailable: ReadonlySet<string>,
+  random: PokerRandom,
+) {
+  let compatibleWeight = 0;
+  for (const holding of range.holdings) {
+    if (!holding.keys.some((key) => unavailable.has(key))) compatibleWeight += holding.weight;
+  }
+  if (compatibleWeight <= 0) return undefined;
+
+  let target = unitRandom(random) * compatibleWeight;
+  let fallback: WeightedHolding | undefined;
+  for (const holding of range.holdings) {
+    if (holding.keys.some((key) => unavailable.has(key))) continue;
+    fallback = holding;
+    target -= holding.weight;
+    if (target < 0) return { holding, compatibleWeight };
+  }
+  return fallback ? { holding: fallback, compatibleWeight } : undefined;
+}
+
+function canEnumerateJoint(ranges: readonly WeightedRange[]) {
+  let combinations = 1;
+  for (const range of ranges) {
+    if (combinations > EXACT_JOINT_ENUMERATION_LIMIT / range.holdings.length) return false;
+    combinations *= range.holdings.length;
+  }
+  return true;
+}
+
+function enumerateCompatibleJoints(ranges: readonly WeightedRange[]): WeightedJointDistribution {
+  const candidates: Array<{
+    holes: readonly (readonly [PokerCard, PokerCard])[];
+    logWeight: number;
+  }> = [];
+  const holes: Array<readonly [PokerCard, PokerCard]> = [];
+  const unavailable = new Set<string>();
+
+  const visit = (rangeIndex: number, logWeight: number) => {
+    if (rangeIndex === ranges.length) {
+      candidates.push({ holes: [...holes], logWeight });
+      return;
+    }
+    for (const holding of ranges[rangeIndex].holdings) {
+      if (holding.keys.some((key) => unavailable.has(key))) continue;
+      holding.keys.forEach((key) => unavailable.add(key));
+      holes.push(holding.cards);
+      visit(rangeIndex + 1, logWeight + Math.log(holding.weight));
+      holes.pop();
+      holding.keys.forEach((key) => unavailable.delete(key));
+    }
+  };
+  visit(0, 0);
+  if (!candidates.length) throw new RangeError("对手范围之间没有可兼容的正权重手牌");
+
+  // Log weights keep sparse, highly skewed ranges numerically stable.
+  const maximumLogWeight = Math.max(...candidates.map((candidate) => candidate.logWeight));
+  let totalWeight = 0;
+  const joints = candidates.map((candidate) => {
+    totalWeight += Math.exp(candidate.logWeight - maximumLogWeight);
+    return { holes: candidate.holes, cumulativeWeight: totalWeight };
+  });
+  return { joints, totalWeight };
+}
+
+function sampleEnumeratedJoint(
+  distribution: WeightedJointDistribution,
+  random: PokerRandom,
+): readonly (readonly [PokerCard, PokerCard])[] {
+  const target = unitRandom(random) * distribution.totalWeight;
+  let lower = 0;
+  let upper = distribution.joints.length;
+  while (lower < upper) {
+    const middle = (lower + upper) >>> 1;
+    if (target < distribution.joints[middle].cumulativeWeight) upper = middle;
+    else lower = middle + 1;
+  }
+  return distribution.joints[Math.min(lower, distribution.joints.length - 1)].holes;
+}
+
+function sampleJointWithImportanceCorrection(
+  ranges: readonly WeightedRange[],
+  random: PokerRandom,
+  preferredFirstRange: number,
+): { holes: readonly (readonly [PokerCard, PokerCard])[]; logImportanceWeight: number } {
+  for (let attempt = 0; attempt < JOINT_CONSTRUCTION_ATTEMPTS; attempt += 1) {
+    // Rotate which seat samples first, then shuffle the tail. This stratifies
+    // collision modes instead of trusting a short Monte Carlo run to discover
+    // every important ordering by chance. Each order uses the same valid
+    // product-of-compatible-masses importance correction.
+    const order = ranges.map((range, index) => ({ range, index }));
+    const firstPosition = order.findIndex(({ index }) => index === preferredFirstRange);
+    [order[0], order[firstPosition]] = [order[firstPosition], order[0]];
+    for (let cursor = order.length - 1; cursor > 1; cursor -= 1) {
+      const selected = 1 + Math.floor(unitRandom(random) * cursor);
+      [order[cursor], order[selected]] = [order[selected], order[cursor]];
+    }
+    const unavailable = new Set<string>();
+    const holes: Array<readonly [PokerCard, PokerCard]> = Array.from({ length: ranges.length });
+    let logImportanceWeight = 0;
+    let complete = true;
+    for (const { range, index } of order) {
+      const sampled = sampleConditionalHolding(range, unavailable, random);
+      if (!sampled) {
+        complete = false;
+        break;
+      }
+      holes[index] = sampled.holding.cards;
+      sampled.holding.keys.forEach((key) => unavailable.add(key));
+      logImportanceWeight += Math.log(sampled.compatibleWeight);
+    }
+    if (complete) return { holes, logImportanceWeight };
+  }
+  throw new RangeError("无法从对手范围构造互不碰牌的联合手牌；范围可能不兼容");
+}
+
 export function estimateEquity(
   hole: readonly PokerCard[],
   community: readonly PokerCard[],
@@ -288,7 +466,7 @@ export function estimateEquity(
   options: EstimateEquityOptions,
 ): number;
 /**
- * Monte Carlo equity against uniformly sampled unknown opponent holdings.
+ * Monte Carlo equity against uniform or public-information-weighted opponent holdings.
  * The API intentionally accepts no real opponent hole cards, preventing hidden-card leakage.
  */
 export function estimateEquity(
@@ -320,6 +498,68 @@ export function estimateEquity(
   const boardCardsNeeded = 5 - community.length;
   const cardsNeeded = boardCardsNeeded + opponents * 2;
   if (cardsNeeded > available.length) throw new RangeError("剩余牌不足以完成公共牌和所有随机对手手牌");
+  const opponentRanges = options.opponentRanges;
+  if (opponentRanges && opponentRanges.length !== opponents) {
+    throw new RangeError("opponentRanges 必须为每位对手提供一个范围权重函数");
+  }
+
+  if (opponentRanges) {
+    const ranges = opponentRanges.map((range, index) => {
+      if (typeof range !== "function") throw new TypeError(`opponentRanges[${index}] 必须是函数`);
+      return buildWeightedRange(available, range, index);
+    });
+    const enumeratedJoint = canEnumerateJoint(ranges) ? enumerateCompatibleJoints(ranges) : undefined;
+    let maximumLogImportance = -Infinity;
+    let totalImportance = 0;
+    let squaredImportance = 0;
+    let weightedEquity = 0;
+    let completedRuns = 0;
+    const maximumRuns = enumeratedJoint ? iterations : iterations * 4;
+    const targetEffectiveSamples = iterations * 0.6;
+    while (
+      completedRuns < iterations
+      || (!enumeratedJoint
+        && completedRuns < maximumRuns
+        && totalImportance * totalImportance / Math.max(Number.MIN_VALUE, squaredImportance) < targetEffectiveSamples)
+    ) {
+      const jointSample = enumeratedJoint
+        ? { holes: sampleEnumeratedJoint(enumeratedJoint, random), logImportanceWeight: 0 }
+        : sampleJointWithImportanceCorrection(ranges, random, completedRuns % ranges.length);
+      completedRuns += 1;
+      const opponentHoles = jointSample.holes;
+      const unavailable = new Set(opponentHoles.flatMap((holding) => holding.map(cardKey)));
+      const runoutPool = available.filter((card) => !unavailable.has(cardKey(card)));
+      const board = [...community, ...sampleCards(runoutPool, boardCardsNeeded, random)];
+      const heroScore = bestHandUnchecked([...hole, ...board]).score;
+      let topScore = heroScore;
+      let tiedOpponents = 0;
+      for (const opponentHole of opponentHoles) {
+        const opponentScore = bestHandUnchecked([...opponentHole, ...board]).score;
+        if (opponentScore > topScore) {
+          topScore = opponentScore;
+          tiedOpponents = 1;
+        } else if (opponentScore === topScore) {
+          tiedOpponents += 1;
+        }
+      }
+      const equityShare = heroScore === topScore ? 1 / (tiedOpponents + 1) : 0;
+      if (jointSample.logImportanceWeight > maximumLogImportance) {
+        const scale = maximumLogImportance === -Infinity
+          ? 0
+          : Math.exp(maximumLogImportance - jointSample.logImportanceWeight);
+        totalImportance = totalImportance * scale + 1;
+        squaredImportance = squaredImportance * scale * scale + 1;
+        weightedEquity = weightedEquity * scale + equityShare;
+        maximumLogImportance = jointSample.logImportanceWeight;
+      } else {
+        const importance = Math.exp(jointSample.logImportanceWeight - maximumLogImportance);
+        totalImportance += importance;
+        squaredImportance += importance * importance;
+        weightedEquity += importance * equityShare;
+      }
+    }
+    return weightedEquity / totalImportance;
+  }
 
   let equityShare = 0;
   for (let run = 0; run < iterations; run += 1) {

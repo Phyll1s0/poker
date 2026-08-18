@@ -607,6 +607,7 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
 .metric-grid div:last-child { border: 0; }
 .metric-grid span { color: #666a65; font-size: 8px; }
 .metric-grid strong { color: #d4d0c6; font: 500 13px/1 Georgia, serif; }
+.range-note { margin: 12px 0 0; color: #737872; font-size: 8px; line-height: 1.6; }
 
 .coach-callout { display: grid; grid-template-columns: 34px 1fr; gap: 12px; background: linear-gradient(120deg, rgba(62,157,121,.11), rgba(62,157,121,.025)); transition: opacity .2s ease; }
 .coach-callout.muted { opacity: .52; background: transparent; }

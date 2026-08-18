@@ -12,6 +12,7 @@ import {
   preflopStrength,
 } from "../lib/poker-evaluator";
 import { choosePokerPolicyAction, sixMaxPreflopPositionFactor } from "../lib/poker-policy";
+import { createPublicOpponentRanges, type PublicBettingAction } from "../lib/poker-range";
 import { settleSquidRound, squidMultiplier } from "../lib/poker-squid";
 
 type Suit = "♠" | "♥" | "♦" | "♣";
@@ -80,6 +81,7 @@ type Game = {
   status: "playing" | "showdown";
   result: string;
   log: string[];
+  actionHistory: PublicBettingAction[];
 };
 
 type Review = {
@@ -179,9 +181,21 @@ function cardKey(card: Card) {
 }
 
 function currentEquity(game: Game, player: Player, iterations = 80): number {
-  const opponents = Math.max(1, game.players.filter((p) => !p.folded && p.id !== player.id).length);
-  if (game.street === "preflop") return estimateEquity(player.hole, [], opponents, Math.max(48, iterations));
-  return estimateEquity(player.hole, game.community, opponents, iterations);
+  const community = game.street === "preflop" ? [] : game.community;
+  const opponents = createPublicOpponentRanges({
+    players: game.players,
+    viewerId: player.id,
+    community,
+    actions: game.actionHistory,
+    bigBlind: BIG_BLIND,
+    positionFactor: (playerId) => sixMaxPreflopPositionFactor(playerId, game.dealer),
+  });
+  if (!opponents.length) return 1;
+  return estimateEquity(player.hole, community, {
+    opponents: opponents.length,
+    iterations: game.street === "preflop" ? Math.max(48, iterations) : iterations,
+    opponentRanges: opponents.map((opponent) => opponent.weight),
+  });
 }
 
 function nextEligible(players: Player[], from: number) {
@@ -372,6 +386,7 @@ function freshGame(
       ...(rebought.length ? [`自动补充筹码：${rebought.join("、")} 回到 ${startingStack}`] : []),
       `第 ${(previous?.handNo ?? 0) + 1} 手开始 · ${preset.shortLabel} · 盲注 ${SMALL_BLIND}/${BIG_BLIND}`,
     ],
+    actionHistory: [],
   };
 }
 
@@ -514,20 +529,25 @@ function act(game: Game, playerId: number, kind: ActionKind, raiseTo?: number): 
   if (game.status !== "playing" || game.current !== playerId) return game;
   const players = game.players.map((player) => ({ ...player }));
   const player = players[playerId];
+  const stackBefore = player.stack;
   const toCall = Math.max(0, game.highestBet - player.bet);
   let highestBet = game.highestBet;
   let minRaise = game.minRaise;
   let lastAggressor = game.lastAggressor;
   let raiseCount = game.raiseCount;
   let actionText = "";
+  let resolvedKind: ActionKind | null = null;
+  let amount = 0;
 
   if (kind === "fold") {
     player.folded = true;
     player.hasActed = true;
     actionText = `${player.name} 弃牌`;
+    resolvedKind = "fold";
   } else if (kind === "check" && toCall === 0) {
     player.hasActed = true;
     actionText = `${player.name} 过牌`;
+    resolvedKind = "check";
   } else if (kind === "call") {
     const paid = Math.min(toCall, player.stack);
     player.stack -= paid;
@@ -535,6 +555,8 @@ function act(game: Game, playerId: number, kind: ActionKind, raiseTo?: number): 
     player.contributed += paid;
     player.hasActed = true;
     actionText = paid < toCall ? `${player.name} 全下 ${paid}` : `${player.name} 跟注 ${paid}`;
+    resolvedKind = "call";
+    amount = paid;
   } else if (kind === "raise") {
     if (player.raiseLocked) return game;
     const maxTarget = player.bet + player.stack;
@@ -563,14 +585,39 @@ function act(game: Game, playerId: number, kind: ActionKind, raiseTo?: number): 
         }
       });
       actionText = `${player.name} ${player.stack === 0 ? "全下至" : "加注至"} ${target}`;
+      resolvedKind = "raise";
+      amount = paid;
     } else {
       actionText = `${player.name} 跟注 ${paid}`;
+      resolvedKind = "call";
+      amount = paid;
     }
   } else {
     return game;
   }
 
-  const withLog = { ...game, players, highestBet, minRaise, lastAggressor, raiseCount, log: [actionText, ...game.log] };
+  const observedAction: PublicBettingAction = {
+    playerId,
+    street: game.street,
+    kind: resolvedKind!,
+    amount,
+    toCall,
+    stackBefore,
+    isAllIn: resolvedKind !== "fold" && player.stack === 0,
+    potBefore: committedPot(game),
+    raiseCountBefore: game.raiseCount,
+    activeOpponents: game.players.filter((candidate) => !candidate.folded && candidate.id !== playerId).length,
+  };
+  const withLog = {
+    ...game,
+    players,
+    highestBet,
+    minRaise,
+    lastAggressor,
+    raiseCount,
+    log: [actionText, ...game.log],
+    actionHistory: [...game.actionHistory, observedAction],
+  };
   const remaining = players.filter((candidate) => !candidate.folded);
   if (remaining.length === 1) return awardUncontested(withLog, players);
   const actors = remaining.filter((candidate) => candidate.stack > 0);
@@ -675,16 +722,16 @@ function getAdvice(game: Game, player: Player, equity: number) {
   let note: string;
   if (toCall > 0 && decisionEquity < potOdds - 0.045) {
     action = "fold";
-    note = `胜率约 ${Math.round(equity * 100)}%，低于跟注所需 ${Math.round(potOdds * 100)}%。控制负 EV 跟注。`;
+    note = `按对手行动范围估算胜率约 ${Math.round(equity * 100)}%，低于跟注所需 ${Math.round(potOdds * 100)}%。控制负 EV 跟注。`;
   } else if (!player.raiseLocked && strategyStrength > (toCall > 0 ? 0.57 : 0.51) + depthThreshold) {
     action = "raise";
-    note = `胜率约 ${Math.round(equity * 100)}%，具备价值下注或保护范围的空间。`;
+    note = `按对手行动范围估算胜率约 ${Math.round(equity * 100)}%，具备价值下注或保护范围的空间。`;
   } else {
     action = toCall > 0 ? "call" : "check";
     note = player.raiseLocked
-      ? `前面的不足额全下没有重新开放加注权；当前只能跟注或弃牌。估算胜率约 ${Math.round(equity * 100)}%。`
+      ? `前面的不足额全下没有重新开放加注权；当前只能跟注或弃牌。范围胜率约 ${Math.round(equity * 100)}%。`
       : toCall > 0
-      ? `底池赔率需要 ${Math.round(potOdds * 100)}%，当前估算胜率 ${Math.round(equity * 100)}%，继续范围合理。`
+      ? `底池赔率需要 ${Math.round(potOdds * 100)}%，当前范围胜率 ${Math.round(equity * 100)}%，继续范围合理。`
       : `中等牌力适合控制底池，保留对手的诈唬范围。`;
   }
   if (game.presetKey === "squid") {
@@ -1346,12 +1393,12 @@ export default function Home() {
           ) : (
             <div className="analysis-content">
               <section className="equity-card">
-                <div className="section-label"><span>牌面概览</span><b>{isHumanTurn ? "LIVE" : "WAIT"}</b></div>
+                <div className="section-label"><span>牌面与行动范围</span><b>{isHumanTurn ? "RANGE" : "WAIT"}</b></div>
                 <div className="equity-main">
-                  <div className="equity-number"><strong>{isHumanTurn ? Math.round(equity * 100) : "—"}</strong><span>%<br />估算胜率</span></div>
+                  <div className="equity-number"><strong>{isHumanTurn ? Math.round(equity * 100) : "—"}</strong><span>%<br />范围胜率</span></div>
                   <div className="equity-bars">
                     <span><i style={{ width: `${isHumanTurn ? equity * 100 : 0}%` }} /></span>
-                    <div><b>你的范围</b><em>{human.hole.map(cardText).join("  ")}</em></div>
+                    <div><b>你的手牌</b><em>{human.hole.map(cardText).join("  ")}</em></div>
                   </div>
                 </div>
                 <div className="metric-grid">
@@ -1359,6 +1406,7 @@ export default function Home() {
                   <div><span>有效筹码</span><strong>{Math.min(...game.players.filter((p) => !p.folded).map((p) => p.stack)) / BIG_BLIND} BB</strong></div>
                   <div><span>SPR</span><strong>{(human.stack / Math.max(1, committedPot(game))).toFixed(1)}</strong></div>
                 </div>
+                <p className="range-note">按位置、行动顺序、下注尺度、跟注价格与多人底池动态加权；不会读取电脑暗牌。</p>
               </section>
 
               <section className={`coach-callout ${training && isHumanTurn ? "visible" : "muted"}`}>
@@ -1446,7 +1494,7 @@ export default function Home() {
                       <p>公共牌 {item.board} · 底池 {item.pot} · 面对 {item.toCall}</p>
                       <p>你的选择：{item.action}；最高频线路：{item.recommended}</p>
                       <p>参考混合：{item.mix}</p>
-                      <small>估算胜率 {Math.round(item.equity * 100)}% / 所需赔率 {Math.round(item.potOdds * 100)}% · {item.note}</small>
+                      <small>范围胜率 {Math.round(item.equity * 100)}% / 所需赔率 {Math.round(item.potOdds * 100)}% · {item.note}</small>
                     </div>
                   </div>
                 )) : <p className="empty-log">这段练习没有记录到你的决策节点。</p>}
