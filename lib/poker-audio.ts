@@ -103,9 +103,11 @@ function woodenKnock(context: AudioContext, at: number, volume = 0.78) {
   tone(context, at, 285, 120, 0.042, volume * 0.35, "triangle");
 }
 
-function chipClick(context: AudioContext, at: number, volume = 0.42) {
-  tone(context, at, 2450, 1720, 0.045, volume, "sine");
-  tone(context, at + 0.012, 3250, 2180, 0.032, volume * 0.52, "triangle");
+function chipClick(context: AudioContext, at: number, volume = 0.28) {
+  // 偏低、偏短的陶土筹码声，避免原来 2.5–3.2 kHz 的尖锐瞬态。
+  noise(context, at, 0.05, 1050, volume * 0.09, "lowpass");
+  tone(context, at, 1180, 720, 0.07, volume * 0.72, "triangle");
+  tone(context, at + 0.01, 1680, 1080, 0.052, volume * 0.22, "sine");
 }
 
 export function playPokerSound(sound: PokerSound, delaySeconds = 0) {
@@ -117,12 +119,11 @@ export function playPokerSound(sound: PokerSound, delaySeconds = 0) {
     woodenKnock(context, at);
     woodenKnock(context, at + 0.115, 0.58);
   } else if (sound === "call") {
-    chipClick(context, at);
-    chipClick(context, at + 0.052, 0.34);
-    chipClick(context, at + 0.095, 0.28);
+    chipClick(context, at, 0.27);
+    chipClick(context, at + 0.07, 0.2);
   } else if (sound === "raise") {
-    [0, 0.035, 0.07, 0.11, 0.155].forEach((offset, index) => chipClick(context, at + offset, 0.48 - index * 0.045));
-    tone(context, at, 190, 130, 0.14, 0.22, "triangle");
+    [0, 0.055, 0.112, 0.175].forEach((offset, index) => chipClick(context, at + offset, 0.3 - index * 0.035));
+    tone(context, at, 145, 96, 0.16, 0.12, "sine");
   } else if (sound === "fold") {
     noise(context, at, 0.17, 1250, 0.34, "bandpass");
     noise(context, at + 0.035, 0.1, 2600, 0.16, "highpass");
