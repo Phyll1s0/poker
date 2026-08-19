@@ -4,7 +4,7 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   root: fileURLToPath(new URL("./github-pages", import.meta.url)),
-  base: "/poker/",
+  base: "./",
   publicDir: fileURLToPath(new URL("./public", import.meta.url)),
   plugins: [react()],
   build: {

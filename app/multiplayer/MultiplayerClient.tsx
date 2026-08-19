@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./multiplayer.module.css";
 
@@ -121,6 +120,58 @@ function requestId() {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 }
 
+export type MultiplayerOperation =
+  | "getAccount"
+  | "register"
+  | "listRooms"
+  | "createRoom"
+  | "joinRoom"
+  | "getRoom"
+  | "command";
+
+export type MultiplayerRequest = <T>(
+  operation: MultiplayerOperation,
+  payload?: Record<string, unknown>,
+) => Promise<T>;
+
+const legacyRequest: MultiplayerRequest = async <T,>(
+  operation: MultiplayerOperation,
+  payload: Record<string, unknown> = {},
+): Promise<T> => {
+  let url = "/api/account";
+  let method = "GET";
+  let body: Record<string, unknown> | undefined;
+  if (operation === "register") {
+    method = "POST";
+    body = payload;
+  } else if (operation === "listRooms") {
+    url = "/api/rooms";
+  } else if (operation === "createRoom") {
+    url = "/api/rooms";
+    method = "POST";
+    body = payload;
+  } else if (operation === "joinRoom") {
+    url = "/api/rooms/join";
+    method = "POST";
+    body = payload;
+  } else if (operation === "getRoom") {
+    url = `/api/rooms/${encodeURIComponent(String(payload.roomId ?? ""))}/state`;
+  } else if (operation === "command") {
+    url = `/api/rooms/${encodeURIComponent(String(payload.roomId ?? ""))}/commands`;
+    method = "POST";
+    body = payload.command as Record<string, unknown>;
+  }
+  return readJson<T>(await fetch(url, {
+    method,
+    cache: "no-store",
+    headers: {
+      accept: "application/json",
+      ...(body ? { "content-type": "application/json" } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  }));
+};
+
 function CardView({ card, mini = false }: { card: Card; mini?: boolean }) {
   const red = card.suit === "♥" || card.suit === "♦";
   if (mini) {
@@ -219,9 +270,15 @@ function WinningHands({ game }: { game: PublicGame }) {
 export default function MultiplayerClient({
   displayName,
   signOutHref,
+  homeHref = "/",
+  request = legacyRequest,
+  onSignOut,
 }: {
   displayName: string;
   signOutHref: string;
+  homeHref?: string;
+  request?: MultiplayerRequest;
+  onSignOut?: () => void;
 }) {
   const [account, setAccount] = useState<Account | null | undefined>(undefined);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
@@ -237,34 +294,24 @@ export default function MultiplayerClient({
   const latestRevision = useRef(-1);
 
   const loadRooms = useCallback(async () => {
-    const body = await readJson<{ rooms: RoomSummary[] }>(await fetch("/api/rooms", {
-      cache: "no-store",
-      headers: { accept: "application/json" },
-    }));
+    const body = await request<{ rooms: RoomSummary[] }>("listRooms");
     setRooms(body.rooms);
-  }, []);
+  }, [request]);
 
   const loadAccount = useCallback(async () => {
     try {
-      const body = await readJson<{ account: Account | null }>(await fetch("/api/account", {
-        cache: "no-store",
-        headers: { accept: "application/json" },
-      }));
+      const body = await request<{ account: Account | null }>("getAccount");
       setAccount(body.account);
       if (body.account) await loadRooms();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "无法读取账户。请稍后重试。");
       setAccount(null);
     }
-  }, [loadRooms]);
+  }, [loadRooms, request]);
 
   const loadRoom = useCallback(async (roomId: string, quiet = false) => {
     try {
-      const response = await fetch(`/api/rooms/${encodeURIComponent(roomId)}/state`, {
-        cache: "no-store",
-        headers: { accept: "application/json" },
-      });
-      const next = await readJson<RoomSnapshot>(response);
+      const next = await request<RoomSnapshot>("getRoom", { roomId });
       latestRevision.current = next.room.revision;
       setSnapshot(next);
       if (next.game?.legalActions?.minRaiseTo != null) {
@@ -274,7 +321,7 @@ export default function MultiplayerClient({
     } catch (reason) {
       if (!quiet) setError(reason instanceof Error ? reason.message : "无法读取牌桌。请稍后重试。");
     }
-  }, []);
+  }, [request]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadAccount(), 0);
@@ -293,11 +340,7 @@ export default function MultiplayerClient({
     setBusy(true);
     setError(null);
     try {
-      const body = await readJson<{ account: Account }>(await fetch("/api/account", {
-        method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify({ handle }),
-      }));
+      const body = await request<{ account: Account }>("register", { handle });
       setAccount(body.account);
       setNotice(`欢迎，${body.account.handle}。你的牌桌身份已经创建。`);
       await loadRooms();
@@ -313,11 +356,7 @@ export default function MultiplayerClient({
     setBusy(true);
     setError(null);
     try {
-      const body = await readJson<{ room: RoomSummary }>(await fetch("/api/rooms", {
-        method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify({ name: roomName, maxPlayers }),
-      }));
+      const body = await request<{ room: RoomSummary }>("createRoom", { name: roomName, maxPlayers });
       await loadRoom(body.room.id);
       await loadRooms();
     } catch (reason) {
@@ -332,11 +371,7 @@ export default function MultiplayerClient({
     setBusy(true);
     setError(null);
     try {
-      const body = await readJson<{ room: RoomSummary }>(await fetch("/api/rooms/join", {
-        method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify({ joinCode: joinCode.trim().toUpperCase() }),
-      }));
+      const body = await request<{ room: RoomSummary }>("joinRoom", { joinCode: joinCode.trim().toUpperCase() });
       setJoinCode("");
       await loadRoom(body.room.id);
       await loadRooms();
@@ -352,16 +387,14 @@ export default function MultiplayerClient({
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(`/api/rooms/${encodeURIComponent(snapshot.room.id)}/commands`, {
-        method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify({
+      const next = await request<RoomSnapshot>("command", {
+        roomId: snapshot.room.id,
+        command: {
           ...command,
           requestId: requestId(),
           expectedRevision: latestRevision.current,
-        }),
+        },
       });
-      const next = await readJson<RoomSnapshot>(response);
       latestRevision.current = next.room.revision;
       setSnapshot(next);
       await loadRooms();
@@ -408,14 +441,14 @@ export default function MultiplayerClient({
   return (
     <div className={styles.multiplayerPage}>
       <nav className={styles.lobbyNav}>
-        <Link className={styles.brand} href="/">
+        <a className={styles.brand} href={homeHref}>
           <span className={styles.brandMark}>R</span>
           <span>RANGECRAFT</span>
-        </Link>
+        </a>
         <div className={styles.navRight}>
-          <span>登录身份</span>
+          <span>牌桌身份</span>
           <strong>{account?.handle ?? displayName}</strong>
-          <a className={styles.signOut} href={signOutHref}>退出</a>
+          <a className={styles.signOut} href={signOutHref} onClick={onSignOut}>退出</a>
         </div>
       </nav>
 
@@ -435,7 +468,7 @@ export default function MultiplayerClient({
             <p className={styles.eyebrow}>FIRST SEAT · CREATE PROFILE</p>
             <h1>给牌桌上的自己取个名字</h1>
             <p className={styles.setupLead}>
-              这是其他玩家唯一能看到的账户信息。我们不会公开你的邮箱或 ChatGPT 姓名。
+              这是其他玩家唯一能看到的信息。不需要邮箱、密码或注册账户。
             </p>
             <form className={styles.setupForm} onSubmit={submitAccount}>
               <div className={styles.field}>

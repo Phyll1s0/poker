@@ -4,11 +4,11 @@
 
 在线体验：[https://poker.phyll1s0.com/](https://poker.phyll1s0.com/)
 
-静态镜像：[https://phyll1s0.com/poker/](https://phyll1s0.com/poker/)
+备用地址：[https://phyll1s0.com/poker/](https://phyll1s0.com/poker/)
 
 ## 当前功能
 
-- 外层模式主页：进入单人训练时才创建牌局，也可前往多人大厅注册或登录
+- 外层模式主页：进入单人训练时才创建牌局，也可免注册进入多人大厅
 - 完整的翻牌前、翻牌、转牌和河牌行动流程
 - 牌型比较、平分底池、全下与边池结算
 - 浅筹 40 BB、标准 100 BB、深筹 200 BB 和血战鱿鱼 200 BB 四种桌型
@@ -25,10 +25,11 @@
 - 翻牌三张按顺序出现，转牌与河牌单张发出，发牌期间暂停行动
 - 本地合成的敲桌、筹码、弃牌、发牌和赢池音效
 - 响应式桌面与移动端界面
-- 2–6 人私人多人桌：登录后设置公开昵称、创建房间、8 位邀请码入桌、准备与连续对局
+- 2–6 人私人多人桌：只需设置公开昵称，随后可创建房间、用 8 位邀请码入桌、准备与连续对局
 - 服务端权威多人引擎：Web Crypto 洗牌、严格合法动作、全下跑牌、主池/边池、平分和秀牌/盖牌
 - 每位玩家只收到自己的暗牌；牌堆、他人暗牌和服务器内部命令记录不会进入客户端响应
-- D1 持久化账户、房间和牌局状态，以 revision + 幂等请求防止重复行动和并发覆盖
+- Supabase Postgres 持久化匿名牌手、房间和牌局状态，以 revision + 幂等请求防止重复行动和并发覆盖
+- Supabase Edge Function 执行洗牌和全部行动；数据库表拒绝浏览器直接访问，访客令牌只在本机保存
 - `PokerTransport` 保留 polling 与未来 WebSocket 实现的统一契约
 - 为预计算 GTO 数据库或远程求解器预留的 `PokerStrategyProvider` 接口
 
@@ -53,9 +54,9 @@
 - TypeScript
 - React 19
 - Vinext + Vite
-- Cloudflare Worker 兼容构建
-- Cloudflare D1
-- Sites Sign in with ChatGPT（多人身份）
+- GitHub Pages（公开前端与 PWA）
+- Supabase Postgres + Edge Functions（多人后端）
+- Sites / Cloudflare Worker 兼容构建（保留原部署）
 
 ## 本地运行
 
@@ -66,7 +67,13 @@ npm install
 npm run dev
 ```
 
-打开 [http://localhost:3000](http://localhost:3000)。单人训练可直接使用；多人注册需要部署后的 Sites 登录与 D1 运行环境。
+打开 [http://localhost:3000](http://localhost:3000)。单人训练可直接使用。公开静态版使用：
+
+```bash
+npm run build:pages
+```
+
+多人前端通过 `github-pages/MultiplayerApp.tsx` 调用 Supabase；数据库迁移和服务端函数源码位于 `supabase/`。
 
 ## 验证
 
@@ -103,6 +110,6 @@ npm run ai:benchmark -- --hands 100000 --seed my-run --stack-bb 200 --equity-ite
 
 ## 扩展接口
 
-[`lib/poker-transport.ts`](lib/poker-transport.ts) 定义了带身份、幂等键和版本号的牌桌命令、脱敏状态快照与传输层契约。当前多人版通过短轮询同步；后续可以在不重写牌桌 UI 的情况下替换为按房间划分的 WebSocket / Durable Object 通道。
+[`lib/poker-transport.ts`](lib/poker-transport.ts) 定义了带身份、幂等键和版本号的牌桌命令、脱敏状态快照与传输层契约。当前多人版通过 Supabase Edge Function 短轮询同步；后续可以在不重写牌桌 UI 的情况下替换为 Realtime / WebSocket 通道。
 
 [`lib/poker-strategy.ts`](lib/poker-strategy.ts) 定义了可序列化牌局节点、混合动作频率与策略来源契约。后续接入预计算 GTO 树或远程 solver 时，可以替换策略提供方，而不需要重写训练界面。

@@ -36,15 +36,16 @@ test("server-renders the RangeCraft landing page before mounting a poker table",
   assert.match(html, /<title>RangeCraft · 德州扑克训练室<\/title>/i);
   assert.match(html, /把每一手牌/);
   assert.match(html, /进入单人训练/);
-  assert.match(html, /注册 \/ 登录/);
+  assert.match(html, /免注册入桌/);
   assert.doesNotMatch(html, /正在洗牌/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
 
 test("keeps the multiplayer and strategy boundaries with product metadata", async () => {
-  const [page, multiplayerClient, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, packageJson] = await Promise.all([
+  const [page, multiplayerClient, staticMultiplayer, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/multiplayer/MultiplayerClient.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../github-pages/MultiplayerApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/poker-transport.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/poker-strategy.ts", import.meta.url), "utf8"),
@@ -62,7 +63,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /function LandingHome/);
   assert.match(page, /function SoloTrainer/);
   assert.match(page, /portalViewFromHash/);
-  assert.match(page, /poker\.phyll1s0\.com\/multiplayer/);
+  assert.match(page, /return "#\/multiplayer"/);
   assert.match(page, /近似 GTO 建议/);
   assert.match(page, /加注尺寸路线/);
   assert.match(page, /pokerRaiseTargetForFraction/);
@@ -72,6 +73,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /赢家手牌/);
   assert.match(multiplayerClient, /function WinningHands/);
   assert.match(multiplayerClient, /手牌未公开/);
+  assert.match(staticMultiplayer, /supabase\.co\/functions\/v1\/poker-api/);
+  assert.match(staticMultiplayer, /rangecraft\.multiplayer\.guest-token/);
   assert.match(page, /choosePokerPolicyAction/);
   assert.match(page, /policyPlan\.actionFrequencies/);
   assert.match(page, /弃牌来自翻前范围/);
@@ -90,7 +93,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(selfPlay, /choosePokerPolicyAction/);
   assert.match(selfPlay, /estimateEquity/);
   assert.match(serviceWorker, /key\.startsWith\("rangecraft-"\)/);
-  assert.match(pagesIndex, /https:\/\/phyll1s0\.com\/poker\//);
+  assert.match(pagesIndex, /https:\/\/poker\.phyll1s0\.com\//);
   assert.match(pagesIndex, /在线多人入口/);
   assert.match(packageJson, /"name": "rangecraft-poker-trainer"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);

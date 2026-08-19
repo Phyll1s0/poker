@@ -48,12 +48,10 @@ type InstallPromptEvent = Event & {
 };
 
 const APP_BASE_PATH = import.meta.env.BASE_URL || "/";
-const ONLINE_MULTIPLAYER_URL = "https://poker.phyll1s0.com/multiplayer";
-
 type PortalView = "landing" | "solo";
 
 function multiplayerEntryHref() {
-  return APP_BASE_PATH === "/" ? "/multiplayer" : ONLINE_MULTIPLAYER_URL;
+  return "#/multiplayer";
 }
 
 function portalViewFromHash(hash: string): PortalView {
@@ -1079,7 +1077,7 @@ function LandingHome({ onEnterSolo }: { onEnterSolo: () => void }) {
         </div>
         <nav className="landing-nav-actions" aria-label="主页导航">
           <a href={multiplayerHref}>多人模式</a>
-          <a className="landing-account-link" href={multiplayerHref}>注册 / 登录</a>
+          <a className="landing-account-link" href={multiplayerHref}>免注册入桌</a>
         </nav>
       </header>
 
@@ -1144,7 +1142,7 @@ function LandingHome({ onEnterSolo }: { onEnterSolo: () => void }) {
           </a>
           <a className="landing-mode-card multiplayer" href={multiplayerHref}>
             <span className="mode-index">02</span>
-            <div><small>ONLINE TABLE</small><h3>多人模式</h3><p>注册或登录后进入在线大厅，与真实玩家同桌。账号、房间和战绩由在线服务保存。</p></div>
+            <div><small>ONLINE TABLE</small><h3>多人模式</h3><p>只填一个昵称就能创建或加入私人牌桌；邀请码、筹码和底牌由服务器保护。</p></div>
             <strong>前往大厅 <span>↗</span></strong>
           </a>
         </div>
