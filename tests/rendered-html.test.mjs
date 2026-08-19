@@ -93,7 +93,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(selfPlay, /choosePokerPolicyAction/);
   assert.match(selfPlay, /estimateEquity/);
   assert.match(serviceWorker, /key\.startsWith\("rangecraft-"\)/);
-  assert.match(pagesIndex, /https:\/\/poker\.phyll1s0\.com\//);
+  assert.match(pagesIndex, /https:\/\/phyll1s0\.com\/poker\//);
   assert.match(pagesIndex, /在线多人入口/);
   assert.match(packageJson, /"name": "rangecraft-poker-trainer"/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);

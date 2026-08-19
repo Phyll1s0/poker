@@ -2,9 +2,9 @@
 
 一个兼顾本地训练和私人在线牌桌的德州扑克练习游戏。它提供逐手教学、20 手常规整局与血战鱿鱼整局，并用混合频率电脑对手练习范围、诈唬、阻断牌和桌上形象判断。
 
-在线体验：[https://poker.phyll1s0.com/](https://poker.phyll1s0.com/)
+在线体验：[https://phyll1s0.com/poker/](https://phyll1s0.com/poker/)
 
-备用地址：[https://phyll1s0.com/poker/](https://phyll1s0.com/poker/)
+预留独立域名：[https://poker.phyll1s0.com/](https://poker.phyll1s0.com/)（等待 GitHub 签发 HTTPS 证书）
 
 ## 当前功能
 
