@@ -23,6 +23,7 @@ function deterministicOptions() {
   return {
     randomIndex: (maxExclusive) => maxExclusive - 1,
     makeHandId: () => `hand-${++hand}`,
+    now: () => 1_000_000,
   };
 }
 
@@ -55,9 +56,9 @@ function joinPlayers(room, count, options) {
   return next;
 }
 
-function startRoom(count, { stacks, maxPlayers = count } = {}) {
+function startRoom(count, { stacks, maxPlayers = count, roomOptions = {} } = {}) {
   const options = deterministicOptions();
-  let room = createOnlineRoom({ roomId: `room-${commandSequence}`, owner: actors[0], maxPlayers });
+  let room = createOnlineRoom({ roomId: `room-${commandSequence}`, owner: actors[0], maxPlayers, ...roomOptions });
   room = joinPlayers(room, count, options);
   if (stacks) {
     room = {
@@ -102,6 +103,84 @@ test("room enforces a 2-6 seat capacity and lobby readiness", () => {
   rejected(earlyStart, "PLAYERS_NOT_READY");
   const nonOwnerStart = command(room, actors[1], { type: "start" }, options);
   rejected(nonOwnerStart, "NOT_ROOM_OWNER");
+});
+
+test("room settings control stacks, mode, action clock and per-player time banks", () => {
+  const { room } = startRoom(2, {
+    roomOptions: {
+      tableMode: "cash",
+      startingStack: 2_000,
+      actionTimeMs: 10_000,
+      initialTimeBankMs: 100_000,
+    },
+  });
+  assert.equal(room.tableMode, "cash");
+  assert.equal(room.startingStack, 2_000);
+  assert.equal(room.hand.actionStartedAt, 1_000_000);
+  assert.equal(room.hand.actionDeadlineAt, 1_010_000);
+  assert.deepEqual(room.seats.map((seat) => seat.timeBankMs), [100_000, 100_000]);
+  const publicState = projectRoomState(room, actors[0].accountId);
+  assert.equal(publicState.actionTimeMs, 10_000);
+  assert.equal(publicState.timeBankUnitMs, 10_000);
+  assert.equal(publicState.seats[1].timeBankMs, 100_000);
+});
+
+test("time cards extend only the current turn and timeout is server-authoritative", () => {
+  let now = 2_000_000;
+  let hand = 0;
+  const options = {
+    randomIndex: (maxExclusive) => maxExclusive - 1,
+    makeHandId: () => `timed-hand-${++hand}`,
+    now: () => now,
+  };
+  let room = createOnlineRoom({
+    roomId: "timed-room",
+    owner: actors[0],
+    maxPlayers: 2,
+    actionTimeMs: 10_000,
+    initialTimeBankMs: 100_000,
+  });
+  room = joinPlayers(room, 2, options);
+  room = accepted(command(room, actors[0], { type: "ready", ready: true }, options));
+  room = accepted(command(room, actors[1], { type: "ready", ready: true }, options));
+  room = accepted(command(room, actors[0], { type: "start" }, options));
+  assert.equal(room.hand.actionDeadlineAt, 2_010_000);
+
+  now += 3_000;
+  room = accepted(command(room, actors[0], { type: "use-time-bank", handId: room.hand.id }, options));
+  assert.equal(room.seats[0].timeBankMs, 90_000);
+  assert.equal(room.hand.actionDeadlineAt, 2_020_000);
+
+  now = 2_020_000;
+  const lateCall = act(room, actors[0], "call", options);
+  rejected(lateCall, "TIME_EXPIRED");
+  room = accepted(command(room, actors[1], { type: "timeout", handId: room.hand.id }, options));
+  assert.equal(room.phase, "showdown");
+  assert.equal(room.hand.players.find((player) => player.seat === 0).folded, true);
+});
+
+test("an expired free action checks automatically instead of folding", () => {
+  let now = 3_000_000;
+  let hand = 0;
+  const options = {
+    randomIndex: (maxExclusive) => maxExclusive - 1,
+    makeHandId: () => `check-timeout-${++hand}`,
+    now: () => now,
+  };
+  let room = createOnlineRoom({ roomId: "check-timeout-room", owner: actors[0], maxPlayers: 2 });
+  room = joinPlayers(room, 2, options);
+  room = accepted(command(room, actors[0], { type: "ready", ready: true }, options));
+  room = accepted(command(room, actors[1], { type: "ready", ready: true }, options));
+  room = accepted(command(room, actors[0], { type: "start" }, options));
+  room = accepted(act(room, actors[0], "call", options));
+  room = accepted(act(room, actors[1], "check", options));
+  assert.equal(room.hand.street, "flop");
+  assert.equal(room.hand.currentSeat, 1);
+  now = room.hand.actionDeadlineAt;
+  room = accepted(command(room, actors[0], { type: "timeout", handId: room.hand.id }, options));
+  assert.equal(room.phase, "playing");
+  assert.equal(room.hand.currentSeat, 0);
+  assert.equal(room.hand.players.find((player) => player.seat === 1).folded, false);
 });
 
 test("commands use optimistic revision checks and idempotent command IDs", () => {

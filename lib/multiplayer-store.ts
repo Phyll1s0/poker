@@ -1,3 +1,16 @@
+import {
+  ONLINE_BIG_BLIND,
+  ONLINE_DEFAULT_ACTION_TIME_MS,
+  ONLINE_DEFAULT_TIME_BANK_MS,
+  ONLINE_MAX_ACTION_TIME_MS,
+  ONLINE_MAX_STARTING_STACK,
+  ONLINE_MAX_TIME_BANK_MS,
+  ONLINE_MIN_ACTION_TIME_MS,
+  ONLINE_MIN_STARTING_STACK,
+  createOnlineRoom,
+  type OnlineTableMode,
+} from "./online-poker.ts";
+
 const HANDLE_MIN_LENGTH = 2;
 const HANDLE_MAX_LENGTH = 16;
 const ROOM_NAME_MAX_LENGTH = 40;
@@ -160,6 +173,52 @@ export function normalizeMaxPlayers(value: unknown): number {
   return Number(value);
 }
 
+export type MultiplayerRoomSettings = {
+  tableMode: OnlineTableMode;
+  startingStack: number;
+  actionTimeMs: number;
+  initialTimeBankMs: number;
+};
+
+export function normalizeRoomSettings(value: {
+  tableMode?: unknown;
+  startingStack?: unknown;
+  actionSeconds?: unknown;
+  timeBankSeconds?: unknown;
+} = {}): MultiplayerRoomSettings {
+  const tableMode = value.tableMode ?? "cash";
+  if (tableMode !== "cash" && tableMode !== "tournament") {
+    throw new MultiplayerStoreError("INVALID_ROOM", "牌局模式不正确。");
+  }
+  const startingStack = value.startingStack ?? ONLINE_BIG_BLIND * 100;
+  if (
+    !Number.isInteger(startingStack)
+    || Number(startingStack) < ONLINE_MIN_STARTING_STACK
+    || Number(startingStack) > ONLINE_MAX_STARTING_STACK
+    || Number(startingStack) % ONLINE_BIG_BLIND !== 0
+  ) {
+    throw new MultiplayerStoreError("INVALID_ROOM", "起始筹码需要是 200–10000，并且是 10 的倍数。");
+  }
+  const actionTimeMs = value.actionSeconds === undefined
+    ? ONLINE_DEFAULT_ACTION_TIME_MS
+    : Number(value.actionSeconds) * 1_000;
+  if (!Number.isInteger(actionTimeMs) || actionTimeMs < ONLINE_MIN_ACTION_TIME_MS || actionTimeMs > ONLINE_MAX_ACTION_TIME_MS) {
+    throw new MultiplayerStoreError("INVALID_ROOM", "每次行动时间需要是 5–60 秒。");
+  }
+  const initialTimeBankMs = value.timeBankSeconds === undefined
+    ? ONLINE_DEFAULT_TIME_BANK_MS
+    : Number(value.timeBankSeconds) * 1_000;
+  if (!Number.isInteger(initialTimeBankMs) || initialTimeBankMs < 0 || initialTimeBankMs > ONLINE_MAX_TIME_BANK_MS) {
+    throw new MultiplayerStoreError("INVALID_ROOM", "整局时间库需要是 0–600 秒。");
+  }
+  return {
+    tableMode,
+    startingStack: Number(startingStack),
+    actionTimeMs,
+    initialTimeBankMs,
+  };
+}
+
 export function normalizeJoinCode(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const code = value.normalize("NFKC").replace(/[\s-]+/gu, "").toUpperCase();
@@ -299,23 +358,38 @@ export class MultiplayerStore {
     accountId: string,
     rawName: unknown,
     rawMaxPlayers: unknown,
+    rawSettings: Parameters<typeof normalizeRoomSettings>[0] = {},
   ): Promise<PrivateRoom> {
     const name = normalizeRoomName(rawName);
     const maxPlayers = normalizeMaxPlayers(rawMaxPlayers);
+    const settings = normalizeRoomSettings(rawSettings);
+    const owner = await this.database.prepare(`
+      SELECT handle
+      FROM accounts
+      WHERE id = ?
+      LIMIT 1
+    `).bind(accountId).first<{ handle: string }>();
+    if (!owner) throw new MultiplayerStoreError("INVALID_ROOM", "房主身份不存在。");
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const id = crypto.randomUUID();
       const joinCode = generateJoinCode();
       const now = Date.now();
       const expiresAt = now + ROOM_TTL_MS;
+      const state = createOnlineRoom({
+        roomId: id,
+        owner: { accountId, displayName: owner.handle },
+        maxPlayers,
+        ...settings,
+      });
       try {
         await this.database.batch([
           this.database.prepare(`
             INSERT INTO rooms (
               id, join_code, owner_account_id, name, status, max_players,
-              revision, created_at, updated_at, expires_at
-            ) VALUES (?, ?, ?, ?, 'lobby', ?, 0, ?, ?, ?)
-          `).bind(id, joinCode, accountId, name, maxPlayers, now, now, expiresAt),
+              revision, state_json, created_at, updated_at, expires_at
+            ) VALUES (?, ?, ?, ?, 'lobby', ?, 0, ?, ?, ?, ?)
+          `).bind(id, joinCode, accountId, name, maxPlayers, JSON.stringify(state), now, now, expiresAt),
           this.database.prepare(`
             INSERT INTO room_members (room_id, account_id, seat, ready, joined_at)
             VALUES (?, ?, 0, 0, ?)

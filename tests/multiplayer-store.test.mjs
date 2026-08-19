@@ -11,6 +11,7 @@ import {
   normalizeJoinCode,
   normalizeMaxPlayers,
   normalizeRoomName,
+  normalizeRoomSettings,
 } from "../lib/multiplayer-store.ts";
 import {
   MultiplayerGameError,
@@ -121,6 +122,21 @@ test("room inputs are normalized and constrained to private table limits", () =>
     () => normalizeMaxPlayers("6"),
     (error) => error instanceof MultiplayerStoreError && error.code === "INVALID_ROOM",
   );
+  assert.deepEqual(normalizeRoomSettings({
+    tableMode: "cash",
+    startingStack: 2_000,
+    actionSeconds: 10,
+    timeBankSeconds: 100,
+  }), {
+    tableMode: "cash",
+    startingStack: 2_000,
+    actionTimeMs: 10_000,
+    initialTimeBankMs: 100_000,
+  });
+  assert.throws(
+    () => normalizeRoomSettings({ startingStack: 205 }),
+    (error) => error instanceof MultiplayerStoreError && error.code === "INVALID_ROOM",
+  );
 });
 
 test("join codes tolerate visual separators but reject ambiguous characters", () => {
@@ -160,12 +176,22 @@ test("room creation seats the owner and concurrent joins cannot exceed capacity"
   const owner = (await store.registerAccount("siwc-owner", "庄家")).account;
   const guestOne = (await store.registerAccount("siwc-guest-1", "来宾一")).account;
   const guestTwo = (await store.registerAccount("siwc-guest-2", "来宾二")).account;
-  const room = await store.createRoom(owner.id, " 周五\u200b 练习桌 ", 2);
+  const room = await store.createRoom(owner.id, " 周五\u200b 练习桌 ", 2, {
+    tableMode: "cash",
+    startingStack: 2_000,
+    actionSeconds: 10,
+    timeBankSeconds: 100,
+  });
 
   assert.equal(room.name, "周五 练习桌");
   assert.equal(room.memberCount, 1);
   assert.equal(room.seat, 0);
   assert.equal(room.isOwner, true);
+  const persistedState = JSON.parse(sqlite.prepare("SELECT state_json FROM rooms WHERE id = ?").get(room.id).state_json);
+  assert.equal(persistedState.tableMode, "cash");
+  assert.equal(persistedState.startingStack, 2_000);
+  assert.equal(persistedState.actionTimeMs, 10_000);
+  assert.equal(persistedState.initialTimeBankMs, 100_000);
 
   const attempts = await Promise.allSettled([
     store.joinRoom(guestOne.id, `${room.joinCode.slice(0, 4)}-${room.joinCode.slice(4)}`),

@@ -34,6 +34,7 @@ type PublicPlayer = {
   streetCommitted: number;
   status: "waiting" | "active" | "folded" | "all-in" | "out";
   ready: boolean;
+  timeBankMs: number;
   isOwner: boolean;
   isDealer: boolean;
   holeCards?: Card[];
@@ -57,6 +58,8 @@ type PublicGame = {
   dealerSeat: number;
   actorAccountId: string | null;
   currentBet: number;
+  actionStartedAt: number | null;
+  actionDeadlineAt: number | null;
   players: PublicPlayer[];
   legalActions: LegalActions | null;
   result: { summary: string; winners: string[] } | null;
@@ -70,7 +73,14 @@ type RoomSnapshot = {
   table: {
     phase: "lobby" | "playing" | "showdown" | "between_hands" | "closed";
     viewerSeat: number | null;
-    hand: { pendingShowSeat: number | null } | null;
+    tableMode: "cash" | "tournament";
+    startingStack: number;
+    smallBlind: number;
+    bigBlind: number;
+    actionTimeMs: number;
+    initialTimeBankMs: number;
+    timeBankUnitMs: number;
+    hand: { pendingShowSeat: number | null; actionDeadlineAt: number | null } | null;
   };
 };
 
@@ -99,6 +109,9 @@ const ERROR_MESSAGES: Record<string, string> = {
   CHECK_REQUIRED: "当前无需跟注，可以选择过牌。",
   RAISE_NOT_ALLOWED: "这次不足额全下没有重新开放加注权。",
   SHOW_NOT_ALLOWED: "现在不能执行秀牌操作。",
+  TIME_BANK_EMPTY: "你本局的额外思考时间已经用完。",
+  TIME_NOT_EXPIRED: "当前玩家仍有思考时间。",
+  TIME_EXPIRED: "本次行动已经超时。",
   ILLEGAL_ACTION: "这个行动在当前局面不合法。",
   INVALID_RAISE: "加注额超出当前允许范围。",
 };
@@ -212,11 +225,13 @@ function PlayerSeat({
   selfAccountId,
   actorAccountId,
   visualSeat,
+  actionSecondsLeft,
 }: {
   player: PublicPlayer;
   selfAccountId: string;
   actorAccountId: string | null;
   visualSeat: number;
+  actionSecondsLeft: number | null;
 }) {
   const cards = player.holeCards ?? [];
   const hiddenCount = cards.length ? 0 : player.holeCardCount;
@@ -247,7 +262,10 @@ function PlayerSeat({
         <div className={styles.seatStack}><i />{player.stack}</div>
       </div>
       {player.committed > 0 && <div className={styles.tableBet}><i />{player.committed}</div>}
-      {player.accountId === actorAccountId && <div className={styles.thinking}><b /><b /><b /></div>}
+      <div className={`${styles.seatClock} ${player.accountId === actorAccountId ? styles.seatClockActive : ""}`}>
+        {player.accountId === actorAccountId && <strong>{actionSecondsLeft ?? "—"}s</strong>}
+        <span>时间库 {Math.ceil(player.timeBankMs / 1_000)}s</span>
+      </div>
       {(player.status === "folded" || player.status === "out") && <div className={styles.foldLabel}>{PLAYER_STATUS_LABELS[player.status]}</div>}
     </div>
   );
@@ -257,10 +275,12 @@ function TableSurface({
   players,
   selfAccountId,
   game,
+  actionSecondsLeft,
 }: {
   players: PublicPlayer[];
   selfAccountId: string;
   game: PublicGame | null;
+  actionSecondsLeft: number | null;
 }) {
   const selfSeat = players.find((player) => player.accountId === selfAccountId)?.seat ?? 0;
 
@@ -288,6 +308,7 @@ function TableSurface({
           selfAccountId={selfAccountId}
           actorAccountId={game?.actorAccountId ?? null}
           visualSeat={(player.seat - selfSeat + 6) % 6}
+          actionSecondsLeft={actionSecondsLeft}
         />
       ))}
     </div>
@@ -353,13 +374,19 @@ export default function MultiplayerClient({
   const [handle, setHandle] = useState("");
   const [roomName, setRoomName] = useState("朋友练习桌");
   const [maxPlayers, setMaxPlayers] = useState(6);
+  const [tableMode, setTableMode] = useState<"cash" | "tournament">("cash");
+  const [startingStack, setStartingStack] = useState(1_000);
+  const [actionSeconds, setActionSeconds] = useState(10);
+  const [timeBankSeconds, setTimeBankSeconds] = useState(100);
   const [joinCode, setJoinCode] = useState("");
   const [raiseTo, setRaiseTo] = useState(0);
   const [nextHandCountdown, setNextHandCountdown] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [clockNow, setClockNow] = useState(() => Date.now());
   const latestRevision = useRef(-1);
+  const timeoutSentFor = useRef<string | null>(null);
 
   const loadRooms = useCallback(async () => {
     const body = await request<{ rooms: RoomSummary[] }>("listRooms");
@@ -424,7 +451,14 @@ export default function MultiplayerClient({
     setBusy(true);
     setError(null);
     try {
-      const body = await request<{ room: RoomSummary }>("createRoom", { name: roomName, maxPlayers });
+      const body = await request<{ room: RoomSummary }>("createRoom", {
+        name: roomName,
+        maxPlayers,
+        tableMode,
+        startingStack,
+        actionSeconds,
+        timeBankSeconds,
+      });
       await loadRoom(body.room.id);
       await loadRooms();
     } catch (reason) {
@@ -452,10 +486,13 @@ export default function MultiplayerClient({
 
   const activeRoomId = snapshot?.room.id ?? null;
 
-  const sendCommand = useCallback(async (command: Record<string, unknown>) => {
+  const sendCommand = useCallback(async (
+    command: Record<string, unknown>,
+    options: { quiet?: boolean } = {},
+  ) => {
     if (!activeRoomId) return false;
     setBusy(true);
-    setError(null);
+    if (!options.quiet) setError(null);
     try {
       const next = await request<RoomSnapshot>("command", {
         roomId: activeRoomId,
@@ -471,7 +508,7 @@ export default function MultiplayerClient({
       return true;
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : "牌桌行动失败。请稍后重试。";
-      setError(message);
+      if (!options.quiet) setError(message);
       await loadRoom(activeRoomId, true);
       return false;
     } finally {
@@ -521,9 +558,46 @@ export default function MultiplayerClient({
   const isMyTurn = Boolean(game && game.actorAccountId === snapshot?.selfAccountId && legal);
   const phase = snapshot?.table.phase ?? null;
   const canLeave = phase === "lobby" || phase === "between_hands";
+  const canRejoinNextHand = Boolean(
+    selfPlayer
+    && (selfPlayer.stack > 0 || snapshot?.table.tableMode === "cash"),
+  );
+  const actionMillisecondsLeft = game?.actionDeadlineAt == null
+    ? null
+    : Math.max(0, game.actionDeadlineAt - clockNow);
+  const actionSecondsLeft = actionMillisecondsLeft == null
+    ? null
+    : Math.ceil(actionMillisecondsLeft / 1_000);
 
   useEffect(() => {
-    if (phase !== "between_hands" || !selfPlayer || selfPlayer.ready || selfPlayer.stack <= 0) {
+    if (phase !== "playing" || game?.actionDeadlineAt == null || !game.actorAccountId) return;
+    setClockNow(Date.now());
+    const timer = window.setInterval(() => setClockNow(Date.now()), 200);
+    return () => window.clearInterval(timer);
+  }, [game?.actionDeadlineAt, game?.actorAccountId, phase]);
+
+  useEffect(() => {
+    if (
+      phase !== "playing"
+      || !game
+      || !game.actorAccountId
+      || game.actionDeadlineAt == null
+      || actionMillisecondsLeft === null
+      || actionMillisecondsLeft > 0
+    ) return;
+    const timeoutKey = `${game.handId}:${game.actorAccountId}:${game.actionDeadlineAt}`;
+    if (timeoutSentFor.current === timeoutKey) return;
+    timeoutSentFor.current = timeoutKey;
+    void sendCommand({ type: "timeout", handId: game.handId }, { quiet: true }).then((succeeded) => {
+      if (!succeeded && timeoutSentFor.current === timeoutKey) {
+        timeoutSentFor.current = null;
+        setClockNow(Date.now());
+      }
+    });
+  }, [actionMillisecondsLeft, game, phase, sendCommand]);
+
+  useEffect(() => {
+    if (phase !== "between_hands" || !selfPlayer || selfPlayer.ready || !canRejoinNextHand) {
       setNextHandCountdown(null);
       return;
     }
@@ -559,7 +633,7 @@ export default function MultiplayerClient({
       window.clearTimeout(readyTimer);
       if (retryTimer !== null) window.clearTimeout(retryTimer);
     };
-  }, [game?.handId, phase, selfPlayer?.accountId, selfPlayer?.ready, selfPlayer?.stack, sendCommand]);
+  }, [canRejoinNextHand, game?.handId, phase, selfPlayer?.accountId, selfPlayer?.ready, sendCommand]);
 
   const mustChooseShow = Boolean(
     snapshot
@@ -580,9 +654,9 @@ export default function MultiplayerClient({
             <span className={styles.onlineDot} />
             <span>在线朋友局</span>
             <i />
-            <span>盲注 5/10</span>
+            <span>{snapshot.table.tableMode === "cash" ? "现金练习" : "单桌赛"} · {snapshot.table.startingStack} 筹码</span>
             <i />
-            <span>{snapshot.players.length}/{snapshot.room.maxPlayers} 人 · {game ? `第 ${game.handNo} 手` : "等待开局"}</span>
+            <span>{snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s · {snapshot.players.length}/{snapshot.room.maxPlayers} 人 · {game ? `第 ${game.handNo} 手` : "等待开局"}</span>
           </div>
         )}
         <div className={styles.navRight}>
@@ -642,7 +716,7 @@ export default function MultiplayerClient({
                 <p className={styles.panelKicker}>NEW TABLE</p>
                 <h2 className={styles.panelTitle}>创建一个练习房</h2>
                 <form className={styles.createForm} onSubmit={createRoom}>
-                  <div className={styles.field}>
+                  <div className={`${styles.field} ${styles.createPrimaryField}`}>
                     <label htmlFor="room-name">房间名称</label>
                     <input id="room-name" maxLength={24} value={roomName} onChange={(event) => setRoomName(event.target.value)} required />
                   </div>
@@ -652,7 +726,32 @@ export default function MultiplayerClient({
                       {[2, 3, 4, 5, 6].map((value) => <option key={value} value={value}>{value} 人</option>)}
                     </select>
                   </div>
-                  <button className={styles.primaryButton} type="submit" disabled={busy}>创建</button>
+                  <div className={styles.field}>
+                    <label htmlFor="table-mode">模式</label>
+                    <select id="table-mode" value={tableMode} onChange={(event) => setTableMode(event.target.value as "cash" | "tournament")}>
+                      <option value="cash">现金练习 · 出局自动补码</option>
+                      <option value="tournament">单桌淘汰赛</option>
+                    </select>
+                  </div>
+                  <div className={styles.field}>
+                    <label htmlFor="starting-stack">每人起始筹码</label>
+                    <input id="starting-stack" type="number" min={200} max={10_000} step={10} value={startingStack} onChange={(event) => setStartingStack(Number(event.target.value))} required />
+                  </div>
+                  <div className={styles.field}>
+                    <label htmlFor="action-seconds">每次行动</label>
+                    <select id="action-seconds" value={actionSeconds} onChange={(event) => setActionSeconds(Number(event.target.value))}>
+                      {[5, 10, 15, 20, 30, 45, 60].map((value) => <option key={value} value={value}>{value} 秒</option>)}
+                    </select>
+                  </div>
+                  <div className={styles.field}>
+                    <label htmlFor="time-bank-seconds">整局时间库</label>
+                    <input id="time-bank-seconds" type="number" min={0} max={600} step={10} value={timeBankSeconds} onChange={(event) => setTimeBankSeconds(Number(event.target.value))} required />
+                  </div>
+                  <div className={styles.roomRulePreview}>
+                    <strong>{actionSeconds}/{timeBankSeconds}</strong>
+                    <span>每次 {actionSeconds}s；每人全局额外 {timeBankSeconds}s，每张时间牌增加最多 {actionSeconds}s。</span>
+                  </div>
+                  <button className={`${styles.primaryButton} ${styles.createRoomButton}`} type="submit" disabled={busy}>创建牌桌</button>
                 </form>
               </section>
 
@@ -706,6 +805,8 @@ export default function MultiplayerClient({
               </div>
               <div className={styles.roomMeta}>
                 <button className={styles.codePill} type="button" onClick={() => void copyJoinCode(snapshot.room.joinCode)} aria-label={`复制邀请码 ${snapshot.room.joinCode}`}>复制邀请码 · {snapshot.room.joinCode}</button>
+                <span className={styles.statusPill}>{snapshot.table.tableMode === "cash" ? "现金练习" : "单桌赛"} · {snapshot.table.startingStack}</span>
+                <span className={styles.statusPill}>读秒 {snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s</span>
                 <span className={styles.statusPill}>{snapshot.players.length}/{snapshot.room.maxPlayers} 人</span>
                 <button className={styles.dangerButton} type="button" onClick={() => void leaveRoom()} disabled={busy || !canLeave} title={canLeave ? "离开房间" : "本手结束后才能离开"}>离开</button>
               </div>
@@ -714,13 +815,19 @@ export default function MultiplayerClient({
             <div className={styles.tableStage}>
               <div className={`${styles.tableAmbient} ${styles.tableAmbientOne}`} />
               <div className={`${styles.tableAmbient} ${styles.tableAmbientTwo}`} />
-              <TableSurface players={game?.players ?? snapshot.players} selfAccountId={snapshot.selfAccountId} game={game} />
+              <TableSurface
+                players={game?.players ?? snapshot.players}
+                selfAccountId={snapshot.selfAccountId}
+                game={game}
+                actionSecondsLeft={actionSecondsLeft}
+              />
 
             {!game && (
               <div className={`${styles.tableControls} ${styles.waitingControls}`}>
                 <div>
                   <p className={styles.panelKicker}>WAITING ROOM</p>
                   <h2 className={styles.panelTitle}>人齐后确认准备</h2>
+                  <p className={styles.tableRuleLine}>{snapshot.table.tableMode === "cash" ? "现金练习" : "单桌淘汰赛"} · 起始 {snapshot.table.startingStack} · 行动/时间库 {snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s</p>
                 </div>
                 <div className={styles.lobbyPlayers}>
                   {snapshot.players.map((player) => (
@@ -754,6 +861,12 @@ export default function MultiplayerClient({
                   <div className={styles.controlSummary}>
                     <span className={styles.turnLabel}>{isMyTurn ? "轮到你行动" : phase === "showdown" ? "正在摊牌" : "牌桌进行中"}</span>
                     <strong>{STREET_LABELS[game.street]}</strong>
+                    {phase === "playing" && game.actorAccountId && (
+                      <div className={`${styles.actionClockSummary} ${(actionSecondsLeft ?? 99) <= 3 ? styles.actionClockUrgent : ""}`}>
+                        <b>{actionSecondsLeft ?? "—"}s</b>
+                        <small>基础 {snapshot.table.actionTimeMs / 1_000}s</small>
+                      </div>
+                    )}
                     <span>
                       {isMyTurn
                         ? "轮到你决定"
@@ -769,6 +882,17 @@ export default function MultiplayerClient({
                     </span>
                   </div>
                   <div className={styles.actionRow}>
+                    {isMyTurn && selfPlayer && selfPlayer.timeBankMs > 0 && (
+                      <button
+                        className={styles.timeBankButton}
+                        type="button"
+                        disabled={busy || actionMillisecondsLeft === 0}
+                        onClick={() => void sendCommand({ type: "use-time-bank", handId: game.handId })}
+                      >
+                        <strong>时间牌 +{Math.ceil(Math.min(snapshot.table.timeBankUnitMs, selfPlayer.timeBankMs) / 1_000)}s</strong>
+                        <small>剩余 {Math.ceil(selfPlayer.timeBankMs / 1_000)}s</small>
+                      </button>
+                    )}
                     {isMyTurn && legal?.fold && <button className={`${styles.actionButton} ${styles.foldAction}`} type="button" disabled={busy} onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "fold" })}>弃牌</button>}
                     {isMyTurn && legal?.check && <button className={styles.actionButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "check" })}>过牌</button>}
                     {isMyTurn && legal?.callAmount != null && <button className={styles.actionButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "call" })}>跟注 {legal.callAmount}</button>}
@@ -801,8 +925,10 @@ export default function MultiplayerClient({
                           <span className={styles.autoNextPulse} />
                           <span>
                             <strong>
-                              {selfPlayer?.stack === 0
+                              {selfPlayer?.stack === 0 && snapshot.table.tableMode === "tournament"
                                 ? "等待其余玩家进入下一手"
+                                : selfPlayer?.stack === 0
+                                  ? `将自动补至 ${snapshot.table.startingStack} 筹码`
                                 : selfPlayer?.ready
                                   ? "已准备，等待其他玩家"
                                   : nextHandCountdown === 0
@@ -812,7 +938,7 @@ export default function MultiplayerClient({
                             <small>全桌倒计时完成后自动发牌</small>
                           </span>
                         </div>
-                        {!selfPlayer?.ready && (selfPlayer?.stack ?? 0) > 0 && (
+                        {!selfPlayer?.ready && canRejoinNextHand && (
                           <button className={styles.primaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "ready", ready: true })}>
                             立即准备
                           </button>

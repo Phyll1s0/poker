@@ -42,11 +42,12 @@ test("server-renders the RangeCraft landing page before mounting a poker table",
 });
 
 test("keeps the multiplayer and strategy boundaries with product metadata", async () => {
-  const [page, globalsCss, multiplayerClient, staticMultiplayer, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, packageJson] = await Promise.all([
+  const [page, globalsCss, multiplayerClient, staticMultiplayer, edgeFunction, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/multiplayer/MultiplayerClient.tsx", import.meta.url), "utf8"),
     readFile(new URL("../github-pages/MultiplayerApp.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/functions/poker-api/index.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../lib/poker-transport.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/poker-strategy.ts", import.meta.url), "utf8"),
@@ -84,9 +85,14 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /3_000 \+ Math\.floor\(Math\.random\(\) \* 2_001\)/);
   assert.match(multiplayerClient, /秒后进入下一手/);
   assert.match(multiplayerClient, /全桌倒计时完成后自动发牌/);
+  assert.match(multiplayerClient, /整局时间库/);
+  assert.match(multiplayerClient, /时间牌 \+/);
+  assert.match(multiplayerClient, /type: "timeout"/);
   assert.doesNotMatch(multiplayerClient, /这是其他玩家唯一能看到的信息/);
   assert.match(staticMultiplayer, /supabase\.co\/functions\/v1\/poker-api/);
   assert.match(staticMultiplayer, /rangecraft\.multiplayer\.guest-token/);
+  assert.match(edgeFunction, /function normalizeRoomSettings/);
+  assert.match(edgeFunction, /type === "use-time-bank" \|\| type === "timeout"/);
   assert.match(page, /choosePokerPolicyAction/);
   assert.match(page, /policyPlan\.actionFrequencies/);
   assert.match(page, /弃牌来自翻前范围/);

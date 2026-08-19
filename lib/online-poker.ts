@@ -3,6 +3,13 @@ export const ONLINE_MAX_PLAYERS = 6;
 export const ONLINE_SMALL_BLIND = 5;
 export const ONLINE_BIG_BLIND = 10;
 export const ONLINE_STARTING_STACK = ONLINE_BIG_BLIND * 100;
+export const ONLINE_MIN_STARTING_STACK = ONLINE_BIG_BLIND * 20;
+export const ONLINE_MAX_STARTING_STACK = ONLINE_BIG_BLIND * 1_000;
+export const ONLINE_DEFAULT_ACTION_TIME_MS = 10_000;
+export const ONLINE_MIN_ACTION_TIME_MS = 5_000;
+export const ONLINE_MAX_ACTION_TIME_MS = 60_000;
+export const ONLINE_DEFAULT_TIME_BANK_MS = 100_000;
+export const ONLINE_MAX_TIME_BANK_MS = 600_000;
 
 export type OnlineCard = {
   rank: number;
@@ -11,6 +18,7 @@ export type OnlineCard = {
 export type OnlineStreet = "preflop" | "flop" | "turn" | "river";
 export type OnlineActionKind = "fold" | "check" | "call" | "raise";
 export type OnlineRoomPhase = "lobby" | "playing" | "showdown" | "between_hands" | "closed";
+export type OnlineTableMode = "cash" | "tournament";
 
 export type OnlineActor = {
   accountId: string;
@@ -23,6 +31,7 @@ export type OnlineSeatState = {
   displayName: string;
   stack: number;
   ready: boolean;
+  timeBankMs: number;
   connected: boolean;
   disconnectedAt: number | null;
 };
@@ -77,6 +86,8 @@ export type OnlineHandState = {
   raiseCount: number;
   result: OnlineHandResult | null;
   pendingShowSeat: number | null;
+  actionStartedAt: number | null;
+  actionDeadlineAt: number | null;
 };
 
 export type OnlineCommandReceipt = {
@@ -95,6 +106,9 @@ export type OnlineRoomState = {
   smallBlind: number;
   bigBlind: number;
   startingStack: number;
+  tableMode: OnlineTableMode;
+  actionTimeMs: number;
+  initialTimeBankMs: number;
   seats: OnlineSeatState[];
   hand: OnlineHandState | null;
   lastDealerSeat: number | null;
@@ -110,6 +124,8 @@ export type OnlinePokerCommand =
   | (CommandBase & { type: "join" })
   | (CommandBase & { type: "ready"; ready: boolean })
   | (CommandBase & { type: "start" })
+  | (CommandBase & { type: "use-time-bank"; handId: string })
+  | (CommandBase & { type: "timeout"; handId: string })
   | (CommandBase & {
       type: "act";
       handId: string;
@@ -137,7 +153,10 @@ export type OnlinePokerErrorCode =
   | "CALL_REQUIRED"
   | "RAISE_NOT_ALLOWED"
   | "INVALID_RAISE"
-  | "SHOW_NOT_ALLOWED";
+  | "SHOW_NOT_ALLOWED"
+  | "TIME_BANK_EMPTY"
+  | "TIME_NOT_EXPIRED"
+  | "TIME_EXPIRED";
 
 export type OnlinePokerError = {
   code: OnlinePokerErrorCode;
@@ -182,6 +201,7 @@ export type OnlinePublicSeat = {
   displayName: string;
   stack: number;
   ready: boolean;
+  timeBankMs: number;
   connected: boolean;
   folded: boolean;
   bet: number;
@@ -208,6 +228,8 @@ export type OnlinePublicHand = {
   raiseCount: number;
   result: OnlineHandResult | null;
   pendingShowSeat: number | null;
+  actionStartedAt: number | null;
+  actionDeadlineAt: number | null;
 };
 
 export type OnlinePublicRoomState = {
@@ -219,6 +241,10 @@ export type OnlinePublicRoomState = {
   smallBlind: number;
   bigBlind: number;
   startingStack: number;
+  tableMode: OnlineTableMode;
+  actionTimeMs: number;
+  initialTimeBankMs: number;
+  timeBankUnitMs: number;
   viewerSeat: number | null;
   seats: OnlinePublicSeat[];
   hand: OnlinePublicHand | null;
@@ -350,6 +376,34 @@ function defaultHandId() {
   return crypto.randomUUID();
 }
 
+function engineNow(options: OnlineEngineOptions): number {
+  const value = (options.now ?? Date.now)();
+  if (!Number.isFinite(value)) throw new RangeError("now 必须返回有效时间");
+  return Math.floor(value);
+}
+
+function integerInRange(value: number, minimum: number, maximum: number, label: string) {
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new RangeError(`${label} 必须在 ${minimum} 到 ${maximum} 之间`);
+  }
+  return value;
+}
+
+function normalizeStoredRoom(room: OnlineRoomState): void {
+  room.tableMode = room.tableMode === "cash" ? "cash" : "tournament";
+  if (!Number.isInteger(room.actionTimeMs) || room.actionTimeMs < ONLINE_MIN_ACTION_TIME_MS || room.actionTimeMs > ONLINE_MAX_ACTION_TIME_MS) {
+    room.actionTimeMs = ONLINE_DEFAULT_ACTION_TIME_MS;
+  }
+  if (!Number.isInteger(room.initialTimeBankMs) || room.initialTimeBankMs < 0 || room.initialTimeBankMs > ONLINE_MAX_TIME_BANK_MS) {
+    room.initialTimeBankMs = ONLINE_DEFAULT_TIME_BANK_MS;
+  }
+  room.seats.forEach((seat) => {
+    if (!Number.isInteger(seat.timeBankMs) || seat.timeBankMs < 0 || seat.timeBankMs > ONLINE_MAX_TIME_BANK_MS) {
+      seat.timeBankMs = room.initialTimeBankMs;
+    }
+  });
+}
+
 /** Uniform integer sampling backed by Web Crypto for every card shuffle. */
 export function cryptoRandomIndex(maxExclusive: number): number {
   if (!Number.isInteger(maxExclusive) || maxExclusive <= 0) {
@@ -384,6 +438,10 @@ export function createOnlineRoom(options: {
   roomId: string;
   owner: OnlineActor;
   maxPlayers?: number;
+  startingStack?: number;
+  tableMode?: OnlineTableMode;
+  actionTimeMs?: number;
+  initialTimeBankMs?: number;
 }): OnlineRoomState {
   assertNonEmpty(options.roomId, "roomId");
   assertNonEmpty(options.owner.accountId, "owner.accountId");
@@ -391,6 +449,28 @@ export function createOnlineRoom(options: {
   const maxPlayers = options.maxPlayers ?? ONLINE_MAX_PLAYERS;
   if (!Number.isInteger(maxPlayers) || maxPlayers < ONLINE_MIN_PLAYERS || maxPlayers > ONLINE_MAX_PLAYERS) {
     throw new RangeError(`maxPlayers 必须在 ${ONLINE_MIN_PLAYERS} 到 ${ONLINE_MAX_PLAYERS} 之间`);
+  }
+  const startingStack = integerInRange(
+    options.startingStack ?? ONLINE_STARTING_STACK,
+    ONLINE_MIN_STARTING_STACK,
+    ONLINE_MAX_STARTING_STACK,
+    "startingStack",
+  );
+  const actionTimeMs = integerInRange(
+    options.actionTimeMs ?? ONLINE_DEFAULT_ACTION_TIME_MS,
+    ONLINE_MIN_ACTION_TIME_MS,
+    ONLINE_MAX_ACTION_TIME_MS,
+    "actionTimeMs",
+  );
+  const initialTimeBankMs = integerInRange(
+    options.initialTimeBankMs ?? ONLINE_DEFAULT_TIME_BANK_MS,
+    0,
+    ONLINE_MAX_TIME_BANK_MS,
+    "initialTimeBankMs",
+  );
+  const tableMode = options.tableMode ?? "tournament";
+  if (tableMode !== "cash" && tableMode !== "tournament") {
+    throw new RangeError("tableMode 必须是 cash 或 tournament");
   }
   return {
     roomId: options.roomId,
@@ -400,13 +480,17 @@ export function createOnlineRoom(options: {
     revision: 0,
     smallBlind: ONLINE_SMALL_BLIND,
     bigBlind: ONLINE_BIG_BLIND,
-    startingStack: ONLINE_STARTING_STACK,
+    startingStack,
+    tableMode,
+    actionTimeMs,
+    initialTimeBankMs,
     seats: [{
       seat: 0,
       accountId: options.owner.accountId,
       displayName: options.owner.displayName,
-      stack: ONLINE_STARTING_STACK,
+      stack: startingStack,
       ready: false,
+      timeBankMs: initialTimeBankMs,
       connected: true,
       disconnectedAt: null,
     }],
@@ -456,6 +540,11 @@ function takeCard(deck: OnlineCard[]): OnlineCard {
 }
 
 function beginHand(room: OnlineRoomState, options: OnlineEngineOptions): void {
+  if (room.tableMode === "cash" && room.hand) {
+    room.seats.forEach((seat) => {
+      if (seat.stack <= 0) seat.stack = room.startingStack;
+    });
+  }
   const occupied = room.seats
     .filter((seat) => seat.stack > 0)
     .sort((left, right) => left.seat - right.seat);
@@ -529,6 +618,7 @@ function beginHand(room: OnlineRoomState, options: OnlineEngineOptions): void {
   const openingHighestBet = actorsAfterBlinds.length >= 2
     ? Math.max(postedHighestBet, room.bigBlind)
     : postedHighestBet;
+  const actionStartedAt = currentSeat === null ? null : engineNow(options);
   room.hand = {
     id: (options.makeHandId ?? defaultHandId)(),
     number: (room.hand?.number ?? 0) + 1,
@@ -547,6 +637,8 @@ function beginHand(room: OnlineRoomState, options: OnlineEngineOptions): void {
     raiseCount: 0,
     result: null,
     pendingShowSeat: null,
+    actionStartedAt,
+    actionDeadlineAt: actionStartedAt === null ? null : actionStartedAt + room.actionTimeMs,
   };
   room.lastDealerSeat = dealerSeat;
   room.phase = "playing";
@@ -883,6 +975,44 @@ function applyAction(
   return null;
 }
 
+function activeTurnKey(room: OnlineRoomState): string | null {
+  const hand = room.hand;
+  if (room.phase !== "playing" || !hand || hand.currentSeat === null) return null;
+  return `${hand.id}:${hand.street}:${hand.currentSeat}`;
+}
+
+function synchronizeTurnClock(room: OnlineRoomState, previousTurnKey: string | null, now: number): void {
+  const hand = room.hand;
+  const nextTurnKey = activeTurnKey(room);
+  if (!hand || nextTurnKey === null) {
+    if (hand) {
+      hand.actionStartedAt = null;
+      hand.actionDeadlineAt = null;
+    }
+    return;
+  }
+  if (
+    nextTurnKey !== previousTurnKey
+    || typeof hand.actionStartedAt !== "number"
+    || !Number.isFinite(hand.actionStartedAt)
+    || typeof hand.actionDeadlineAt !== "number"
+    || !Number.isFinite(hand.actionDeadlineAt)
+  ) {
+    hand.actionStartedAt = now;
+    hand.actionDeadlineAt = now + room.actionTimeMs;
+  }
+}
+
+function turnExpired(room: OnlineRoomState, now: number): boolean {
+  return Boolean(
+    room.phase === "playing"
+    && room.hand?.currentSeat !== null
+    && typeof room.hand?.actionDeadlineAt === "number"
+    && Number.isFinite(room.hand.actionDeadlineAt)
+    && now >= Number(room.hand?.actionDeadlineAt),
+  );
+}
+
 function firstEmptySeat(room: OnlineRoomState): number | null {
   const occupied = new Set(room.seats.map((seat) => seat.seat));
   for (let seat = 0; seat < room.maxPlayers; seat += 1) {
@@ -906,6 +1036,9 @@ function commandFingerprint(command: OnlinePokerCommand) {
   }
   if (command.type === "show") {
     return JSON.stringify([command.type, command.expectedRevision, command.handId, command.show]);
+  }
+  if (command.type === "use-time-bank" || command.type === "timeout") {
+    return JSON.stringify([command.type, command.expectedRevision, command.handId]);
   }
   return JSON.stringify([
     command.type,
@@ -945,6 +1078,10 @@ export function applyOnlinePokerCommand(
   }
 
   const next = cloneRoom(room);
+  normalizeStoredRoom(next);
+  const commandNow = engineNow(options);
+  const previousTurnKey = activeTurnKey(next);
+  synchronizeTurnClock(next, previousTurnKey, commandNow);
   const member = next.seats.find((seat) => seat.accountId === actor.accountId);
   if (command.type === "join") {
     if (next.phase !== "lobby") return fail(room, "ROOM_NOT_JOINABLE", "牌局开始后不能加入");
@@ -957,6 +1094,7 @@ export function applyOnlinePokerCommand(
       displayName: actor.displayName,
       stack: next.startingStack,
       ready: false,
+      timeBankMs: next.initialTimeBankMs,
       connected: true,
       disconnectedAt: null,
     });
@@ -968,8 +1106,8 @@ export function applyOnlinePokerCommand(
       return fail(room, "WRONG_PHASE", "当前不能改变准备状态");
     }
     member.ready = command.ready;
-    const fundedSeats = next.seats.filter((seat) => seat.stack > 0);
-    if (next.phase === "between_hands" && fundedSeats.length >= ONLINE_MIN_PLAYERS && fundedSeats.every((seat) => seat.ready)) {
+    const nextHandSeats = next.tableMode === "cash" ? next.seats : next.seats.filter((seat) => seat.stack > 0);
+    if (next.phase === "between_hands" && nextHandSeats.length >= ONLINE_MIN_PLAYERS && nextHandSeats.every((seat) => seat.ready)) {
       beginHand(next, options);
     }
   } else if (command.type === "start") {
@@ -983,8 +1121,39 @@ export function applyOnlinePokerCommand(
     }
     beginHand(next, options);
   } else if (command.type === "act") {
+    if (turnExpired(next, commandNow)) {
+      return fail(room, "TIME_EXPIRED", "本次行动时间已经结束");
+    }
     const actionError = applyAction(next, actor.accountId, command);
     if (actionError) return { ok: false, state: room, error: { ...actionError, revision: room.revision } };
+  } else if (command.type === "use-time-bank") {
+    const hand = next.hand;
+    if (next.phase !== "playing" || !hand || hand.id !== command.handId) {
+      return fail(room, hand && hand.id !== command.handId ? "WRONG_HAND" : "WRONG_PHASE", "当前不能使用时间牌");
+    }
+    if (hand.currentSeat !== member.seat) return fail(room, "NOT_YOUR_TURN", "只有当前行动玩家可以使用时间牌");
+    if (turnExpired(next, commandNow)) return fail(room, "TIME_EXPIRED", "本次行动时间已经结束");
+    if (member.timeBankMs <= 0) return fail(room, "TIME_BANK_EMPTY", "本局时间库已经用完");
+    const addedTime = Math.min(next.actionTimeMs, member.timeBankMs);
+    member.timeBankMs -= addedTime;
+    hand.actionDeadlineAt = (hand.actionDeadlineAt ?? commandNow) + addedTime;
+  } else if (command.type === "timeout") {
+    const hand = next.hand;
+    if (next.phase !== "playing" || !hand || hand.id !== command.handId || hand.currentSeat === null) {
+      return fail(room, hand && hand.id !== command.handId ? "WRONG_HAND" : "WRONG_PHASE", "当前没有可结算的超时行动");
+    }
+    if (!turnExpired(next, commandNow)) return fail(room, "TIME_NOT_EXPIRED", "当前玩家仍有思考时间");
+    const timedOutSeat = seatByNumber(next, hand.currentSeat);
+    if (!timedOutSeat) return fail(room, "NOT_A_MEMBER", "当前行动座位不存在");
+    const legal = legalOnlineActions(next, timedOutSeat.accountId);
+    if (!legal) return fail(room, "NOT_YOUR_TURN", "当前没有可执行的超时行动");
+    const timeoutAction: OnlineActionKind = legal.check ? "check" : "fold";
+    const timeoutError = applyAction(next, timedOutSeat.accountId, {
+      ...command,
+      type: "act",
+      action: timeoutAction,
+    });
+    if (timeoutError) return { ok: false, state: room, error: { ...timeoutError, revision: room.revision } };
   } else if (command.type === "show") {
     const hand = next.hand;
     if (next.phase !== "showdown" || !hand || hand.id !== command.handId) {
@@ -1007,6 +1176,8 @@ export function applyOnlinePokerCommand(
       next.ownerAccountId = [...next.seats].sort((left, right) => left.seat - right.seat)[0].accountId;
     }
   }
+
+  synchronizeTurnClock(next, previousTurnKey, commandNow);
 
   next.revision = room.revision + 1;
   next.processedCommands = [
@@ -1034,6 +1205,9 @@ export function setOnlinePlayerConnection(
 }
 
 export function projectRoomState(room: OnlineRoomState, viewerAccountId: string | null): OnlinePublicRoomState {
+  const tableMode: OnlineTableMode = room.tableMode === "cash" ? "cash" : "tournament";
+  const actionTimeMs = Number.isInteger(room.actionTimeMs) ? room.actionTimeMs : ONLINE_DEFAULT_ACTION_TIME_MS;
+  const initialTimeBankMs = Number.isInteger(room.initialTimeBankMs) ? room.initialTimeBankMs : ONLINE_DEFAULT_TIME_BANK_MS;
   const viewerSeat = viewerAccountId === null
     ? null
     : room.seats.find((seat) => seat.accountId === viewerAccountId)?.seat ?? null;
@@ -1046,6 +1220,7 @@ export function projectRoomState(room: OnlineRoomState, viewerAccountId: string 
       displayName: seat.displayName,
       stack: seat.stack,
       ready: seat.ready,
+      timeBankMs: Number.isInteger(seat.timeBankMs) ? seat.timeBankMs : initialTimeBankMs,
       connected: seat.connected,
       folded: player?.folded ?? false,
       bet: player?.bet ?? 0,
@@ -1066,6 +1241,10 @@ export function projectRoomState(room: OnlineRoomState, viewerAccountId: string 
     smallBlind: room.smallBlind,
     bigBlind: room.bigBlind,
     startingStack: room.startingStack,
+    tableMode,
+    actionTimeMs,
+    initialTimeBankMs,
+    timeBankUnitMs: actionTimeMs,
     viewerSeat,
     seats: publicSeats,
     hand: hand
@@ -1095,6 +1274,8 @@ export function projectRoomState(room: OnlineRoomState, viewerAccountId: string 
               }
             : null,
           pendingShowSeat: hand.pendingShowSeat,
+          actionStartedAt: typeof hand.actionStartedAt === "number" ? hand.actionStartedAt : null,
+          actionDeadlineAt: typeof hand.actionDeadlineAt === "number" ? hand.actionDeadlineAt : null,
         }
       : null,
     legalActions: viewerAccountId === null ? null : legalOnlineActions(room, viewerAccountId),

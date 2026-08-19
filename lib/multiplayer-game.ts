@@ -44,6 +44,7 @@ export type ClientPublicPlayer = {
   streetCommitted: number;
   status: "waiting" | "active" | "folded" | "all-in" | "out";
   ready: boolean;
+  timeBankMs: number;
   isOwner: boolean;
   isDealer: boolean;
   holeCards?: ClientCard[];
@@ -59,6 +60,8 @@ export type ClientPublicGame = {
   dealerSeat: number;
   actorAccountId: string | null;
   currentBet: number;
+  actionStartedAt: number | null;
+  actionDeadlineAt: number | null;
   players: ClientPublicPlayer[];
   legalActions: {
     fold: boolean;
@@ -148,6 +151,7 @@ export function parseMultiplayerCommand(payload: Record<string, unknown>): Parse
   if (type === "start" || type === "leave") return { ...base, type };
 
   const handId = requiredString(payload.handId, "handId");
+  if (type === "use-time-bank" || type === "timeout") return { ...base, type, handId };
   if (type === "show") {
     if (typeof payload.show !== "boolean") {
       throw new MultiplayerGameError(400, "INVALID_COMMAND", "show 必须是布尔值。" );
@@ -292,6 +296,7 @@ function clientPlayers(table: OnlinePublicRoomState): ClientPublicPlayer[] {
       streetCommitted: seat.bet,
       status,
       ready: seat.ready,
+      timeBankMs: seat.timeBankMs,
       isOwner: seat.seat === table.ownerSeat,
       isDealer: seat.seat === table.hand?.dealerSeat,
       ...(seat.holeCards ? { holeCards: seat.holeCards.map(clientCard) } : {}),
@@ -328,6 +333,8 @@ function clientGame(table: OnlinePublicRoomState, players: ClientPublicPlayer[])
     dealerSeat: hand.dealerSeat,
     actorAccountId,
     currentBet: hand.highestBet,
+    actionStartedAt: hand.actionStartedAt,
+    actionDeadlineAt: hand.actionDeadlineAt,
     players,
     legalActions: legal
       ? {

@@ -386,9 +386,43 @@
 
 .createForm {
   display: grid;
-  grid-template-columns: 1fr 120px auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: end;
   gap: 12px;
+}
+
+.createPrimaryField,
+.roomRulePreview,
+.createRoomButton {
+  grid-column: 1 / -1;
+}
+
+.roomRulePreview {
+  min-height: 54px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid rgba(216, 183, 116, 0.14);
+  border-radius: 6px;
+  background: rgba(216, 183, 116, 0.035);
+}
+
+.roomRulePreview strong {
+  color: var(--mp-gold);
+  font: 600 18px/1 Georgia, serif;
+}
+
+.roomRulePreview span,
+.tableRuleLine {
+  color: #747a74;
+  font-size: 8px;
+  line-height: 1.55;
+}
+
+.tableRuleLine {
+  max-width: 190px;
+  margin: 7px 0 0;
 }
 
 .joinForm {
@@ -889,8 +923,7 @@
 
 @media (max-width: 840px) {
   .lobbyGrid { grid-template-columns: 1fr; }
-  .createForm { grid-template-columns: 1fr 100px; }
-  .createForm button { grid-column: 1 / -1; }
+  .createForm { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pokerTable { min-height: 570px; border-radius: 35% / 44%; }
   .seat { width: 132px; }
   .seat1 { left: 18%; top: 72%; }
@@ -1512,6 +1545,42 @@
 .thinking b:nth-child(2) { animation-delay: 0.14s; }
 .thinking b:nth-child(3) { animation-delay: 0.28s; }
 
+.seatClock {
+  min-height: 21px;
+  padding: 4px 7px;
+  position: absolute;
+  z-index: 9;
+  right: 5px;
+  bottom: -25px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 10px;
+  color: #707670;
+  background: rgba(13, 17, 15, 0.88);
+  font-size: 7px;
+  white-space: nowrap;
+}
+
+.seatClock strong {
+  color: #e6d29e;
+  font: 700 11px/1 Georgia, serif;
+}
+
+.seatClockActive {
+  border-color: rgba(216, 183, 116, 0.35);
+  background: rgba(35, 31, 22, 0.96);
+  box-shadow: 0 0 14px rgba(216, 183, 116, 0.12);
+}
+
+.multiplayerPage .seat2 .seatClock,
+.multiplayerPage .seat3 .seatClock,
+.multiplayerPage .seat4 .seatClock {
+  top: -27px;
+  bottom: auto;
+}
+
 @keyframes multiplayerThinking {
   0%, 100% { opacity: 0.25; transform: translateY(0); }
   50% { opacity: 1; transform: translateY(-3px); }
@@ -1576,6 +1645,26 @@
   letter-spacing: 0.1em;
 }
 
+.actionClockSummary {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.actionClockSummary b {
+  color: #e7dbbd;
+  font: 700 22px/1 Georgia, serif;
+}
+
+.actionClockSummary small {
+  color: #666c66;
+  font-size: 7px;
+}
+
+.actionClockUrgent b {
+  color: #df8a79;
+}
+
 .multiplayerPage .actionRow {
   min-width: 0;
   display: flex;
@@ -1606,6 +1695,37 @@
 .actionButton:disabled {
   cursor: not-allowed;
   opacity: 0.34;
+}
+
+.timeBankButton {
+  min-width: 108px;
+  min-height: 48px;
+  padding: 7px 10px;
+  display: flex;
+  flex: 0.8;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid rgba(216, 183, 116, 0.34);
+  border-radius: 5px;
+  color: #e8ddc1;
+  background: linear-gradient(145deg, rgba(116, 91, 45, 0.24), rgba(45, 38, 25, 0.18));
+  cursor: pointer;
+}
+
+.timeBankButton strong {
+  font-size: 9px;
+}
+
+.timeBankButton small {
+  color: #978766;
+  font-size: 7px;
+}
+
+.timeBankButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
 }
 
 .foldAction {

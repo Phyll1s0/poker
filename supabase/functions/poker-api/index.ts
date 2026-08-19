@@ -1,5 +1,13 @@
 import { createClient } from "npm:@supabase/supabase-js@2.95.0";
 import {
+  ONLINE_BIG_BLIND,
+  ONLINE_DEFAULT_ACTION_TIME_MS,
+  ONLINE_DEFAULT_TIME_BANK_MS,
+  ONLINE_MAX_ACTION_TIME_MS,
+  ONLINE_MAX_STARTING_STACK,
+  ONLINE_MAX_TIME_BANK_MS,
+  ONLINE_MIN_ACTION_TIME_MS,
+  ONLINE_MIN_STARTING_STACK,
   applyOnlinePokerCommand,
   createOnlineRoom,
   projectRoomState,
@@ -74,6 +82,7 @@ type ClientPlayer = {
   streetCommitted: number;
   status: "waiting" | "active" | "folded" | "all-in" | "out";
   ready: boolean;
+  timeBankMs: number;
   isOwner: boolean;
   isDealer: boolean;
   holeCards?: ClientCard[];
@@ -194,6 +203,40 @@ function normalizeMaxPlayers(value: unknown): number {
   return Number(value);
 }
 
+function normalizeRoomSettings(payload: JsonObject) {
+  const tableMode = payload.tableMode ?? "cash";
+  if (tableMode !== "cash" && tableMode !== "tournament") {
+    throw new ApiError(400, "INVALID_ROOM", "牌局模式不正确。");
+  }
+  const startingStack = payload.startingStack ?? ONLINE_BIG_BLIND * 100;
+  if (
+    !Number.isInteger(startingStack)
+    || Number(startingStack) < ONLINE_MIN_STARTING_STACK
+    || Number(startingStack) > ONLINE_MAX_STARTING_STACK
+    || Number(startingStack) % ONLINE_BIG_BLIND !== 0
+  ) {
+    throw new ApiError(400, "INVALID_ROOM", "起始筹码需要是 200–10000，并且是 10 的倍数。");
+  }
+  const actionTimeMs = payload.actionSeconds === undefined
+    ? ONLINE_DEFAULT_ACTION_TIME_MS
+    : Number(payload.actionSeconds) * 1_000;
+  if (!Number.isInteger(actionTimeMs) || actionTimeMs < ONLINE_MIN_ACTION_TIME_MS || actionTimeMs > ONLINE_MAX_ACTION_TIME_MS) {
+    throw new ApiError(400, "INVALID_ROOM", "每次行动时间需要是 5–60 秒。");
+  }
+  const initialTimeBankMs = payload.timeBankSeconds === undefined
+    ? ONLINE_DEFAULT_TIME_BANK_MS
+    : Number(payload.timeBankSeconds) * 1_000;
+  if (!Number.isInteger(initialTimeBankMs) || initialTimeBankMs < 0 || initialTimeBankMs > ONLINE_MAX_TIME_BANK_MS) {
+    throw new ApiError(400, "INVALID_ROOM", "整局时间库需要是 0–600 秒。");
+  }
+  return {
+    tableMode,
+    startingStack: Number(startingStack),
+    actionTimeMs,
+    initialTimeBankMs,
+  };
+}
+
 function normalizeJoinCode(value: unknown): string {
   if (typeof value !== "string") throw new ApiError(400, "ROOM_NOT_FOUND", "邀请码格式不正确。");
   const code = value.normalize("NFKC").replace(/[\s-]+/gu, "").toUpperCase();
@@ -309,6 +352,7 @@ function clientPlayers(table: OnlinePublicRoomState): ClientPlayer[] {
       streetCommitted: seat.bet,
       status,
       ready: seat.ready,
+      timeBankMs: seat.timeBankMs,
       isOwner: seat.seat === table.ownerSeat,
       isDealer: seat.seat === table.hand?.dealerSeat,
       ...(seat.holeCards ? { holeCards: seat.holeCards.map(clientCard) } : {}),
@@ -360,6 +404,8 @@ function makeSnapshot(row: RoomRow, state: OnlineRoomState, guestId: string) {
       dealerSeat: hand.dealerSeat,
       actorAccountId: hand.currentSeat === null ? null : publicSeatId(hand.currentSeat),
       currentBet: hand.highestBet,
+      actionStartedAt: hand.actionStartedAt,
+      actionDeadlineAt: hand.actionDeadlineAt,
       players,
       legalActions: table.legalActions ? {
         fold: table.legalActions.fold,
@@ -435,6 +481,7 @@ async function listRooms(guest: GuestRow) {
 async function createRoom(guest: GuestRow, payload: JsonObject) {
   const name = normalizeRoomName(payload.name);
   const maxPlayers = normalizeMaxPlayers(payload.maxPlayers);
+  const settings = normalizeRoomSettings(payload);
   await consumeRateLimit(`create:${guest.id}`, 12, 3600);
   for (let attempt = 0; attempt < 6; attempt += 1) {
     const roomId = crypto.randomUUID();
@@ -443,6 +490,7 @@ async function createRoom(guest: GuestRow, payload: JsonObject) {
       roomId,
       owner: { accountId: guest.id, displayName: guest.handle },
       maxPlayers,
+      ...settings,
     });
     const expiresAt = new Date(Date.now() + ROOM_TTL_MS).toISOString();
     const { data, error } = await database.rpc("poker_create_room", {
@@ -525,6 +573,7 @@ function parseCommand(payload: JsonObject): Exclude<OnlinePokerCommand, { type: 
   }
   if (type === "start" || type === "leave") return { ...base, type };
   const handId = requiredString(payload.handId, "handId");
+  if (type === "use-time-bank" || type === "timeout") return { ...base, type, handId };
   if (type === "show") {
     if (typeof payload.show !== "boolean") throw new ApiError(400, "INVALID_COMMAND", "show 必须是布尔值。");
     return { ...base, type, handId, show: payload.show };

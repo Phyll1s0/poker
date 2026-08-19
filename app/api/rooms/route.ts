@@ -35,7 +35,12 @@ export async function POST(request: Request) {
     const account = await store.getAccountBySubject(user.userId);
     if (!account) return apiError(409, "ACCOUNT_REQUIRED", "请先设置牌桌昵称。");
 
-    const room = await store.createRoom(account.id, payload.name, payload.maxPlayers);
+    const room = await store.createRoom(account.id, payload.name, payload.maxPlayers, {
+      tableMode: payload.tableMode,
+      startingStack: payload.startingStack,
+      actionSeconds: payload.actionSeconds,
+      timeBankSeconds: payload.timeBankSeconds,
+    });
     return privateJson({ room }, { status: 201 });
   } catch (error) {
     return multiplayerErrorResponse(error);
