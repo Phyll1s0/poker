@@ -190,20 +190,39 @@ function CardView({ card, mini = false }: { card: Card; mini?: boolean }) {
   );
 }
 
+const PLAYER_STATUS_LABELS: Record<PublicPlayer["status"], string> = {
+  waiting: "等待入局",
+  active: "牌局中",
+  folded: "已弃牌",
+  "all-in": "全下",
+  out: "已离桌",
+};
+
+const STREET_LABELS: Record<PublicGame["street"], string> = {
+  preflop: "翻牌前",
+  flop: "翻牌",
+  turn: "转牌",
+  river: "河牌",
+  showdown: "摊牌",
+  complete: "本手结束",
+};
+
 function PlayerSeat({
   player,
   selfAccountId,
   actorAccountId,
+  visualSeat,
 }: {
   player: PublicPlayer;
   selfAccountId: string;
   actorAccountId: string | null;
+  visualSeat: number;
 }) {
   const cards = player.holeCards ?? [];
   const hiddenCount = cards.length ? 0 : player.holeCardCount;
   const className = [
     styles.seat,
-    styles[`seat${Math.max(0, Math.min(5, player.seat))}`],
+    styles[`seat${Math.max(0, Math.min(5, visualSeat))}`],
     player.accountId === actorAccountId ? styles.seatActive : "",
     player.accountId === selfAccountId ? styles.seatSelf : "",
     player.status === "folded" || player.status === "out" ? styles.seatFolded : "",
@@ -211,18 +230,66 @@ function PlayerSeat({
 
   return (
     <div className={className}>
-      <div className={styles.seatHeader}>
-        <strong>{player.handle}</strong>
-        <span>{player.isDealer ? "D " : ""}{player.status === "all-in" ? "ALL-IN" : player.status}</span>
-      </div>
-      <div className={styles.seatStack}>
-        <span>{player.committed > 0 ? `本手 ${player.committed}` : ""}</span>
-        <strong>{player.stack}</strong>
-      </div>
       <div className={styles.seatCards} aria-label={`${player.handle} 的手牌`}>
         {cards.map((card, index) => <CardView key={`${card.rank}-${card.suit}-${index}`} card={card} mini />)}
         {Array.from({ length: hiddenCount }, (_, index) => <span className={styles.miniBack} key={`hidden-${index}`} />)}
       </div>
+      <div className={styles.playerPanel}>
+        <span className={styles.avatar}>{Array.from(player.handle)[0]?.toUpperCase() ?? "P"}</span>
+        <div className={styles.seatIdentity}>
+          <div>
+            <strong>{player.handle}</strong>
+            {player.isDealer && <span className={styles.roleChip}>D</span>}
+            {player.isOwner && <span className={styles.ownerChip}>房主</span>}
+          </div>
+          <span>{player.accountId === selfAccountId ? "你 · 在线" : PLAYER_STATUS_LABELS[player.status]}</span>
+        </div>
+        <div className={styles.seatStack}><i />{player.stack}</div>
+      </div>
+      {player.committed > 0 && <div className={styles.tableBet}><i />{player.committed}</div>}
+      {player.accountId === actorAccountId && <div className={styles.thinking}><b /><b /><b /></div>}
+      {(player.status === "folded" || player.status === "out") && <div className={styles.foldLabel}>{PLAYER_STATUS_LABELS[player.status]}</div>}
+    </div>
+  );
+}
+
+function TableSurface({
+  players,
+  selfAccountId,
+  game,
+}: {
+  players: PublicPlayer[];
+  selfAccountId: string;
+  game: PublicGame | null;
+}) {
+  const selfSeat = players.find((player) => player.accountId === selfAccountId)?.seat ?? 0;
+
+  return (
+    <div className={`${styles.pokerTable} ${game ? "" : styles.waitingPokerTable}`}>
+      <div className={styles.tableRail} />
+      <div className={styles.tableFelt}>
+        <div className={styles.feltGrain} />
+        <div className={styles.boardArea}>
+          <div className={styles.potLabel}>
+            <span>{game ? "底池" : "私人牌桌"}</span>
+            <strong>{game ? <><i />{game.pot}</> : "WAITING"}</strong>
+          </div>
+          <div className={styles.cards} aria-label="公共牌">
+            {(game?.board ?? []).map((card, index) => <CardView key={`${card.rank}-${card.suit}-${index}`} card={card} />)}
+            {Array.from({ length: 5 - (game?.board.length ?? 0) }, (_, index) => <span className={styles.cardSlot} key={`slot-${index}`} />)}
+          </div>
+        </div>
+        <div className={styles.tableSignature}>RANGECRAFT <span>◆</span> FRIENDS CLUB</div>
+      </div>
+      {players.map((player) => (
+        <PlayerSeat
+          key={player.accountId}
+          player={player}
+          selfAccountId={selfAccountId}
+          actorAccountId={game?.actorAccountId ?? null}
+          visualSeat={(player.seat - selfSeat + 6) % 6}
+        />
+      ))}
     </div>
   );
 }
@@ -462,9 +529,19 @@ export default function MultiplayerClient({
     <div className={styles.multiplayerPage}>
       <nav className={styles.lobbyNav}>
         <a className={styles.brand} href={homeHref}>
-          <span className={styles.brandMark}>R</span>
-          <span>RANGECRAFT</span>
+          <span className={styles.brandMark}>P</span>
+          <span className={styles.brandCopy}><strong>RANGECRAFT</strong><small>朋友牌桌</small></span>
         </a>
+        {snapshot && (
+          <div className={styles.sessionMeta}>
+            <span className={styles.onlineDot} />
+            <span>在线朋友局</span>
+            <i />
+            <span>盲注 5/10</span>
+            <i />
+            <span>{snapshot.players.length}/{snapshot.room.maxPlayers} 人 · {game ? `第 ${game.handNo} 手` : "等待开局"}</span>
+          </div>
+        )}
         <div className={styles.navRight}>
           <span>牌桌身份</span>
           <strong>{account?.handle ?? displayName}</strong>
@@ -472,7 +549,7 @@ export default function MultiplayerClient({
         </div>
       </nav>
 
-      <main className={styles.main}>
+      <main className={`${styles.main} ${snapshot ? styles.tableMain : ""}`}>
         {error && <p className={styles.errorBox} role="alert">{error}</p>}
         {notice && <p className={styles.noticeBox} role="status">{notice}</p>}
 
@@ -591,8 +668,13 @@ export default function MultiplayerClient({
               </div>
             </header>
 
+            <div className={styles.tableStage}>
+              <div className={`${styles.tableAmbient} ${styles.tableAmbientOne}`} />
+              <div className={`${styles.tableAmbient} ${styles.tableAmbientTwo}`} />
+              <TableSurface players={game?.players ?? snapshot.players} selfAccountId={snapshot.selfAccountId} game={game} />
+
             {!game && (
-              <div className={styles.tableControls}>
+              <div className={`${styles.tableControls} ${styles.waitingControls}`}>
                 <div>
                   <p className={styles.panelKicker}>WAITING ROOM</p>
                   <h2 className={styles.panelTitle}>人齐后确认准备</h2>
@@ -623,24 +705,12 @@ export default function MultiplayerClient({
 
             {game && (
               <>
-                <div className={styles.pokerTable}>
-                  <div className={styles.boardArea}>
-                    <span className={styles.potLabel}>底池 {game.pot}</span>
-                    <div className={styles.cards} aria-label="公共牌">
-                      {game.board.map((card, index) => <CardView key={`${card.rank}-${card.suit}-${index}`} card={card} />)}
-                      {Array.from({ length: 5 - game.board.length }, (_, index) => <span className={styles.cardSlot} key={`slot-${index}`} />)}
-                    </div>
-                  </div>
-                  {game.players.map((player) => (
-                    <PlayerSeat key={player.accountId} player={player} selfAccountId={snapshot.selfAccountId} actorAccountId={game.actorAccountId} />
-                  ))}
-                </div>
-
                 <div className={styles.tableControls}>
                   {game.result && <div className={styles.resultBanner}>{game.result.summary}</div>}
                   <WinningHands game={game} />
                   <div className={styles.controlSummary}>
-                    <span>第 {game.handNo} 手 · <strong>{game.street.toUpperCase()}</strong> · 当前下注 {game.currentBet}</span>
+                    <span className={styles.turnLabel}>{isMyTurn ? "轮到你行动" : phase === "showdown" ? "正在摊牌" : "牌桌进行中"}</span>
+                    <strong>{STREET_LABELS[game.street]}</strong>
                     <span>
                       {isMyTurn
                         ? "轮到你决定"
@@ -656,21 +726,22 @@ export default function MultiplayerClient({
                     </span>
                   </div>
                   <div className={styles.actionRow}>
-                    {isMyTurn && legal?.fold && <button className={styles.dangerButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "fold" })}>弃牌</button>}
-                    {isMyTurn && legal?.check && <button className={styles.secondaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "check" })}>过牌</button>}
-                    {isMyTurn && legal?.callAmount != null && <button className={styles.secondaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "call" })}>跟注 {legal.callAmount}</button>}
+                    {isMyTurn && legal?.fold && <button className={`${styles.actionButton} ${styles.foldAction}`} type="button" disabled={busy} onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "fold" })}>弃牌</button>}
+                    {isMyTurn && legal?.check && <button className={styles.actionButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "check" })}>过牌</button>}
+                    {isMyTurn && legal?.callAmount != null && <button className={styles.actionButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "call" })}>跟注 {legal.callAmount}</button>}
                     {isMyTurn && legal?.minRaiseTo != null && legal.maxRaiseTo != null && (
                       <div className={styles.raiseGroup}>
                         <input
                           className={styles.raiseInput}
-                          type="number"
+                          type="range"
                           min={legal.minRaiseTo}
                           max={legal.maxRaiseTo}
+                          step={1}
                           value={raiseTo}
                           onChange={(event) => setRaiseTo(Number(event.target.value))}
                           aria-label="加注到"
                         />
-                        <button className={styles.primaryButton} type="button" disabled={busy || raiseTo < legal.minRaiseTo || raiseTo > legal.maxRaiseTo} onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "raise", raiseTo })}>
+                        <button className={`${styles.actionButton} ${styles.raiseAction}`} type="button" disabled={busy || raiseTo < legal.minRaiseTo || raiseTo > legal.maxRaiseTo} onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "raise", raiseTo })}>
                           加注到 {raiseTo}
                         </button>
                       </div>
@@ -690,6 +761,7 @@ export default function MultiplayerClient({
                 </div>
               </>
             )}
+            </div>
           </section>
         )}
       </main>
