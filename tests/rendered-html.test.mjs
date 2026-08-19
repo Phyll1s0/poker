@@ -42,8 +42,9 @@ test("server-renders the RangeCraft landing page before mounting a poker table",
 });
 
 test("keeps the multiplayer and strategy boundaries with product metadata", async () => {
-  const [page, multiplayerClient, staticMultiplayer, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, packageJson] = await Promise.all([
+  const [page, globalsCss, multiplayerClient, staticMultiplayer, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/multiplayer/MultiplayerClient.tsx", import.meta.url), "utf8"),
     readFile(new URL("../github-pages/MultiplayerApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
@@ -71,6 +72,9 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /function setHeroShowChoice/);
   assert.match(page, /function WinningHands/);
   assert.match(page, /赢家手牌/);
+  assert.match(globalsCss, /width: min\(800px, 78%, calc\(82dvh - 59px\)\)/);
+  assert.match(globalsCss, /\.seat-0 \{ left: 50%; bottom: -100px/);
+  assert.match(globalsCss, /\.seat-3 \{ left: 50%; top: -84px/);
   assert.match(multiplayerClient, /function WinningHands/);
   assert.match(multiplayerClient, /手牌未公开/);
   assert.match(multiplayerClient, /粘贴邀请码/);

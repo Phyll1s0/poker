@@ -418,10 +418,12 @@ button { color: inherit; }
 .ambient-two { width: 400px; height: 200px; right: 4%; bottom: 17%; background: rgba(190,142,69,.06); }
 
 .poker-table {
-  width: min(860px, 82%);
+  width: min(800px, 78%, calc(82vh - 59px));
+  width: min(800px, 78%, calc(82dvh - 59px));
   aspect-ratio: 1.82 / 1;
   position: relative;
   z-index: 2;
+  transform: translateY(20px);
 }
 
 .table-rail {
@@ -538,10 +540,10 @@ button { color: inherit; }
   z-index: 6;
   transition: opacity .2s ease, filter .2s ease;
 }
-.seat-0 { left: 50%; bottom: -115px; transform: translateX(-50%); }
+.seat-0 { left: 50%; bottom: -100px; transform: translateX(-50%); }
 .seat-1 { left: -95px; bottom: -16px; }
 .seat-2 { left: -70px; top: -62px; }
-.seat-3 { left: 50%; top: -100px; transform: translateX(-50%); }
+.seat-3 { left: 50%; top: -84px; transform: translateX(-50%); }
 .seat-4 { right: -70px; top: -62px; }
 .seat-5 { right: -95px; bottom: -16px; }
 
