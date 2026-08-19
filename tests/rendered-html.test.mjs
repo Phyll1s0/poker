@@ -73,6 +73,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /function WinningHands/);
   assert.match(multiplayerClient, /手牌未公开/);
   assert.match(page, /choosePokerPolicyAction/);
+  assert.match(page, /policyPlan\.actionFrequencies/);
+  assert.match(page, /弃牌来自翻前范围/);
   assert.match(page, /const TABLE_PRESETS/);
   assert.match(page, /function grantSquid/);
   assert.match(page, /血战鱿鱼计分/);

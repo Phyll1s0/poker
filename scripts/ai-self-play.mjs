@@ -8,10 +8,11 @@ import {
   drawPotential,
   estimateEquity,
   makeDeck,
+  preflopHandFeatures,
   preflopPercentile,
   preflopStrength,
 } from "../lib/poker-evaluator.ts";
-import { choosePokerPolicyAction, sixMaxPreflopPositionFactor } from "../lib/poker-policy.ts";
+import { choosePokerPolicyAction, sixMaxPreflopPosition, sixMaxPreflopPositionFactor } from "../lib/poker-policy.ts";
 
 const PLAYER_COUNT = 6;
 const SMALL_BLIND = 0.5;
@@ -63,8 +64,14 @@ function visibleHandStrength(player, board) {
   return clamp(category / 7 + Math.max(...player.hole.map(rank)) / 140, 0, 1);
 }
 
-function isInPosition(players, playerId, dealer, street) {
-  if (street === "preflop") return playerId === dealer;
+function isInPosition(players, playerId, dealer, street, lastAggressor = null) {
+  if (street === "preflop") {
+    if (lastAggressor !== null && lastAggressor !== playerId) {
+      const order = { SB: 0, BB: 1, UTG: 2, HJ: 3, CO: 4, BTN: 5 };
+      return order[sixMaxPreflopPosition(playerId, dealer)] > order[sixMaxPreflopPosition(lastAggressor, dealer)];
+    }
+    return playerId === dealer;
+  }
   const start = (dealer + 1) % PLAYER_COUNT;
   let lastToAct = -1;
   for (let offset = 0; offset < PLAYER_COUNT; offset += 1) {
@@ -91,6 +98,10 @@ function decideAction(context) {
     equityRandom,
     equityCache,
     random,
+    openingRaiserId,
+    preflopLimpers,
+    preflopColdCallers,
+    lastAggressor,
   } = context;
   const profile = AI_PROFILES[player.styleKey];
   const toCall = Math.max(0, currentBet - player.bet);
@@ -126,7 +137,7 @@ function decideAction(context) {
     pot,
     toCall,
     potOdds,
-    inPosition: isInPosition(players, player.id, dealer, street),
+    inPosition: isInPosition(players, player.id, dealer, street, lastAggressor),
     activeOpponents: opponents,
     effectiveStackBb,
     startingDepthBb: stackBb,
@@ -138,8 +149,14 @@ function decideAction(context) {
     squidPressure: 0,
     bigBlind: BIG_BLIND,
     preflopPercentile: preflopPercentile(player.hole),
+    preflopHand: preflopHandFeatures(player.hole),
+    preflopPosition: sixMaxPreflopPosition(player.id, dealer),
     preflopPositionFactor: sixMaxPreflopPositionFactor(player.id, dealer),
     preflopRaiseCount: raiseCount,
+    preflopOpenerPosition: openingRaiserId === null ? undefined : sixMaxPreflopPosition(openingRaiserId, dealer),
+    preflopLimpers,
+    preflopColdCallers,
+    preflopPreviouslyRaised: player.pfr,
   }, random);
   return action.kind === "raise" ? { kind: "raise", target: action.raiseTo } : action;
 }
@@ -173,6 +190,10 @@ function bettingRound(state, street, startAt) {
   let currentBet = Math.max(...players.map((player) => player.bet));
   let minRaise = BIG_BLIND;
   let raiseCount = 0;
+  let openingRaiserId = null;
+  let preflopLimpers = 0;
+  let preflopColdCallers = 0;
+  let lastAggressor = null;
   let pending = new Set(players.filter((player) => !player.folded && player.stack > 0).map((player) => player.id));
   let cursor = startAt;
   let safety = 0;
@@ -203,6 +224,10 @@ function bettingRound(state, street, startAt) {
       equityRandom: state.equityRandom,
       equityCache: state.equityCache,
       random: state.policyRandom,
+      openingRaiserId,
+      preflopLimpers,
+      preflopColdCallers,
+      lastAggressor,
     });
     const toCall = Math.max(0, currentBet - player.bet);
     const currentBetBefore = currentBet;
@@ -222,6 +247,10 @@ function bettingRound(state, street, startAt) {
     if (decision.kind === "call") {
       const paid = post(player, toCall);
       player.hasActed = true;
+      if (street === "preflop" && paid > 0) {
+        if (raiseCount === 0) preflopLimpers += 1;
+        else preflopColdCallers += 1;
+      }
       recordAction(player, street, "call", currentBetBefore, paid);
       continue;
     }
@@ -242,7 +271,9 @@ function bettingRound(state, street, startAt) {
     player.hasActed = true;
     const fullRaise = increase >= minRaise;
     if (fullRaise) minRaise = increase;
+    if (street === "preflop" && raiseCount === 0) openingRaiserId = player.id;
     raiseCount += 1;
+    lastAggressor = player.id;
     for (const other of players) {
       if (other.id === player.id || other.folded || other.stack <= 0) continue;
       if (fullRaise) {

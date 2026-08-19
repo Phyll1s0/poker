@@ -13,6 +13,14 @@ export type PokerHandEvaluation = {
   name: string;
 };
 
+export type PreflopHandFeatures = {
+  highRank: number;
+  lowRank: number;
+  pair: boolean;
+  suited: boolean;
+  gap: number;
+};
+
 export type PokerRandom = () => number;
 export type OpponentRangeWeight = (hole: readonly [PokerCard, PokerCard]) => number;
 
@@ -166,17 +174,27 @@ export function score(cards: readonly PokerCard[]): PokerHandEvaluation {
 export function preflopStrength(hole: readonly PokerCard[]): number {
   if (hole.length !== 2) return 0;
   assertUniqueCards(hole);
-  const [high, low] = [...hole].sort((a, b) => b.rank - a.rank);
-  const pair = high.rank === low.rank;
-  const suited = suitKey(high.suit) === suitKey(low.suit);
-  const gap = high.rank - low.rank;
-  let value = (high.rank - 2) / 12 * 0.36 + (low.rank - 2) / 12 * 0.18;
-  if (pair) value += 0.3 + (high.rank - 2) / 12 * 0.18;
+  const { highRank, lowRank, pair, suited, gap } = preflopHandFeatures(hole)!;
+  let value = (highRank - 2) / 12 * 0.36 + (lowRank - 2) / 12 * 0.18;
+  if (pair) value += 0.3 + (highRank - 2) / 12 * 0.18;
   if (suited) value += 0.08;
   if (gap === 1) value += 0.07;
   else if (gap === 2) value += 0.035;
-  if (high.rank === 14) value += 0.08;
+  if (highRank === 14) value += 0.08;
   return clamp(value, 0.08, 0.98);
+}
+
+export function preflopHandFeatures(hole: readonly PokerCard[]): PreflopHandFeatures | null {
+  if (hole.length !== 2) return null;
+  assertUniqueCards(hole);
+  const [high, low] = [...hole].sort((a, b) => b.rank - a.rank);
+  return {
+    highRank: high.rank,
+    lowRank: low.rank,
+    pair: high.rank === low.rank,
+    suited: suitKey(high.suit) === suitKey(low.suit),
+    gap: high.rank - low.rank,
+  };
 }
 
 const PREFLOP_STRENGTH_DISTRIBUTION = (() => {

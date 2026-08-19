@@ -243,3 +243,107 @@ test("rounding never lowers a normal raise below the legal floor", () => {
 
   assert.equal(plan.raiseTo, 26);
 });
+
+test("publishes one normalized preflop mix and defends the big blind wider than the small blind", () => {
+  const facingButtonOpen = {
+    ...baseSpot,
+    street: "preflop",
+    equity: 0.46,
+    handStrength: 0.5,
+    preflopPercentile: 0.74,
+    preflopRaiseCount: 1,
+    preflopOpenerPosition: "BTN",
+    pot: 40,
+    toCall: 15,
+    highestBet: 25,
+    playerBet: 10,
+    minRaise: 15,
+    playerStack: 990,
+    effectiveStackBb: 99,
+  };
+  const bigBlind = evaluatePokerPolicy({
+    ...facingButtonOpen,
+    preflopPosition: "BB",
+    preflopPositionFactor: 1.35,
+  });
+  const smallBlind = evaluatePokerPolicy({
+    ...facingButtonOpen,
+    preflopPosition: "SB",
+    preflopPositionFactor: 0.9,
+    playerBet: 5,
+    toCall: 20,
+  });
+
+  assert.ok(Math.abs(Object.values(bigBlind.actionFrequencies).reduce((sum, value) => sum + value, 0) - 1) < 1e-12);
+  assert.ok(bigBlind.preflopTargetRange > smallBlind.preflopTargetRange * 1.8);
+  assert.ok(bigBlind.actionFrequencies.fold < smallBlind.actionFrequencies.fold);
+});
+
+test("uses position ranges for first-in decisions instead of raw pot-odds equity", () => {
+  const firstIn = {
+    ...baseSpot,
+    street: "preflop",
+    equity: 0.05,
+    handStrength: 0.65,
+    preflopPercentile: 0.91,
+    preflopRaiseCount: 0,
+    preflopPosition: "UTG",
+    preflopPositionFactor: 0.72,
+    pot: 15,
+    toCall: 10,
+    highestBet: 10,
+    playerBet: 0,
+    minRaise: 10,
+    playerStack: 990,
+    effectiveStackBb: 99,
+  };
+  const early = evaluatePokerPolicy(firstIn);
+  const button = evaluatePokerPolicy({ ...firstIn, preflopPosition: "BTN", preflopPositionFactor: 1.28 });
+
+  assert.equal(early.preflopScenario, "open");
+  assert.equal(early.actionFrequencies.call, 0);
+  assert.ok(early.actionFrequencies.raise > early.actionFrequencies.fold);
+  assert.ok(button.preflopTargetRange > early.preflopTargetRange * 2);
+});
+
+test("builds a separate four-bet and shallow-jam branch against a three-bet", () => {
+  const aces = {
+    highRank: 14,
+    lowRank: 14,
+    pair: true,
+    suited: false,
+    gap: 0,
+  };
+  const facingThreeBet = {
+    ...baseSpot,
+    street: "preflop",
+    equity: 0.82,
+    handStrength: 0.98,
+    preflopPercentile: 1,
+    preflopHand: aces,
+    preflopPosition: "BTN",
+    preflopPositionFactor: 1.28,
+    preflopRaiseCount: 2,
+    preflopPreviouslyRaised: true,
+    pot: 125,
+    toCall: 65,
+    highestBet: 90,
+    playerBet: 25,
+    minRaise: 65,
+    playerStack: 975,
+    effectiveStackBb: 100,
+  };
+  const deepEnough = evaluatePokerPolicy(facingThreeBet);
+  const shallow = evaluatePokerPolicy({
+    ...facingThreeBet,
+    startingDepthBb: 40,
+    effectiveStackBb: 37.5,
+    playerStack: 375,
+  });
+
+  assert.equal(deepEnough.preflopScenario, "vs-three-bet");
+  assert.ok(deepEnough.actionFrequencies.raise > deepEnough.actionFrequencies.call);
+  assert.equal(deepEnough.raiseTo, 200);
+  assert.equal(shallow.raiseTo, 400);
+  assert.ok(shallow.shortStackJamFrequency > 0.8);
+});

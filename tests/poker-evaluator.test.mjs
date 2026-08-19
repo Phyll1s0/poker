@@ -7,6 +7,7 @@ import {
   drawPotential,
   estimateEquity,
   makeDeck,
+  preflopHandFeatures,
   preflopPercentile,
   preflopStrength,
   score,
@@ -64,6 +65,13 @@ test("preflop strength and percentile preserve useful ordering", () => {
   assert.equal(preflopPercentile(aces), 1);
   assert.ok(preflopPercentile(aceKingSuited) > preflopPercentile(aceKingOffsuit));
   assert.ok(preflopPercentile(sevenDeuce) < 0.2);
+  assert.deepEqual(preflopHandFeatures(aceKingSuited), {
+    highRank: 14,
+    lowRank: 13,
+    pair: false,
+    suited: true,
+    gap: 1,
+  });
 });
 
 test("reports draws and nut-suit blockers from public cards only", () => {

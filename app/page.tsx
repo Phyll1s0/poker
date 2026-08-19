@@ -8,12 +8,14 @@ import {
   blockerValue,
   drawPotential,
   estimateEquity,
+  preflopHandFeatures,
   preflopPercentile,
   preflopStrength,
 } from "../lib/poker-evaluator";
 import {
   choosePokerPolicyAction,
   evaluatePokerPolicy,
+  sixMaxPreflopPosition,
   sixMaxPreflopPositionFactor,
   type PokerPolicyInput,
   type PokerPolicyProfile,
@@ -275,7 +277,21 @@ function pokerSizingContext(game: Game, player: Player): PokerSizingContext {
 }
 
 function isPlayerInPosition(game: Game, player: Player) {
-  if (game.street === "preflop") return player.id === game.dealer;
+  if (game.street === "preflop") {
+    if (game.lastAggressor !== null && game.lastAggressor !== player.id) {
+      const positionOrder: Record<ReturnType<typeof sixMaxPreflopPosition>, number> = {
+        SB: 0,
+        BB: 1,
+        UTG: 2,
+        HJ: 3,
+        CO: 4,
+        BTN: 5,
+      };
+      return positionOrder[sixMaxPreflopPosition(player.id, game.dealer)]
+        > positionOrder[sixMaxPreflopPosition(game.lastAggressor, game.dealer)];
+    }
+    return player.id === game.dealer;
+  }
   const activePlayers = game.players.filter((candidate) => !candidate.folded && candidate.stack > 0);
   const actionOrderRank = (candidate: Player) => {
     const offset = (candidate.id - game.dealer + game.players.length) % game.players.length;
@@ -302,6 +318,8 @@ function buildPokerPolicyInput(
   profile: PokerPolicyProfile,
 ): PokerPolicyInput {
   const context = pokerSizingContext(game, player);
+  const preflopActions = game.actionHistory.filter((action) => action.street === "preflop");
+  const openingRaise = preflopActions.find((action) => action.kind === "raise");
   const opponentStacks = game.players
     .filter((candidate) => !candidate.folded && candidate.id !== player.id)
     .map((candidate) => candidate.stack);
@@ -328,8 +346,16 @@ function buildPokerPolicyInput(
     squidPressure: playerSquidPressure(game, player),
     bigBlind: BIG_BLIND,
     preflopPercentile: preflopPercentile(player.hole),
+    preflopHand: preflopHandFeatures(player.hole),
+    preflopPosition: sixMaxPreflopPosition(player.id, game.dealer),
     preflopPositionFactor: sixMaxPreflopPositionFactor(player.id, game.dealer),
     preflopRaiseCount: game.raiseCount,
+    preflopOpenerPosition: openingRaise
+      ? sixMaxPreflopPosition(openingRaise.playerId, game.dealer)
+      : undefined,
+    preflopLimpers: preflopActions.filter((action) => action.kind === "call" && action.raiseCountBefore === 0).length,
+    preflopColdCallers: preflopActions.filter((action) => action.kind === "call" && action.raiseCountBefore > 0).length,
+    preflopPreviouslyRaised: preflopActions.some((action) => action.playerId === player.id && action.kind === "raise"),
   };
 }
 
@@ -784,24 +810,62 @@ function getAdvice(game: Game, player: Player, equity: number) {
   const startingDepthBb = game.startingStack / BIG_BLIND;
   const depthThreshold = startingDepthBb <= 45 ? -0.025 : startingDepthBb >= 180 ? 0.018 : 0;
   const decisionEquity = clamp(equity + squidIncentive, 0, 1);
-  const strategyStrength = (game.street === "preflop"
-    ? equity * 0.35 + preflopStrength(player.hole) * 0.65
-    : equity) + squidIncentive;
+  const strategyStrength = equity + squidIncentive;
+  const frequencies: Record<ActionKind, number> = { fold: 0, check: 0, call: 0, raise: 0 };
   let action: ActionKind;
   let note: string;
-  if (toCall > 0 && decisionEquity < potOdds - 0.045) {
-    action = "fold";
-    note = `按对手行动范围估算胜率约 ${Math.round(equity * 100)}%，低于跟注所需 ${Math.round(potOdds * 100)}%。控制负 EV 跟注。`;
-  } else if (!player.raiseLocked && strategyStrength > (toCall > 0 ? 0.57 : 0.51) + depthThreshold) {
-    action = "raise";
-    note = `按对手行动范围估算胜率约 ${Math.round(equity * 100)}%，具备价值下注或保护范围的空间。`;
+  if (game.street === "preflop") {
+    Object.assign(frequencies, policyPlan.actionFrequencies);
+    action = (Object.entries(frequencies) as [ActionKind, number][])
+      .reduce((best, candidate) => candidate[1] > best[1] ? candidate : best)[0];
+    const scenarioLabels = {
+      open: "首入池",
+      isolate: "隔离跛入者",
+      "check-option": "大盲免费过牌",
+      "vs-open": "面对开池",
+      "vs-three-bet": "面对 3-bet",
+      "vs-four-bet": "面对 4-bet 及以上",
+    } as const;
+    const rangePercent = Math.round(policyPlan.preflopTargetRange * 100);
+    const enterPercent = Math.round(policyPlan.preflopEnterFrequency * 100);
+    note = `${policyPlan.preflopPosition} ${scenarioLabels[policyPlan.preflopScenario]}节点：先按位置、前序行动、加注尺度和有效筹码构建约 ${rangePercent}% 的继续范围；这手牌当前进入范围的混合频率约 ${enterPercent}%。`;
+    if (action === "raise") note += ` 主路线为主动加注，尺寸按当前 ${game.raiseCount === 0 ? "开池" : game.raiseCount === 1 ? "3-bet" : game.raiseCount === 2 ? "4-bet" : "再加注"}节点计算。`;
+    else if (action === "call") note += ` 主路线为跟注，保留强牌和部分可实现权益的牌，避免把继续范围全部暴露为加注。`;
+    else if (action === "check") note += ` 当前拥有免费过牌权，弱牌无需为了“主动”而制造不必要底池。`;
+    else note += ` 当前牌型位于该位置与行动序列的范围外，弃牌来自翻前范围，而不是把翻后胜率公式硬套进来。`;
   } else {
-    action = toCall > 0 ? "call" : "check";
-    note = player.raiseLocked
-      ? `前面的不足额全下没有重新开放加注权；当前只能跟注或弃牌。范围胜率约 ${Math.round(equity * 100)}%。`
-      : toCall > 0
-      ? `底池赔率需要 ${Math.round(potOdds * 100)}%，当前范围胜率 ${Math.round(equity * 100)}%，继续范围合理。`
-      : `中等牌力适合控制底池，保留对手的诈唬范围。`;
+    if (toCall > 0 && decisionEquity < potOdds - 0.045) {
+      action = "fold";
+      note = `按对手行动范围估算胜率约 ${Math.round(equity * 100)}%，低于跟注所需 ${Math.round(potOdds * 100)}%。控制负 EV 跟注。`;
+    } else if (!player.raiseLocked && strategyStrength > (toCall > 0 ? 0.57 : 0.51) + depthThreshold) {
+      action = "raise";
+      note = `按对手行动范围估算胜率约 ${Math.round(equity * 100)}%，具备价值下注或保护范围的空间。`;
+    } else {
+      action = toCall > 0 ? "call" : "check";
+      note = player.raiseLocked
+        ? `前面的不足额全下没有重新开放加注权；当前只能跟注或弃牌。范围胜率约 ${Math.round(equity * 100)}%。`
+        : toCall > 0
+        ? `底池赔率需要 ${Math.round(potOdds * 100)}%，当前范围胜率 ${Math.round(equity * 100)}%，继续范围合理。`
+        : `中等牌力适合控制底池，保留对手的诈唬范围。`;
+    }
+    if (toCall > 0) {
+      if (action === "fold") Object.assign(frequencies, { fold: 0.72, call: player.raiseLocked ? 0.28 : 0.24, raise: player.raiseLocked ? 0 : 0.04 });
+      else if (action === "raise") Object.assign(frequencies, { fold: 0.02, call: 0.38, raise: 0.6 });
+      else Object.assign(frequencies, { fold: 0.12, call: player.raiseLocked ? 0.88 : 0.68, raise: player.raiseLocked ? 0 : 0.2 });
+    } else if (action === "raise") Object.assign(frequencies, { check: 0.36, raise: 0.64 });
+    else Object.assign(frequencies, { check: 0.7, raise: player.raiseLocked ? 0 : 0.3 });
+    if (squidIncentive > 0) {
+      const shift = Math.min(frequencies.fold, 0.05 + squidIncentive * 0.4);
+      frequencies.fold -= shift;
+      if (toCall > 0) {
+        frequencies.call += player.raiseLocked ? shift : shift * 0.65;
+        if (!player.raiseLocked) frequencies.raise += shift * 0.35;
+      } else if (!player.raiseLocked) {
+        const pressureShift = Math.min(frequencies.check, 0.04 + squidIncentive * 0.35);
+        frequencies.check -= pressureShift;
+        frequencies.raise += pressureShift;
+      }
+    }
   }
   if (game.presetKey === "squid") {
     note += squidCount === 0
@@ -809,28 +873,13 @@ function getAdvice(game: Game, player: Player, equity: number) {
       : ` 你已有 ${squidCount} 条鱿鱼，当前倍率为 ×${squidMultiplier(squidCount)}。`;
   }
   if (game.presetKey === "short") {
-    note += ` 当前为 40 BB 浅筹，低 SPR 下强成牌与高权益听牌可以更早进入承诺线。`;
+    note += game.street === "preflop"
+      ? ` 当前为 40 BB 浅筹，面对 3-bet 时减少纯跟注，并让强牌更频繁进入全下分支。`
+      : ` 当前为 40 BB 浅筹，低 SPR 下强成牌与高权益听牌可以更早进入承诺线。`;
   } else if (game.presetKey === "deep" || game.presetKey === "squid") {
-    note += ` 当前为 200 BB 深筹，边缘成牌要控制大底池，坚果优势与位置价值更高。`;
-  }
-  const frequencies: Record<ActionKind, number> = { fold: 0, check: 0, call: 0, raise: 0 };
-  if (toCall > 0) {
-    if (action === "fold") Object.assign(frequencies, { fold: 0.72, call: player.raiseLocked ? 0.28 : 0.24, raise: player.raiseLocked ? 0 : 0.04 });
-    else if (action === "raise") Object.assign(frequencies, { fold: 0.02, call: 0.38, raise: 0.6 });
-    else Object.assign(frequencies, { fold: 0.12, call: player.raiseLocked ? 0.88 : 0.68, raise: player.raiseLocked ? 0 : 0.2 });
-  } else if (action === "raise") Object.assign(frequencies, { check: 0.36, raise: 0.64 });
-  else Object.assign(frequencies, { check: 0.7, raise: player.raiseLocked ? 0 : 0.3 });
-  if (squidIncentive > 0) {
-    const shift = Math.min(frequencies.fold, 0.05 + squidIncentive * 0.4);
-    frequencies.fold -= shift;
-    if (toCall > 0) {
-      frequencies.call += player.raiseLocked ? shift : shift * 0.65;
-      if (!player.raiseLocked) frequencies.raise += shift * 0.35;
-    } else if (!player.raiseLocked) {
-      const pressureShift = Math.min(frequencies.check, 0.04 + squidIncentive * 0.35);
-      frequencies.check -= pressureShift;
-      frequencies.raise += pressureShift;
-    }
+    note += game.street === "preflop"
+      ? ` 当前为 200 BB 深筹，位置、同花连张和隐含赔率更重要，但边缘牌面对再加注仍需保持纪律。`
+      : ` 当前为 200 BB 深筹，边缘成牌要控制大底池，坚果优势与位置价值更高。`;
   }
   const labels: Record<ActionKind, string> = { fold: "弃牌", check: "过牌", call: "跟注", raise: "加注" };
   const mix = (Object.entries(frequencies) as [ActionKind, number][])
