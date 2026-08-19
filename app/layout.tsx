@@ -4,7 +4,7 @@ import "./globals.css";
 
 const title = "RangeCraft · 德州扑克训练室";
 const description = "从单人混合频率训练到 2–6 人私人牌桌：练决策、看复盘，也和朋友在线实战。";
-const fallbackOrigin = "https://rangecraft-poker-trainer.pigstd.chatgpt.site";
+const fallbackOrigin = "https://poker.phyll1s0.com";
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();

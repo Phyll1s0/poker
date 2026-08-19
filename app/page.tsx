@@ -48,7 +48,7 @@ type InstallPromptEvent = Event & {
 };
 
 const APP_BASE_PATH = import.meta.env.BASE_URL || "/";
-const ONLINE_MULTIPLAYER_URL = "https://rangecraft-poker-trainer.pigstd.chatgpt.site/multiplayer";
+const ONLINE_MULTIPLAYER_URL = "https://poker.phyll1s0.com/multiplayer";
 
 type PortalView = "landing" | "solo";
 

@@ -62,7 +62,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /function LandingHome/);
   assert.match(page, /function SoloTrainer/);
   assert.match(page, /portalViewFromHash/);
-  assert.match(page, /rangecraft-poker-trainer\.pigstd\.chatgpt\.site\/multiplayer/);
+  assert.match(page, /poker\.phyll1s0\.com\/multiplayer/);
   assert.match(page, /近似 GTO 建议/);
   assert.match(page, /加注尺寸路线/);
   assert.match(page, /pokerRaiseTargetForFraction/);
