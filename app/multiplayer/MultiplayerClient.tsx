@@ -355,6 +355,7 @@ export default function MultiplayerClient({
   const [maxPlayers, setMaxPlayers] = useState(6);
   const [joinCode, setJoinCode] = useState("");
   const [raiseTo, setRaiseTo] = useState(0);
+  const [nextHandCountdown, setNextHandCountdown] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -449,13 +450,15 @@ export default function MultiplayerClient({
     }
   };
 
-  const sendCommand = async (command: Record<string, unknown>) => {
-    if (!snapshot) return false;
+  const activeRoomId = snapshot?.room.id ?? null;
+
+  const sendCommand = useCallback(async (command: Record<string, unknown>) => {
+    if (!activeRoomId) return false;
     setBusy(true);
     setError(null);
     try {
       const next = await request<RoomSnapshot>("command", {
-        roomId: snapshot.room.id,
+        roomId: activeRoomId,
         command: {
           ...command,
           requestId: requestId(),
@@ -469,12 +472,12 @@ export default function MultiplayerClient({
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : "牌桌行动失败。请稍后重试。";
       setError(message);
-      await loadRoom(snapshot.room.id, true);
+      await loadRoom(activeRoomId, true);
       return false;
     } finally {
       setBusy(false);
     }
-  };
+  }, [activeRoomId, loadRoom, loadRooms, request]);
 
   const leaveRoom = async () => {
     if (!snapshot) return;
@@ -518,6 +521,46 @@ export default function MultiplayerClient({
   const isMyTurn = Boolean(game && game.actorAccountId === snapshot?.selfAccountId && legal);
   const phase = snapshot?.table.phase ?? null;
   const canLeave = phase === "lobby" || phase === "between_hands";
+
+  useEffect(() => {
+    if (phase !== "between_hands" || !selfPlayer || selfPlayer.ready || selfPlayer.stack <= 0) {
+      setNextHandCountdown(null);
+      return;
+    }
+
+    const delayMs = 3_000 + Math.floor(Math.random() * 2_001);
+    const deadline = Date.now() + delayMs;
+    let cancelled = false;
+    let retryTimer: number | null = null;
+    let retriesRemaining = 2;
+
+    const updateCountdown = () => {
+      setNextHandCountdown(Math.max(1, Math.ceil((deadline - Date.now()) / 1_000)));
+    };
+    const markReady = async () => {
+      const succeeded = await sendCommand({ type: "ready", ready: true });
+      if (!succeeded && !cancelled && retriesRemaining > 0) {
+        retriesRemaining -= 1;
+        retryTimer = window.setTimeout(() => void markReady(), 800);
+      }
+    };
+
+    updateCountdown();
+    const countdownTimer = window.setInterval(updateCountdown, 200);
+    const readyTimer = window.setTimeout(() => {
+      window.clearInterval(countdownTimer);
+      setNextHandCountdown(0);
+      void markReady();
+    }, delayMs);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(countdownTimer);
+      window.clearTimeout(readyTimer);
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+    };
+  }, [game?.handId, phase, selfPlayer?.accountId, selfPlayer?.ready, selfPlayer?.stack, sendCommand]);
+
   const mustChooseShow = Boolean(
     snapshot
       && phase === "showdown"
@@ -719,7 +762,7 @@ export default function MultiplayerClient({
                           : phase === "showdown"
                             ? "等待赢家决定是否亮牌"
                             : phase === "between_hands"
-                              ? "准备后自动开始下一手"
+                              ? "倒计时结束后自动开始下一手"
                               : game.actorAccountId
                                 ? "等待对手行动"
                                 : "本手已结束"}
@@ -753,9 +796,28 @@ export default function MultiplayerClient({
                       </>
                     )}
                     {phase === "between_hands" && (
-                      <button className={styles.primaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "ready", ready: !selfPlayer?.ready })}>
-                        {selfPlayer?.ready ? "取消下一手准备" : "准备下一手"}
-                      </button>
+                      <>
+                        <div className={styles.autoNextHand} role="status" aria-live="polite">
+                          <span className={styles.autoNextPulse} />
+                          <span>
+                            <strong>
+                              {selfPlayer?.stack === 0
+                                ? "等待其余玩家进入下一手"
+                                : selfPlayer?.ready
+                                  ? "已准备，等待其他玩家"
+                                  : nextHandCountdown === 0
+                                    ? "正在进入下一手…"
+                                    : `${nextHandCountdown ?? "—"} 秒后进入下一手`}
+                            </strong>
+                            <small>全桌倒计时完成后自动发牌</small>
+                          </span>
+                        </div>
+                        {!selfPlayer?.ready && (selfPlayer?.stack ?? 0) > 0 && (
+                          <button className={styles.primaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "ready", ready: true })}>
+                            立即准备
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>

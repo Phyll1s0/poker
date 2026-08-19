@@ -77,6 +77,9 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /复制邀请码/);
   assert.match(multiplayerClient, /FRIENDS CLUB/);
   assert.match(multiplayerClient, /visualSeat/);
+  assert.match(multiplayerClient, /3_000 \+ Math\.floor\(Math\.random\(\) \* 2_001\)/);
+  assert.match(multiplayerClient, /秒后进入下一手/);
+  assert.match(multiplayerClient, /全桌倒计时完成后自动发牌/);
   assert.doesNotMatch(multiplayerClient, /这是其他玩家唯一能看到的信息/);
   assert.match(staticMultiplayer, /supabase\.co\/functions\/v1\/poker-api/);
   assert.match(staticMultiplayer, /rangecraft\.multiplayer\.guest-token/);
