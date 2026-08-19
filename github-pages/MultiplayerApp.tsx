@@ -64,14 +64,19 @@ const request: MultiplayerRequest = async <T,>(
   if (operation === "getAccount" && !token) return { account: null } as T;
   if (operation !== "register" && !token) throw new Error("请先输入牌桌昵称。");
 
-  const response = await fetch(API_URL, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(edgeAction(operation, payload)),
-  });
+  let response: Response;
+  try {
+    response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(edgeAction(operation, payload)),
+    });
+  } catch {
+    throw new Error("无法连接在线牌桌服务。若已开启代理，请将 *.supabase.co 设为直连后重试。");
+  }
   const body = (await response.json().catch(() => ({}))) as T & ApiErrorBody & { token?: string };
   if (!response.ok) {
     if (response.status === 401) clearToken();
