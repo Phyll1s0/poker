@@ -73,6 +73,9 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /赢家手牌/);
   assert.match(multiplayerClient, /function WinningHands/);
   assert.match(multiplayerClient, /手牌未公开/);
+  assert.match(multiplayerClient, /粘贴邀请码/);
+  assert.match(multiplayerClient, /复制邀请码/);
+  assert.doesNotMatch(multiplayerClient, /这是其他玩家唯一能看到的信息/);
   assert.match(staticMultiplayer, /supabase\.co\/functions\/v1\/poker-api/);
   assert.match(staticMultiplayer, /rangecraft\.multiplayer\.guest-token/);
   assert.match(page, /choosePokerPolicyAction/);

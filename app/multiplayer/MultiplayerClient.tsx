@@ -418,10 +418,30 @@ export default function MultiplayerClient({
     await loadRooms();
   };
 
-  const copyCode = async () => {
-    if (!snapshot) return;
-    await navigator.clipboard?.writeText(snapshot.room.joinCode).catch(() => undefined);
-    setNotice(`邀请码 ${snapshot.room.joinCode} 已复制。`);
+  const copyJoinCode = async (code: string) => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(code);
+      setError(null);
+      setNotice(`邀请码 ${code} 已复制。`);
+    } catch {
+      setError(`无法自动复制，请手动复制邀请码：${code}`);
+    }
+  };
+
+  const pasteJoinCode = async () => {
+    try {
+      if (!navigator.clipboard?.readText) throw new Error("Clipboard unavailable");
+      const code = (await navigator.clipboard.readText())
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, "")
+        .slice(0, 8);
+      setJoinCode(code);
+      setError(null);
+      setNotice(code ? "邀请码已粘贴。" : "剪贴板里没有邀请码。");
+    } catch {
+      setError("浏览器没有允许读取剪贴板，请点输入框后直接粘贴邀请码。");
+    }
   };
 
   const selfPlayer = useMemo(() => snapshot?.players.find((player) => player.accountId === snapshot.selfAccountId) ?? null, [snapshot]);
@@ -454,7 +474,7 @@ export default function MultiplayerClient({
 
       <main className={styles.main}>
         {error && <p className={styles.errorBox} role="alert">{error}</p>}
-        {notice && <p className={styles.noticeBox}>{notice}</p>}
+        {notice && <p className={styles.noticeBox} role="status">{notice}</p>}
 
         {account === undefined && (
           <section className={styles.loadingPanel}>
@@ -467,9 +487,6 @@ export default function MultiplayerClient({
           <section className={styles.setupCard}>
             <p className={styles.eyebrow}>FIRST SEAT · CREATE PROFILE</p>
             <h1>给牌桌上的自己取个名字</h1>
-            <p className={styles.setupLead}>
-              这是其他玩家唯一能看到的信息。不需要邮箱、密码或注册账户。
-            </p>
             <form className={styles.setupForm} onSubmit={submitAccount}>
               <div className={styles.field}>
                 <label htmlFor="handle">公开昵称</label>
@@ -525,9 +542,12 @@ export default function MultiplayerClient({
                 <form className={styles.joinForm} onSubmit={joinRoom}>
                   <div className={styles.field}>
                     <label htmlFor="join-code">8 位邀请码</label>
-                    <input id="join-code" value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} maxLength={8} autoCapitalize="characters" placeholder="AB12CDEF" required />
+                    <input id="join-code" value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8))} maxLength={8} autoCapitalize="characters" placeholder="AB12CDEF" required />
                   </div>
-                  <button className={styles.secondaryButton} type="submit" disabled={busy}>加入</button>
+                  <div className={styles.joinActions}>
+                    <button className={styles.secondaryButton} type="button" onClick={() => void pasteJoinCode()} disabled={busy}>粘贴邀请码</button>
+                    <button className={styles.secondaryButton} type="submit" disabled={busy}>加入</button>
+                  </div>
                 </form>
               </section>
             </div>
@@ -545,7 +565,10 @@ export default function MultiplayerClient({
                         <strong>{room.name}</strong>
                         <small>{room.memberCount}/{room.maxPlayers} 人 · {room.status === "lobby" ? "等待开局" : "牌局进行中"} · {room.joinCode}</small>
                       </div>
-                      <button className={styles.secondaryButton} type="button" onClick={() => void loadRoom(room.id)}>进入</button>
+                      <div className={styles.roomActions}>
+                        <button className={styles.secondaryButton} type="button" onClick={() => void copyJoinCode(room.joinCode)}>复制邀请码</button>
+                        <button className={styles.secondaryButton} type="button" onClick={() => void loadRoom(room.id)}>进入</button>
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -562,7 +585,7 @@ export default function MultiplayerClient({
                 <h1>{snapshot.room.name}</h1>
               </div>
               <div className={styles.roomMeta}>
-                <button className={styles.codePill} type="button" onClick={copyCode}>邀请码 {snapshot.room.joinCode}</button>
+                <button className={styles.codePill} type="button" onClick={() => void copyJoinCode(snapshot.room.joinCode)} aria-label={`复制邀请码 ${snapshot.room.joinCode}`}>复制邀请码 · {snapshot.room.joinCode}</button>
                 <span className={styles.statusPill}>{snapshot.players.length}/{snapshot.room.maxPlayers} 人</span>
                 <button className={styles.dangerButton} type="button" onClick={() => void leaveRoom()} disabled={busy || !canLeave} title={canLeave ? "离开房间" : "本手结束后才能离开"}>离开</button>
               </div>

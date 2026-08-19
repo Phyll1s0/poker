@@ -398,6 +398,17 @@
   gap: 12px;
 }
 
+.joinActions,
+.roomActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.joinActions .secondaryButton {
+  white-space: nowrap;
+}
+
 .roomList {
   margin: 0;
   padding: 0;
@@ -866,6 +877,11 @@
   .panel { padding: 17px; }
   .createForm,
   .joinForm { grid-template-columns: 1fr; }
+  .joinActions,
+  .roomActions { width: 100%; }
+  .joinActions > button,
+  .roomActions > button { flex: 1; }
+  .roomRow { align-items: flex-start; flex-direction: column; }
   .pokerTable { min-height: 620px; margin-inline: -6px; border-width: 8px; border-radius: 28% / 40%; }
   .seat { width: 112px; min-height: 82px; padding: 8px; }
   .seat0 { top: 92%; }
