@@ -42,7 +42,7 @@ test("server-renders the RangeCraft landing page before mounting a poker table",
 });
 
 test("keeps the multiplayer and strategy boundaries with product metadata", async () => {
-  const [page, globalsCss, multiplayerClient, multiplayerCss, staticMultiplayer, edgeFunction, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, packageJson] = await Promise.all([
+  const [page, globalsCss, multiplayerClient, multiplayerCss, staticMultiplayer, edgeFunction, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, history, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/multiplayer/MultiplayerClient.tsx", import.meta.url), "utf8"),
@@ -58,6 +58,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
     readFile(new URL("../scripts/ai-self-play.mjs", import.meta.url), "utf8"),
     readFile(new URL("../public/sw.js", import.meta.url), "utf8"),
     readFile(new URL("../github-pages/index.html", import.meta.url), "utf8"),
+    readFile(new URL("../lib/poker-history.ts", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
@@ -102,6 +103,20 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /game\.status !== "showdown" \|\| !game\.showChoiceMade/);
   assert.match(page, /pokerPrivatePeekCandidateIds\(game\.players, game\.shownPlayerIds\)/);
   assert.match(page, /PrivatePeekOpportunity game=\{game\} onPeek=\{choosePrivatePeek\}/);
+  assert.match(page, /最近 30 手牌谱与回放/);
+  assert.match(page, /所有电脑底牌已在赛后记录中公开/);
+  assert.match(page, /setSealedRunHistory/);
+  assert.match(page, /sessionEnded && sealedRunHistory\.length/);
+  assert.match(page, /pokerReplayEventsAtStep\(selectedHistory, replayStep\)/);
+  assert.match(page, /本轮结束后解锁完整牌谱/);
+  assert.match(page, /window\.localStorage\.setItem\(POKER_HAND_HISTORY_STORAGE_KEY/);
+  assert.match(globalsCss, /\.hand-history-modal/);
+  assert.match(globalsCss, /\.hand-history-players/);
+  assert.match(history, /POKER_HAND_HISTORY_LIMIT = 30/);
+  assert.match(history, /rangecraft\.solo-hand-history\.v1/);
+  assert.match(history, /function buildPokerReplayEvents/);
+  assert.match(history, /function parsePokerHandHistoryJson/);
+  assert.doesNotMatch(multiplayerClient, /poker-history|PokerHandHistoryEntry|完整牌谱/);
   assert.match(page, /setInstallHelpOpen\(true\)/);
   assert.match(page, /ChatGPT \/ 微信等内置浏览器/);
   assert.doesNotMatch(page, /if \(!installPrompt\) \{\s*setInfoOpen\(true\)/);

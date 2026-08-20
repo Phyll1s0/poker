@@ -40,6 +40,17 @@ import {
   upsertPokerRunHand,
 } from "../lib/poker-run";
 import { pokerPrivatePeekCandidateIds, selectPokerPrivatePeek } from "../lib/poker-peek";
+import {
+  POKER_HAND_HISTORY_LIMIT,
+  POKER_HAND_HISTORY_STORAGE_KEY,
+  buildPokerReplayEvents,
+  mergePokerHandHistory,
+  parsePokerHandHistoryJson,
+  pokerReplayEventsAtStep,
+  upsertPokerHandHistory,
+  type PokerHandHistoryEntry,
+  type PokerHistoryAction,
+} from "../lib/poker-history";
 import { settlePokerShowdown } from "../lib/poker-settlement";
 import { resolveNextCashGameBankrolls, resolvePokerDecisionStacks } from "../lib/poker-stack";
 import {
@@ -1215,6 +1226,81 @@ function buildSessionHandResult(game: Game, review: Review[]): SessionHandResult
   };
 }
 
+function createSoloHistoryRunId() {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  return `solo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function fallbackHistoryActionText(action: PublicBettingAction, playerName: string) {
+  if (action.kind === "fold") return `${playerName} 弃牌`;
+  if (action.kind === "check") return `${playerName} 过牌`;
+  if (action.kind === "call") return `${playerName} ${action.isAllIn ? "全下跟注" : "跟注"} ${action.amount}`;
+  return `${playerName} ${action.isAllIn ? "全下加注" : "加注"} · 本次投入 ${action.amount}`;
+}
+
+function buildSoloHandHistoryEntry(game: Game, mode: GameMode, runId: string): PokerHandHistoryEntry {
+  const chronologicalLog = [...game.log].reverse();
+  const actionLines = chronologicalLog.filter((line) => (
+    / (?:弃牌|过牌|跟注|加注至|全下至|全下跟注|不足额全下)(?: |$)/.test(line)
+  ));
+  const actions: PokerHistoryAction[] = game.actionHistory.map((action, index) => ({
+    playerId: action.playerId,
+    street: action.street,
+    kind: action.kind,
+    amount: action.amount,
+    toCall: action.toCall,
+    stackBefore: action.stackBefore,
+    potBefore: action.potBefore,
+    isAllIn: action.isAllIn,
+    description: actionLines[index] ?? fallbackHistoryActionText(action, game.players[action.playerId]?.name ?? `座位 ${action.playerId + 1}`),
+  }));
+  const returned = game.returns.reduce((sum, entry) => sum + entry.amount, 0);
+  const payoutTotal = game.payouts.reduce((sum, entry) => sum + entry.amount, 0);
+  const contributed = game.players.reduce((sum, player) => sum + player.contributed, 0);
+  return {
+    id: `${runId}:${game.handNo}`,
+    runId,
+    hand: game.handNo,
+    completedAt: Date.now(),
+    mode,
+    presetKey: game.presetKey,
+    result: game.result,
+    finalStreet: game.street,
+    totalPot: payoutTotal || Math.max(0, contributed - returned),
+    board: game.community.map((card) => ({ ...card })),
+    dealer: game.dealer,
+    winnerIds: [...game.winnerIds],
+    mainPotWinnerIds: [...game.mainPotWinnerIds],
+    payouts: game.payouts.map((entry) => ({ ...entry })),
+    returns: game.returns.map((entry) => ({ ...entry })),
+    players: game.players.map((player) => ({
+      id: player.id,
+      name: player.name,
+      monogram: player.monogram,
+      hole: player.hole.map((card) => ({ ...card })),
+      folded: player.folded,
+      contributed: player.contributed,
+      stack: player.stack,
+      isHuman: player.isHuman,
+    })),
+    actions,
+    log: chronologicalLog,
+  };
+}
+
+function historySeatRole(playerId: number, dealer: number, playerCount: number) {
+  if (playerId === dealer) return "D";
+  if (playerId === (dealer + 1) % playerCount) return "SB";
+  if (playerId === (dealer + 2) % playerCount) return "BB";
+  return "";
+}
+
+function historyModeLabel(mode: GameMode) {
+  if (mode === "session") return "20 手整局";
+  if (mode === "endless") return "无尽对局";
+  return "逐手训练";
+}
+
 function PlayingCard({ card, ghost = false, dealDelay }: { card?: Card; ghost?: boolean; dealDelay?: number }) {
   if (!card) return <div className={ghost ? "card card-ghost" : "card card-back"}><span>♠</span></div>;
   const red = card.suit === "♥" || card.suit === "♦";
@@ -1491,6 +1577,13 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   const [sessionResults, setSessionResults] = useState<SessionHandResult[]>([]);
   const [runDecisionStats, setRunDecisionStats] = useState(createPokerRunDecisionStats);
   const [heroImage, setHeroImage] = useState<TableImage>({ loose: 0.5, aggressive: 0.5, deceptive: 0.5, observations: 0 });
+  const [handHistory, setHandHistory] = useState<PokerHandHistoryEntry[]>([]);
+  const [sealedRunHistory, setSealedRunHistory] = useState<PokerHandHistoryEntry[]>([]);
+  const [historyHydrated, setHistoryHydrated] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
+  const [replayStep, setReplayStep] = useState(0);
+  const [replayPlaying, setReplayPlaying] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
   const [appInstalled, setAppInstalled] = useState(() => typeof window !== "undefined" && (
     window.matchMedia("(display-mode: standalone)").matches
@@ -1499,6 +1592,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   const winSoundHand = useRef(0);
   const observedShowdownImageHand = useRef(0);
   const soundOnRef = useRef(true);
+  const historyRunId = useRef(createSoloHistoryRunId());
 
   useEffect(() => {
     if ("serviceWorker" in navigator) {
@@ -1521,6 +1615,32 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       window.removeEventListener("appinstalled", markInstalled);
     };
   }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setHandHistory(parsePokerHandHistoryJson(window.localStorage.getItem(POKER_HAND_HISTORY_STORAGE_KEY)));
+      setHistoryHydrated(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!historyHydrated) return;
+    try {
+      window.localStorage.setItem(POKER_HAND_HISTORY_STORAGE_KEY, JSON.stringify(handHistory));
+    } catch {
+      // The trainer still works if browser storage is disabled or full.
+    }
+  }, [handHistory, historyHydrated]);
+
+  useEffect(() => {
+    if (!sessionEnded || sealedRunHistory.length === 0) return;
+    const timer = window.setTimeout(() => {
+      setHandHistory((entries) => mergePokerHandHistory(entries, sealedRunHistory));
+      setSealedRunHistory([]);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [sessionEnded, sealedRunHistory]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setGame(freshGame(undefined, { shuffleStyles: true, presetKey: "standard" })), 0);
@@ -1584,10 +1704,24 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     setSessionResults((items) => upsertPokerRunHand(items, entry, POKER_RUN_HAND_HISTORY_LIMIT));
   }, [mode, review]);
 
+  const recordSoloHandHistory = useCallback((finishedGame: Game) => {
+    if (finishedGame.status !== "showdown" || !finishedGame.showChoiceMade) return;
+    const entry = buildSoloHandHistoryEntry(finishedGame, mode, historyRunId.current);
+    if (mode === "per_hand") {
+      setHandHistory((items) => upsertPokerHandHistory(items, entry));
+    } else {
+      // Full hole cards for review runs stay in memory until the run is over.
+      // A refresh therefore cannot turn an unfinished 20-hand/endless run into
+      // an unlocked per-hand record.
+      setSealedRunHistory((items) => upsertPokerHandHistory(items, entry));
+    }
+  }, [mode]);
+
   useEffect(() => {
     if (game?.status === "showdown" && !dealing) {
       const timer = window.setTimeout(() => {
         recordRunHand(game);
+        if (game.showChoiceMade) recordSoloHandHistory(game);
         if (mode === "per_hand" && game.showChoiceMade) setShowLog(true);
         if (mode === "session" && isSessionComplete(game) && game.showChoiceMade) {
           setSessionEnded(true);
@@ -1600,7 +1734,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       }, 0);
       return () => window.clearTimeout(timer);
     }
-  }, [game, dealing, mode, recordRunHand]);
+  }, [game, dealing, mode, recordRunHand, recordSoloHandHistory]);
 
   useEffect(() => {
     if (
@@ -1650,21 +1784,25 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
 
   const startNextHand = useCallback(() => {
     if (!pokerRunCanStartNextHand(mode, sessionEnded, game ? isSessionComplete(game) : false)) return;
-    if (game) recordRunHand(game);
+    if (game) {
+      recordRunHand(game);
+      recordSoloHandHistory(game);
+    }
     setFeedback(null);
     setShowLog(false);
     setGame((current) => freshGame(current ?? undefined, {
       resetStacks: false,
       shuffleStyles: false,
     }));
-  }, [mode, sessionEnded, game, recordRunHand]);
+  }, [mode, sessionEnded, game, recordRunHand, recordSoloHandHistory]);
 
   const finishEndlessRun = useCallback(() => {
     if (mode !== "endless" || !game || game.status !== "showdown" || !game.showChoiceMade || sessionEnded) return;
     recordRunHand(game);
+    recordSoloHandHistory(game);
     setSessionEnded(true);
     setShowLog(true);
-  }, [mode, game, sessionEnded, recordRunHand]);
+  }, [mode, game, sessionEnded, recordRunHand, recordSoloHandHistory]);
 
   const resetRun = useCallback((nextMode: GameMode, nextPreset: TablePresetKey) => {
     setMode(nextMode);
@@ -1674,12 +1812,18 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     setShowLog(false);
     setSessionEnded(false);
     setSessionResults([]);
+    setSealedRunHistory([]);
+    setHistoryOpen(false);
+    setSelectedHistoryId(null);
+    setReplayPlaying(false);
+    setReplayStep(0);
     setRunDecisionStats(createPokerRunDecisionStats());
     setHeroImage({ loose: 0.5, aggressive: 0.5, deceptive: 0.5, observations: 0 });
     setDealing(false);
     setRaiseTo(BIG_BLIND * 3);
     winSoundHand.current = 0;
     observedShowdownImageHand.current = 0;
+    historyRunId.current = createSoloHistoryRunId();
     setGame(freshGame(undefined, { shuffleStyles: true, presetKey: nextPreset }));
   }, []);
 
@@ -1838,8 +1982,68 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     setInstallPrompt(null);
   }, [installPrompt]);
 
+  const availableHandHistory = useMemo(() => (
+    sessionEnded && sealedRunHistory.length
+      ? mergePokerHandHistory(handHistory, sealedRunHistory)
+      : handHistory
+  ), [handHistory, sealedRunHistory, sessionEnded]);
+  const selectedHistory = useMemo(() => (
+    availableHandHistory.find((entry) => entry.id === selectedHistoryId) ?? availableHandHistory[0] ?? null
+  ), [availableHandHistory, selectedHistoryId]);
+  const historyReviewUnlocked = mode === "per_hand"
+    ? Boolean(game && game.status === "showdown" && !dealing && game.showChoiceMade)
+    : sessionEnded;
+  const historyAccessUnlocked = availableHandHistory.length > 0 && historyReviewUnlocked;
+  const replayState = useMemo(() => (
+    selectedHistory ? pokerReplayEventsAtStep(selectedHistory, replayStep) : null
+  ), [selectedHistory, replayStep]);
+  const replayEventCount = replayState?.events.length ?? 0;
+
+  const selectHistoryHand = useCallback((entry: PokerHandHistoryEntry) => {
+    setSelectedHistoryId(entry.id);
+    setReplayPlaying(false);
+    setReplayStep(Math.max(0, buildPokerReplayEvents(entry).length - 1));
+  }, []);
+
+  const openHandHistory = useCallback((entryId?: string) => {
+    if (!historyAccessUnlocked) return;
+    const entry = availableHandHistory.find((item) => item.id === entryId) ?? availableHandHistory[0];
+    if (!entry) return;
+    selectHistoryHand(entry);
+    setHistoryOpen(true);
+  }, [availableHandHistory, historyAccessUnlocked, selectHistoryHand]);
+
+  const closeHandHistory = useCallback(() => {
+    setHistoryOpen(false);
+    setReplayPlaying(false);
+  }, []);
+
+  useEffect(() => {
+    if (!historyOpen || !replayPlaying || replayEventCount <= 0) return;
+    const timer = window.setTimeout(() => {
+      setReplayStep((step) => {
+        if (step >= replayEventCount - 1) {
+          setReplayPlaying(false);
+          return step;
+        }
+        return step + 1;
+      });
+    }, 850);
+    return () => window.clearTimeout(timer);
+  }, [historyOpen, replayPlaying, replayEventCount, replayStep]);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeHandHistory();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [closeHandHistory, historyOpen]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (historyOpen) return;
       const targetTag = (event.target as HTMLElement)?.tagName;
       if (targetTag === "INPUT" || targetTag === "SELECT") return;
       const key = event.key.toLowerCase();
@@ -1856,7 +2060,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [game, dealing, isHumanTurn, toCall, raiseDisabled, handleAction, startNextHand, mode]);
+  }, [game, dealing, isHumanTurn, toCall, raiseDisabled, handleAction, startNextHand, mode, historyOpen]);
 
   if (!game || !human) {
     return (
@@ -1874,7 +2078,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     : "—";
   const handReview = review.filter((item) => item.hand === game.handNo);
   const handScore = handReview.length ? Math.round(handReview.reduce((sum, item) => sum + item.score, 0) / handReview.length) : "—";
-  const reviewUnlocked = mode === "per_hand" ? handFinished && game.showChoiceMade : sessionEnded;
+  const reviewUnlocked = historyReviewUnlocked;
   const reportReview = [...(mode === "per_hand" ? handReview : review)].reverse();
   const reportScore = mode === "per_hand" ? handScore : sessionScore;
   const completedHands = isReviewRun
@@ -1921,6 +2125,18 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
             : mode === "endless" ? `无尽对局 · 第 ${game.handNo} 手` : `第 ${game.handNo} 手`}</span>
         </div>
         <div className="header-actions">
+          <button
+            className="hand-history-button"
+            type="button"
+            onClick={() => openHandHistory()}
+            disabled={!historyAccessUnlocked}
+            title={!historyReviewUnlocked
+              ? mode === "per_hand" ? "本手结束后可查看完整牌谱" : "本轮结束后解锁完整牌谱"
+              : availableHandHistory.length === 0 ? "完成一手后开始记录" : "查看本地最近 30 手牌谱"}
+            aria-label={historyAccessUnlocked ? `查看最近 ${availableHandHistory.length} 手牌谱` : "牌谱尚未解锁"}
+          >
+            <span>↺</span><b>牌谱</b><em>{availableHandHistory.length}/{POKER_HAND_HISTORY_LIMIT}</em>
+          </button>
           {!appInstalled && (
             <button className="install-app-button" onClick={() => void installApp()} aria-label="把 RangeCraft 安装到桌面">
               <span>↓</span><b>安装应用</b>
@@ -2338,6 +2554,144 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
         </aside>
       </div>
 
+      {historyOpen && selectedHistory && replayState && (
+        <div className="modal-backdrop">
+          <section className="hand-history-modal" role="dialog" aria-modal="true" aria-labelledby="hand-history-title">
+            <button className="modal-close" onClick={closeHandHistory} aria-label="关闭牌谱">×</button>
+            <header className="hand-history-heading">
+              <div>
+                <span>LOCAL HAND HISTORY · LAST {POKER_HAND_HISTORY_LIMIT}</span>
+                <h2 id="hand-history-title">最近 30 手牌谱与回放</h2>
+              </div>
+              <p>所有底牌只来自已结束的本地单人牌局；20 手整局和无尽模式会在本轮结束后一次性解锁并写入浏览器。</p>
+            </header>
+            <div className="hand-history-layout">
+              <nav className="hand-history-sidebar" aria-label="最近牌谱列表">
+                <div><span>由新到旧</span><small>{availableHandHistory.length}/{POKER_HAND_HISTORY_LIMIT} 手</small></div>
+                <div className="hand-history-list">
+                  {availableHandHistory.map((entry) => {
+                    const heroCards = entry.players.find((player) => player.isHuman)?.hole.map(cardText).join(" ") ?? "—";
+                    return (
+                      <button
+                        className={entry.id === selectedHistory.id ? "active" : ""}
+                        type="button"
+                        key={entry.id}
+                        onClick={() => selectHistoryHand(entry)}
+                        aria-pressed={entry.id === selectedHistory.id}
+                      >
+                        <strong>#{entry.hand}</strong>
+                        <span>{heroCards} · {historyModeLabel(entry.mode)}</span>
+                        <small>{new Date(entry.completedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</small>
+                        <em>{entry.result}</em>
+                      </button>
+                    );
+                  })}
+                </div>
+              </nav>
+
+              <article className="hand-history-detail">
+                <header className="hand-history-detail-head">
+                  <div>
+                    <small>{historyModeLabel(selectedHistory.mode)} · {TABLE_PRESETS[selectedHistory.presetKey].shortLabel} · 第 {selectedHistory.hand} 手</small>
+                    <h3>{selectedHistory.result}</h3>
+                    <p>{new Date(selectedHistory.completedAt).toLocaleString("zh-CN")} · 所有电脑底牌已在赛后记录中公开</p>
+                  </div>
+                  <div className="hand-history-pot"><span>争夺底池</span><strong>{selectedHistory.totalPot}</strong></div>
+                </header>
+
+                <section className="hand-history-board" aria-label="回放公共牌">
+                  <div className="hand-history-board-copy">
+                    <span>{STREET_LABELS[replayState.current.street]}</span>
+                    <strong>公共牌 {replayState.boardCount}/5</strong>
+                    <em>第 {replayState.currentStep + 1}/{replayState.events.length} 步</em>
+                  </div>
+                  <div className="hand-history-board-cards">
+                    {[0, 1, 2, 3, 4].map((index) => (
+                      <PlayingCard
+                        key={`${selectedHistory.id}-board-${index}`}
+                        card={index < replayState.boardCount ? selectedHistory.board[index] : undefined}
+                        ghost={index >= replayState.boardCount}
+                      />
+                    ))}
+                  </div>
+                </section>
+
+                <section className="hand-history-players" aria-label="本手所有玩家底牌">
+                  {selectedHistory.players.map((player) => {
+                    const payout = selectedHistory.payouts.find((entry) => entry.playerId === player.id)?.amount ?? 0;
+                    const returned = selectedHistory.returns.find((entry) => entry.playerId === player.id)?.amount ?? 0;
+                    const winner = selectedHistory.winnerIds.includes(player.id);
+                    const mainPotWinner = selectedHistory.mainPotWinnerIds.includes(player.id);
+                    const role = historySeatRole(player.id, selectedHistory.dealer, selectedHistory.players.length);
+                    const completeCards = [...player.hole, ...selectedHistory.board];
+                    const finalHand = completeCards.length >= 5 ? bestHand(completeCards).name : "翻牌前手牌";
+                    return (
+                      <article className={`hand-history-player ${winner ? "is-winner" : ""} ${player.folded ? "is-folded" : ""}`} key={player.id}>
+                        <div className="hand-history-player-copy">
+                          <span>{player.isHuman ? "HERO" : `SEAT ${player.id + 1}`}{role ? ` · ${role}` : ""}</span>
+                          <strong>{player.name}</strong>
+                          <em>{winner ? mainPotWinner ? "主池赢家" : "边池赢家" : player.folded ? "已弃牌" : "摊牌未胜"} · {finalHand}</em>
+                        </div>
+                        <div className="hand-history-hole" aria-label={`${player.name} 的完整底牌`}>
+                          {player.hole.map((card) => <PlayingCard key={cardKey(card)} card={card} />)}
+                        </div>
+                        <div className="hand-history-player-stats">
+                          <span>投入 {player.contributed}</span>
+                          {payout > 0 && <span>赢得 {payout}</span>}
+                          {returned > 0 && <span>退回 {returned}</span>}
+                          <span>终局筹码 {player.stack}</span>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </section>
+
+                <section className="hand-history-replay" aria-label="牌局逐步回放">
+                  <div className="hand-history-controls">
+                    <div><span>回放进度</span><strong>{replayState.currentStep + 1}/{replayState.events.length}</strong></div>
+                    <i><em style={{ width: `${(replayState.currentStep + 1) / Math.max(1, replayState.events.length) * 100}%` }} /></i>
+                    <div className="hand-history-control-buttons">
+                      <button
+                        type="button"
+                        onClick={() => { setReplayStep(0); setReplayPlaying(true); }}
+                        title="从头自动回放"
+                      >从头</button>
+                      <button type="button" onClick={() => { setReplayPlaying(false); setReplayStep((step) => Math.max(0, step - 1)); }} disabled={replayState.currentStep === 0}>上一步</button>
+                      <button
+                        className="primary"
+                        type="button"
+                        onClick={() => {
+                          if (replayPlaying) {
+                            setReplayPlaying(false);
+                            return;
+                          }
+                          if (replayState.currentStep >= replayState.events.length - 1) setReplayStep(0);
+                          setReplayPlaying(true);
+                        }}
+                      >{replayPlaying ? "暂停" : "播放"}</button>
+                      <button type="button" onClick={() => { setReplayPlaying(false); setReplayStep((step) => Math.min(replayState.events.length - 1, step + 1)); }} disabled={replayState.currentStep >= replayState.events.length - 1}>下一步</button>
+                    </div>
+                  </div>
+                  <div className="hand-history-timeline">
+                    <div className="hand-history-current-event">
+                      <span>{STREET_LABELS[replayState.current.street]} · {replayState.current.kind === "deal" ? "发牌" : replayState.current.kind === "result" ? "结算" : "行动"}</span>
+                      <strong>{replayState.current.text}</strong>
+                    </div>
+                    <div className="hand-history-event-list">
+                      {replayState.visible.map((event, index) => (
+                        <div className={index === replayState.currentStep ? "active" : ""} key={event.id}>
+                          <time>{String(index + 1).padStart(2, "0")}</time><span>{event.text}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </section>
+              </article>
+            </div>
+          </section>
+        </div>
+      )}
+
       {infoOpen && (
         <div className="modal-backdrop">
           <section className="info-modal" role="dialog" aria-modal="true" aria-labelledby="info-title">
@@ -2347,7 +2701,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
             <p>翻前先查询六人桌 169 手牌基准表，再按位置、前序行动、尺度与筹码深度修正；翻后综合对行动加权范围的估算权益、直接赔率、权益实现、SPR、牌面纹理、听牌与阻断牌，连续生成动作和条件尺度混合。电脑、实时建议与复盘共用同一策略；评分是频率匹配度，不是求解器计算出的精确 EV 损失。</p>
             <div className="modal-grid">
               <div><b>四种桌型</b><span>初始买入分别为浅筹 40 BB、标准 100 BB、深筹 200 BB，以及 200 BB 的血战鱿鱼；之后筹码跨手延续，每手策略按实际起始有效筹码计算。</span></div>
-              <div><b>三种训练</b><span>逐手模式每手即时点评；常规整局固定 20 手；无尽模式持续保留筹码、对手和玩家画像，主动结束后统计累计收益与 BB/100。鱿鱼以 9 条全部发完为终点。任一玩家低于 1 BB 时，下一手按现金桌规则自动补回桌型基准。</span></div>
+              <div><b>三种训练</b><span>逐手模式每手即时点评；常规整局固定 20 手；无尽模式持续保留筹码、对手和玩家画像，主动结束后统计累计收益与 BB/100。鱿鱼以 9 条全部发完为终点。任一玩家低于 1 BB 时，下一手按现金桌规则自动补回桌型基准。浏览器只保留最近 30 手牌谱，整局与无尽对局结束后才解锁全部底牌回放。</span></div>
               <div><b>血战鱿鱼</b><span>六人桌争夺 9 条；3/5/7 条触发 ×2/×3/×4。无人跟注时亮牌才获得。</span></div>
               <div><b>完整 GTO 的边界</b><span>任意 6 人动态牌局需要预计算策略库或外部求解服务；现有传输接口可在后续接入。</span></div>
               <div><b>形象博弈</b><span>你和 AI 都可选择亮牌或盖牌；所有电脑都会用公开信息形成对你的松紧、侵略性与欺骗性判断，无尽模式下会随样本增加持续反制，同时保留各自风格。</span></div>

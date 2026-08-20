@@ -255,6 +255,23 @@ button { color: inherit; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green-bright); box-shadow: 0 0 10px var(--green-bright); }
 
 .header-actions { justify-self: end; display: flex; align-items: center; gap: 10px; }
+.hand-history-button {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid rgba(216,183,116,.24);
+  border-radius: 6px;
+  background: rgba(216,183,116,.055);
+  color: #bdb39e;
+  cursor: pointer;
+}
+.hand-history-button:hover:not(:disabled) { border-color: rgba(216,183,116,.46); background: rgba(216,183,116,.1); color: #e3d7bd; }
+.hand-history-button:disabled { opacity: .38; cursor: not-allowed; }
+.hand-history-button span { color: var(--gold); font: 15px/1 Georgia, serif; }
+.hand-history-button b { font-size: 9px; font-weight: 600; }
+.hand-history-button em { color: #777b75; font-size: 7px; font-style: normal; letter-spacing: .08em; }
 .install-app-button {
   height: 34px;
   display: flex;
@@ -1002,6 +1019,86 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
 .coach-footer button:hover { color: #b7b5ae; }
 
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-content: center; padding: 24px; background: rgba(5,8,7,.78); backdrop-filter: blur(12px); }
+.hand-history-modal {
+  width: min(1080px, calc(100vw - 48px));
+  height: min(780px, calc(100vh - 48px));
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(216,183,116,.24);
+  background: #141816;
+  box-shadow: 0 40px 110px rgba(0,0,0,.72);
+}
+.hand-history-heading { min-height: 82px; padding: 20px 60px 18px 24px; display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); }
+.hand-history-heading > div { display: flex; flex-direction: column; gap: 6px; }
+.hand-history-heading span { color: var(--gold); font-size: 8px; letter-spacing: .18em; }
+.hand-history-heading h2 { margin: 0; color: #e7e2d7; font: 500 24px/1 Georgia, serif; }
+.hand-history-heading p { max-width: 440px; margin: 0; color: #6f746f; font-size: 9px; line-height: 1.55; text-align: right; }
+.hand-history-layout { min-height: 0; flex: 1; display: grid; grid-template-columns: 250px minmax(0, 1fr); }
+.hand-history-sidebar { min-height: 0; padding: 17px 12px; display: flex; flex-direction: column; gap: 12px; border-right: 1px solid var(--line); background: rgba(7,10,9,.24); }
+.hand-history-sidebar > div:first-child { padding: 0 5px; display: flex; align-items: center; justify-content: space-between; }
+.hand-history-sidebar > div:first-child span { color: #aaa69d; font-size: 9px; }
+.hand-history-sidebar > div:first-child small { color: #585d58; font-size: 7px; }
+.hand-history-list { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; scrollbar-width: thin; }
+.hand-history-list button { width: 100%; min-height: 72px; padding: 10px; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 4px 8px; border: 1px solid rgba(255,255,255,.055); border-radius: 5px; background: rgba(255,255,255,.015); color: #8f938d; cursor: pointer; text-align: left; }
+.hand-history-list button:hover { border-color: rgba(216,183,116,.2); background: rgba(216,183,116,.035); }
+.hand-history-list button.active { border-color: rgba(101,198,159,.28); background: rgba(101,198,159,.065); }
+.hand-history-list button > strong { grid-row: 1 / 3; align-self: center; color: var(--gold); font: 500 14px/1 Georgia, serif; }
+.hand-history-list button > span { overflow: hidden; color: #c3c0b7; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.hand-history-list button > small { color: #646964; font-size: 7px; }
+.hand-history-list button > em { grid-column: 1 / -1; overflow: hidden; color: #777c76; font-size: 7px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.hand-history-detail { min-width: 0; min-height: 0; padding: 20px 22px 24px; overflow-y: auto; scrollbar-width: thin; }
+.hand-history-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.hand-history-detail-head > div:first-child { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.hand-history-detail-head small { color: var(--gold); font-size: 7px; letter-spacing: .12em; }
+.hand-history-detail-head h3 { margin: 0; overflow: hidden; color: #e0dbd0; font: 500 18px/1.3 Georgia, serif; text-overflow: ellipsis; white-space: nowrap; }
+.hand-history-detail-head p { margin: 0; color: #6b706b; font-size: 8px; }
+.hand-history-pot { flex: 0 0 auto; padding: 10px 13px; display: flex; flex-direction: column; gap: 4px; border: 1px solid rgba(216,183,116,.16); border-radius: 5px; text-align: right; }
+.hand-history-pot span { color: #6f746e; font-size: 7px; }
+.hand-history-pot strong { color: var(--gold); font: 500 18px/1 Georgia, serif; }
+.hand-history-board { margin-top: 17px; padding: 14px 15px; display: grid; grid-template-columns: 100px minmax(0, 1fr); align-items: center; gap: 14px; border: 1px solid var(--line); border-radius: 6px; background: radial-gradient(circle at 55% 50%, rgba(28,91,70,.24), rgba(5,12,10,.12)); }
+.hand-history-board-copy { display: flex; flex-direction: column; gap: 5px; }
+.hand-history-board-copy span { color: #747974; font-size: 7px; }
+.hand-history-board-copy strong { color: #d2cec4; font: 500 12px/1 Georgia, serif; }
+.hand-history-board-copy em { color: #5e635e; font-size: 7px; font-style: normal; }
+.hand-history-board-cards { min-height: 58px; display: flex; align-items: center; gap: 6px; }
+.hand-history-modal .hand-history-board-cards .card { width: 40px; border-radius: 4px; }
+.hand-history-modal .hand-history-board-cards .card-rank { font-size: 16px; }
+.hand-history-modal .hand-history-board-cards .card-suit { font-size: 19px; }
+.hand-history-players { margin-top: 12px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.hand-history-player { min-width: 0; min-height: 112px; padding: 11px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; border: 1px solid rgba(255,255,255,.06); border-radius: 5px; background: rgba(255,255,255,.018); }
+.hand-history-player.is-winner { border-color: rgba(101,198,159,.28); background: rgba(101,198,159,.045); }
+.hand-history-player.is-folded { opacity: .72; }
+.hand-history-player-copy { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.hand-history-player-copy > span { color: var(--gold); font-size: 7px; letter-spacing: .08em; }
+.hand-history-player-copy > strong { overflow: hidden; color: #d8d4ca; font: 500 11px/1 Georgia, serif; text-overflow: ellipsis; white-space: nowrap; }
+.hand-history-player-copy > em { color: #6c716c; font-size: 7px; font-style: normal; line-height: 1.4; }
+.hand-history-hole { display: flex; gap: 3px; }
+.hand-history-modal .hand-history-hole .card { width: 29px; border-radius: 3px; box-shadow: 0 3px 8px rgba(0,0,0,.3); }
+.hand-history-modal .hand-history-hole .card-rank { font-size: 12px; }
+.hand-history-modal .hand-history-hole .card-suit { margin-top: 0; font-size: 14px; }
+.hand-history-player-stats { grid-column: 1 / -1; display: flex; gap: 5px; flex-wrap: wrap; }
+.hand-history-player-stats span { padding: 3px 5px; border-radius: 3px; background: rgba(255,255,255,.035); color: #707570; font-size: 7px; }
+.hand-history-replay { margin-top: 14px; display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 10px; }
+.hand-history-controls { padding: 12px; display: flex; flex-direction: column; gap: 9px; border: 1px solid var(--line); border-radius: 5px; }
+.hand-history-controls > div:first-child { display: flex; justify-content: space-between; color: #6e736e; font-size: 8px; }
+.hand-history-controls > div:first-child strong { color: #aaa69e; font-weight: 500; }
+.hand-history-controls > i { height: 3px; overflow: hidden; border-radius: 3px; background: #272c29; }
+.hand-history-controls > i em { height: 100%; display: block; background: linear-gradient(90deg, var(--green), var(--green-bright)); }
+.hand-history-control-buttons { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.hand-history-control-buttons button { min-height: 30px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: #92958f; cursor: pointer; font-size: 8px; }
+.hand-history-control-buttons button:hover:not(:disabled) { border-color: rgba(101,198,159,.34); color: #c8dfd4; }
+.hand-history-control-buttons button:disabled { opacity: .32; cursor: not-allowed; }
+.hand-history-control-buttons button.primary { border-color: rgba(101,198,159,.26); background: rgba(101,198,159,.08); color: #bce0d0; }
+.hand-history-timeline { min-width: 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 5px; background: rgba(0,0,0,.08); }
+.hand-history-current-event { min-height: 31px; display: flex; flex-direction: column; gap: 4px; }
+.hand-history-current-event span { color: var(--gold); font-size: 7px; letter-spacing: .08em; }
+.hand-history-current-event strong { overflow: hidden; color: #cbc8bf; font-size: 9px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.hand-history-event-list { max-height: 78px; margin-top: 8px; overflow-y: auto; display: flex; flex-direction: column; gap: 5px; scrollbar-width: thin; }
+.hand-history-event-list div { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 6px; color: #6d726d; font-size: 7px; }
+.hand-history-event-list div.active { color: #b9cfc4; }
+.hand-history-event-list time { color: #565b56; font-family: Georgia, serif; }
 .info-modal { width: min(560px, 100%); max-height: calc(100vh - 48px); overflow-y: auto; position: relative; padding: 42px; border: 1px solid rgba(216,183,116,.24); background: #171b19; box-shadow: 0 40px 100px rgba(0,0,0,.65); }
 .modal-close { position: absolute; top: 14px; right: 16px; border: 0; background: transparent; color: #7c807b; font-size: 22px; cursor: pointer; }
 .info-modal h2 { margin: 12px 0 17px; font: 500 29px/1.25 Georgia, serif; }
@@ -1059,6 +1156,9 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
   .action-dock { width: calc(100% - 30px); bottom: 14px; }
   .coach-panel { height: auto; min-height: 780px; border-left: 0; border-top: 1px solid var(--line); }
   .analysis-content, .log-content { overflow: visible; }
+  .hand-history-layout { grid-template-columns: 210px minmax(0, 1fr); }
+  .hand-history-players { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hand-history-replay { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 640px) {
@@ -1086,6 +1186,9 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
   .table-brand-group .brand-mark { display: none; }
   .brand strong { font-size: 12px; }.brand span { display: none; }
   .training-toggle span { display: none; }
+  .header-actions { gap: 6px; }
+  .hand-history-button { width: 34px; justify-content: center; padding: 0; }
+  .hand-history-button b, .hand-history-button em { display: none; }
   .install-app-button b { display: none; }
   .install-app-button { width: 34px; justify-content: center; padding: 0; }
   .sound-toggle b, .sound-toggle em { display: none; }
@@ -1128,6 +1231,23 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
   .modal-grid > div:last-child { border-bottom: 0; }
   .install-guide { grid-template-columns: 1fr; }
   .install-guide > div { min-height: auto; }
+  .modal-backdrop { padding: 10px; }
+  .hand-history-modal { width: calc(100vw - 20px); height: calc(100dvh - 20px); }
+  .hand-history-heading { min-height: 86px; padding: 18px 48px 14px 16px; align-items: flex-start; flex-direction: column; gap: 7px; }
+  .hand-history-heading h2 { font-size: 20px; }
+  .hand-history-heading p { font-size: 7px; text-align: left; }
+  .hand-history-layout { display: flex; flex-direction: column; }
+  .hand-history-sidebar { min-height: 112px; flex: 0 0 112px; padding: 10px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .hand-history-sidebar > div:first-child { display: none; }
+  .hand-history-list { overflow-x: auto; overflow-y: hidden; flex-direction: row; }
+  .hand-history-list button { width: 178px; min-width: 178px; min-height: 86px; }
+  .hand-history-detail { padding: 15px 12px 20px; }
+  .hand-history-detail-head h3 { font-size: 15px; white-space: normal; }
+  .hand-history-board { grid-template-columns: 1fr; gap: 10px; }
+  .hand-history-board-cards { overflow-x: auto; }
+  .hand-history-players { grid-template-columns: 1fr; }
+  .hand-history-player { min-height: 104px; }
+  .hand-history-replay { grid-template-columns: 1fr; }
 }
 
 @media (pointer: coarse) {
