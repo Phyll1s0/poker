@@ -154,6 +154,10 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /data-suit-tone=\{red \? "red" : "black"\}/);
   assert.match(multiplayerClient, /WebkitTextFillColor: red \? "#c92f35" : "#171b19"/);
   assert.match(multiplayerClient, /const VISUAL_SEATS_BY_PLAYER_COUNT/);
+  assert.match(multiplayerClient, /multiplayerBoardDealTransition/);
+  assert.match(multiplayerClient, /const BOARD_DEAL_STAGGER_MS = 300/);
+  assert.match(multiplayerClient, /styles\.boardDealtCard/);
+  assert.match(multiplayerClient, /index - boardDeal\.dealFrom/);
   assert.match(multiplayerClient, /2: \[0, 3\]/);
   assert.match(multiplayerClient, /3: \[0, 2, 4\]/);
   assert.match(multiplayerClient, /浅筹/);
@@ -212,6 +216,9 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.doesNotMatch(multiplayerClient, /这是其他玩家唯一能看到的信息/);
   assert.match(multiplayerCss, /\.multiplayerPage \.card\.redCard,[\s\S]*?\.multiplayerPage \.miniCard\.redCard\s*\{\s*color:/);
   assert.match(multiplayerCss, /\.multiplayerPage \.card\.blackCard,[\s\S]*?\.multiplayerPage \.miniCard\.blackCard\s*\{\s*color:/);
+  assert.match(multiplayerCss, /\.multiplayerPage \.boardDealtCard\s*\{[\s\S]*?animation:\s*multiplayerDealCommunityCard 0\.48s/);
+  assert.match(multiplayerCss, /@keyframes multiplayerDealCommunityCard/);
+  assert.match(multiplayerCss, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.multiplayerPage \.boardDealtCard/);
   assert.match(multiplayerCss, /\[data-suit-tone="red"\][\s\S]*?-webkit-text-fill-color:\s*#c92f35/);
   assert.match(multiplayerCss, /\[data-suit-tone="black"\][\s\S]*?-webkit-text-fill-color:\s*#171b19/);
   assert.match(multiplayerCss, /width: min\(800px, 78%, calc\(82dvh - 59px\)\)/);

@@ -5,6 +5,11 @@ import {
   clampMultiplayerRaiseTarget,
   multiplayerRaisePresets,
 } from "../../lib/multiplayer-betting";
+import {
+  multiplayerBoardDealTransition,
+  type MultiplayerBoardDeal,
+  type MultiplayerBoardFrame,
+} from "../../lib/multiplayer-board-animation";
 import styles from "./multiplayer.module.css";
 
 type Account = {
@@ -243,7 +248,15 @@ const legacyRequest: MultiplayerRequest = async <T,>(
   }));
 };
 
-function CardView({ card, mini = false }: { card: Card; mini?: boolean }) {
+function CardView({
+  card,
+  mini = false,
+  dealDelayMs,
+}: {
+  card: Card;
+  mini?: boolean;
+  dealDelayMs?: number;
+}) {
   const red = card.suit === "♥" || card.suit === "♦";
   const toneClass = red ? styles.redCard : styles.blackCard;
   // Keep the ink explicit on the rendered card as well as in CSS. Some hosted
@@ -261,8 +274,12 @@ function CardView({ card, mini = false }: { card: Card; mini?: boolean }) {
       </span>
     );
   }
+  const dealClass = dealDelayMs === undefined ? "" : styles.boardDealtCard;
+  const cardStyle = dealDelayMs === undefined
+    ? toneStyle
+    : { ...toneStyle, animationDelay: `${dealDelayMs}ms` };
   return (
-    <span className={`${styles.card} ${toneClass}`} data-suit-tone={red ? "red" : "black"} style={toneStyle}>
+    <span className={`${styles.card} ${toneClass} ${dealClass}`} data-suit-tone={red ? "red" : "black"} style={cardStyle}>
       {card.rank}
       <span className={styles.cardSuit}>{card.suit}</span>
     </span>
@@ -287,6 +304,7 @@ const STREET_LABELS: Record<PublicGame["street"], string> = {
 };
 
 const ONLINE_BIG_BLIND = 10;
+const BOARD_DEAL_STAGGER_MS = 300;
 
 const TABLE_MODE_OPTIONS = [
   {
@@ -380,11 +398,13 @@ function TableSurface({
   selfAccountId,
   game,
   actionSecondsLeft,
+  boardDeal,
 }: {
   players: PublicPlayer[];
   selfAccountId: string;
   game: PublicGame | null;
   actionSecondsLeft: number | null;
+  boardDeal: MultiplayerBoardDeal | null;
 }) {
   const selfSeat = players.find((player) => player.accountId === selfAccountId)?.seat ?? 0;
   const orderedPlayers = useMemo(() => [...players].sort((left, right) => {
@@ -405,7 +425,22 @@ function TableSurface({
             <strong>{game ? <><i />{game.pot}</> : "WAITING"}</strong>
           </div>
           <div className={styles.cards} aria-label="公共牌">
-            {(game?.board ?? []).map((card, index) => <CardView key={`${card.rank}-${card.suit}-${index}`} card={card} />)}
+            {(game?.board ?? []).map((card, index) => {
+              const isNewCard = Boolean(
+                boardDeal
+                && game
+                && boardDeal.handId === game.handId
+                && index >= boardDeal.dealFrom
+                && index < boardDeal.dealFrom + boardDeal.dealCount,
+              );
+              return (
+                <CardView
+                  key={`${card.rank}-${card.suit}-${index}`}
+                  card={card}
+                  dealDelayMs={isNewCard && boardDeal ? (index - boardDeal.dealFrom) * BOARD_DEAL_STAGGER_MS : undefined}
+                />
+              );
+            })}
             {Array.from({ length: 5 - (game?.board.length ?? 0) }, (_, index) => <span className={styles.cardSlot} key={`slot-${index}`} />)}
           </div>
         </div>
@@ -628,6 +663,7 @@ export default function MultiplayerClient({
   const [account, setAccount] = useState<Account | null | undefined>(undefined);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null);
+  const [boardDeal, setBoardDeal] = useState<MultiplayerBoardDeal | null>(null);
   const [handle, setHandle] = useState("");
   const [roomName, setRoomName] = useState("朋友练习桌");
   const [maxPlayers, setMaxPlayers] = useState(6);
@@ -647,6 +683,39 @@ export default function MultiplayerClient({
   const leavingRef = useRef(false);
   const roomViewGeneration = useRef(0);
   const viewedRoomId = useRef<string | null>(null);
+  const lastBoardFrame = useRef<MultiplayerBoardFrame | null>(null);
+
+  const acceptSnapshot = useCallback((next: RoomSnapshot) => {
+    const nextFrame: MultiplayerBoardFrame | null = next.game
+      ? {
+          roomId: next.room.id,
+          handId: next.game.handId,
+          boardCount: next.game.board.length,
+        }
+      : null;
+    const previousFrame = lastBoardFrame.current;
+    const nextDeal = multiplayerBoardDealTransition(previousFrame, nextFrame);
+    lastBoardFrame.current = nextFrame;
+
+    if (nextDeal) {
+      setBoardDeal(nextDeal);
+    } else if (
+      !previousFrame
+      || !nextFrame
+      || previousFrame.roomId !== nextFrame.roomId
+      || previousFrame.handId !== nextFrame.handId
+      || nextFrame.boardCount < previousFrame.boardCount
+    ) {
+      setBoardDeal(null);
+    }
+    setSnapshot(next);
+  }, []);
+
+  const clearActiveRoomSnapshot = useCallback(() => {
+    lastBoardFrame.current = null;
+    setBoardDeal(null);
+    setSnapshot(null);
+  }, []);
 
   const loadRooms = useCallback(async () => {
     const body = await request<{ rooms: RoomSummary[] }>("listRooms");
@@ -682,12 +751,12 @@ export default function MultiplayerClient({
         || (quiet && (leavingRef.current || next.room.revision < latestRevision.current))
       ) return;
       latestRevision.current = next.room.revision;
-      setSnapshot(next);
+      acceptSnapshot(next);
       if (!quiet) setError(null);
     } catch (reason) {
       if (!quiet) setError(reason instanceof Error ? reason.message : "无法读取牌桌。请稍后重试。");
     }
-  }, [request]);
+  }, [acceptSnapshot, request]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadAccount(), 0);
@@ -791,7 +860,7 @@ export default function MultiplayerClient({
       });
       if (viewIsCurrent() && next.room.revision >= latestRevision.current) {
         latestRevision.current = next.room.revision;
-        setSnapshot(next);
+        acceptSnapshot(next);
       }
       // The command is already committed. Refresh the lobby list in the
       // background so a slow unrelated request cannot hold the betting UI.
@@ -807,7 +876,7 @@ export default function MultiplayerClient({
     } finally {
       setBusy(false);
     }
-  }, [activeRoomId, loadRoom, loadRooms, request]);
+  }, [acceptSnapshot, activeRoomId, loadRoom, loadRooms, request]);
 
   const leaveRoom = async () => {
     if (!snapshot || leavingRef.current) return;
@@ -832,7 +901,7 @@ export default function MultiplayerClient({
     setBusy(true);
     setError(null);
     const finishLeaving = (nextRooms?: RoomSummary[]) => {
-      setSnapshot(null);
+      clearActiveRoomSnapshot();
       setRooms((currentRooms) => (nextRooms ?? currentRooms).filter((room) => room.id !== roomId));
       latestRevision.current = -1;
       timeoutSentFor.current = null;
@@ -1091,7 +1160,7 @@ export default function MultiplayerClient({
     viewedRoomId.current = null;
     latestRevision.current = -1;
     timeoutSentFor.current = null;
-    setSnapshot(null);
+    clearActiveRoomSnapshot();
   };
 
   return (
@@ -1319,6 +1388,7 @@ export default function MultiplayerClient({
                   selfAccountId={snapshot.selfAccountId}
                   game={game}
                   actionSecondsLeft={actionSecondsLeft}
+                  boardDeal={boardDeal?.roomId === snapshot.room.id ? boardDeal : null}
                 />
               )}
 

@@ -1320,6 +1320,29 @@
   box-shadow: 0 8px 16px rgba(0, 0, 0, 0.25), inset 0 0 0 1px rgba(65, 55, 45, 0.12);
 }
 
+.multiplayerPage .boardDealtCard {
+  opacity: 0;
+  animation: multiplayerDealCommunityCard 0.48s cubic-bezier(0.16, 0.84, 0.32, 1) forwards;
+  will-change: transform, opacity;
+}
+
+@keyframes multiplayerDealCommunityCard {
+  0% {
+    opacity: 0;
+    transform: translate(-68px, -76px) rotate(-13deg) scale(0.82);
+  }
+
+  68% {
+    opacity: 1;
+    transform: translate(4px, 2px) rotate(1.5deg) scale(1.035);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate(0, 0) rotate(0) scale(1);
+  }
+}
+
 .multiplayerPage .cardSuit {
   margin-top: 1px;
   font: 700 clamp(20px, 2.15vw, 30px)/0.86 Georgia, "Times New Roman", serif;
@@ -3212,5 +3235,12 @@
 
   .summaryActions > button {
     width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .multiplayerPage .boardDealtCard {
+    opacity: 1;
+    animation: none;
   }
 }
