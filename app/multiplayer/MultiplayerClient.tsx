@@ -358,12 +358,14 @@ function WinningHands({ game }: { game: PublicGame }) {
 export default function MultiplayerClient({
   displayName,
   signOutHref,
+  signOutLabel = "退出登录",
   homeHref = "/",
   request = legacyRequest,
   onSignOut,
 }: {
   displayName: string;
   signOutHref: string;
+  signOutLabel?: string;
   homeHref?: string;
   request?: MultiplayerRequest;
   onSignOut?: () => void;
@@ -662,7 +664,7 @@ export default function MultiplayerClient({
         <div className={styles.navRight}>
           <span>牌桌身份</span>
           <strong>{account?.handle ?? displayName}</strong>
-          <a className={styles.signOut} href={signOutHref} onClick={onSignOut}>退出</a>
+          <a className={styles.signOut} href={signOutHref} onClick={onSignOut}>{signOutLabel}</a>
         </div>
       </nav>
 

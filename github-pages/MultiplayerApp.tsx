@@ -92,9 +92,9 @@ export default function MultiplayerApp() {
     <MultiplayerClient
       displayName="访客"
       signOutHref="#/"
+      signOutLabel="返回首页"
       homeHref="#/"
       request={request}
-      onSignOut={clearToken}
     />
   );
 }

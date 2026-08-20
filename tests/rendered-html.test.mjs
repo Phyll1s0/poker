@@ -91,6 +91,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.doesNotMatch(multiplayerClient, /这是其他玩家唯一能看到的信息/);
   assert.match(staticMultiplayer, /supabase\.co\/functions\/v1\/poker-api/);
   assert.match(staticMultiplayer, /rangecraft\.multiplayer\.guest-token/);
+  assert.match(staticMultiplayer, /signOutLabel="返回首页"/);
+  assert.doesNotMatch(staticMultiplayer, /onSignOut=\{clearToken\}/);
   assert.match(edgeFunction, /function normalizeRoomSettings/);
   assert.match(edgeFunction, /type === "use-time-bank" \|\| type === "timeout"/);
   assert.match(page, /choosePokerPolicyAction/);
