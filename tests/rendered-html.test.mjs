@@ -166,13 +166,14 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /className=\{styles\.primaryActions\}/);
   assert.match(multiplayerClient, /className=\{styles\.raiseControl\}/);
   assert.match(multiplayerClient, /addEventListener\("keydown", handleTableShortcut\)/);
-  assert.match(multiplayerClient, /SHOW OR MUCK · 赢家亮牌决定/);
-  assert.match(multiplayerClient, /亮牌决定完成后开始下一手倒计时/);
+  assert.match(multiplayerClient, /SHOW OR MUCK · 本手赢家/);
+  assert.match(multiplayerClient, /亮牌选择与全桌共用同一个下一手倒计时/);
+  assert.match(multiplayerClient, /到点未选择会自动盖牌/);
+  assert.match(multiplayerClient, /秒后生成整局结算/);
+  assert.match(multiplayerClient, /不会增加额外等待/);
   assert.match(multiplayerClient, /这是服务端统一倒计时/);
-  assert.ok(
-    multiplayerClient.indexOf("styles.showDecisionPanel") < multiplayerClient.indexOf("styles.nextHandWaitingPanel"),
-    "赢家亮牌决定应显示在全桌下一手等待区上方",
-  );
+  assert.match(multiplayerClient, /styles\.nextHandWaitingPanel[\s\S]*?styles\.showDecisionInline[\s\S]*?styles\.autoNextHand/);
+  assert.doesNotMatch(multiplayerClient, /styles\.showDecisionPanel|亮牌选择最长 8 秒/);
   assert.match(multiplayerClient, /street: game\.street/);
   assert.match(multiplayerClient, /bigBlind: snapshot\?\.table\.bigBlind/);
   assert.match(multiplayerClient, /showDecisionDeadlineAt/);
@@ -216,7 +217,9 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerCss, /width: min\(800px, 78%, calc\(82dvh - 59px\)\)/);
   assert.match(multiplayerCss, /grid-template-columns: 150px minmax\(330px, 1fr\) 270px/);
   assert.match(multiplayerCss, /\.handTransition\s*\{[\s\S]*?grid-column: 1 \/ -1/);
-  assert.match(multiplayerCss, /\.showDecisionPanel,[\s\S]*?\.nextHandWaitingPanel/);
+  assert.match(multiplayerCss, /\.showDecisionInline\s*\{[\s\S]*?border-bottom:/);
+  assert.match(multiplayerCss, /\.nextHandWaitingPanel\s*\{[\s\S]*?display:\s*grid/);
+  assert.doesNotMatch(multiplayerCss, /\.showDecisionPanel/);
   assert.match(multiplayerCss, /\.sessionSummary\s*\{/);
   assert.match(multiplayerCss, /\.summaryGrid\s*\{/);
   assert.match(staticMultiplayer, /supabase\.co\/functions\/v1\/poker-api/);

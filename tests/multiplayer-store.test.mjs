@@ -419,7 +419,7 @@ test("D1 persists one shared finished report and keeps the same room restartable
       requestId: "finish-owner-folds",
       expectedRevision: ownerView.room.revision,
     }));
-    assert.equal(ownerView.table.phase, "showdown");
+    assert.equal(ownerView.table.phase, "between_hands");
 
     guestView = await service.getSnapshot(room.id, guest.id);
     guestView = await service.applyCommand(room.id, guest.id, parseMultiplayerCommand({
@@ -427,6 +427,17 @@ test("D1 persists one shared finished report and keeps the same room restartable
       handId: guestView.game.handId,
       show: false,
       requestId: "finish-guest-mucks",
+      expectedRevision: guestView.room.revision,
+    }));
+    assert.equal(guestView.table.phase, "between_hands", "mucking does not add or skip a second wait");
+    const waitingStateRow = sqlite.prepare("SELECT state_json FROM rooms WHERE id = ?").get(room.id);
+    const waitingState = JSON.parse(waitingStateRow.state_json);
+    waitingState.hand.nextHandAt = 0;
+    sqlite.prepare("UPDATE rooms SET state_json = ? WHERE id = ?").run(JSON.stringify(waitingState), room.id);
+    guestView = await service.applyCommand(room.id, guest.id, parseMultiplayerCommand({
+      type: "timeout",
+      handId: guestView.game.handId,
+      requestId: "finish-shared-wait-expires",
       expectedRevision: guestView.room.revision,
     }));
     assert.equal(guestView.table.phase, "finished");
@@ -491,19 +502,30 @@ test("D1 permanently leaves during a hand, frees membership, and makes a one-pla
       requestId: "leave-during-hand",
       expectedRevision: ownerView.room.revision,
     }));
-    assert.equal(departedView.table.phase, "showdown");
+    assert.equal(departedView.table.phase, "between_hands");
     assert.equal(departedView.room.memberCount, 1);
     assert.equal(sqlite.prepare("SELECT count(*) AS count FROM room_members WHERE room_id = ? AND account_id = ?")
       .get(room.id, owner.id).count, 0);
     assert.deepEqual(await store.listRooms(owner.id), []);
 
     guestView = await service.getSnapshot(room.id, guest.id);
-    assert.equal(guestView.table.seats.find((seat) => seat.seat === 0).pendingLeave, true);
+    assert.equal(guestView.table.seats.some((seat) => seat.seat === 0), false, "the departed seat is released immediately");
     guestView = await service.applyCommand(room.id, guest.id, parseMultiplayerCommand({
       type: "show",
       handId: guestView.game.handId,
       show: false,
       requestId: "leave-winner-muck",
+      expectedRevision: guestView.room.revision,
+    }));
+    assert.equal(guestView.table.phase, "between_hands");
+    const waitingStateRow = sqlite.prepare("SELECT state_json FROM rooms WHERE id = ?").get(room.id);
+    const waitingState = JSON.parse(waitingStateRow.state_json);
+    waitingState.hand.nextHandAt = 0;
+    sqlite.prepare("UPDATE rooms SET state_json = ? WHERE id = ?").run(JSON.stringify(waitingState), room.id);
+    guestView = await service.applyCommand(room.id, guest.id, parseMultiplayerCommand({
+      type: "timeout",
+      handId: guestView.game.handId,
+      requestId: "leave-shared-wait-expires",
       expectedRevision: guestView.room.revision,
     }));
     assert.equal(guestView.table.phase, "lobby");

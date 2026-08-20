@@ -12,10 +12,10 @@ export const ONLINE_DEFAULT_TIME_BANK_MS = 100_000;
 export const ONLINE_MAX_TIME_BANK_MS = 600_000;
 /** Bounded replay window so a long-running room cannot grow state forever. */
 export const ONLINE_COMMAND_RECEIPT_LIMIT = 2_048;
-/** Time reserved for an uncontested winner to show or muck voluntarily. */
-export const ONLINE_SHOW_DECISION_TIME_MS = 8_000;
 /** Shared server-side pause before any seated player may advance the table. */
 export const ONLINE_NEXT_HAND_DELAY_MS = 4_000;
+/** @deprecated Show or muck now shares the single next-hand waiting window. */
+export const ONLINE_SHOW_DECISION_TIME_MS = ONLINE_NEXT_HAND_DELAY_MS;
 
 export type OnlineCard = {
   rank: number;
@@ -119,6 +119,8 @@ export type OnlineHandState = {
   actionDeadlineAt: number | null;
   showDecisionDeadlineAt: number | null;
   nextHandAt: number | null;
+  /** Distinguishes a consumed terminal wait from a newly settled hand awaiting its first clock sync. */
+  betweenHandsWaitCompleted: boolean;
 };
 
 export type OnlineCommandReceipt = {
@@ -742,6 +744,10 @@ function normalizeStoredRoom(room: OnlineRoomState): void {
         ? room.hand.nextHandAt
         : null;
     }
+    room.hand.betweenHandsWaitCompleted = room.hand.betweenHandsWaitCompleted === true;
+    // Pre-unified-clock rooms used a separate showdown phase for the optional
+    // reveal. Keep their pending choice, but fold it into the normal hand pause.
+    if (room.phase === "showdown" && room.hand.result) room.phase = "between_hands";
   }
 }
 
@@ -1097,6 +1103,7 @@ function beginHand(room: OnlineRoomState, options: OnlineEngineOptions): void {
     actionDeadlineAt: actionStartedAt === null ? null : actionStartedAt + room.actionTimeMs,
     showDecisionDeadlineAt: null,
     nextHandAt: null,
+    betweenHandsWaitCompleted: false,
   };
   room.lastDealerSeat = dealerSeat;
   room.phase = "playing";
@@ -1337,7 +1344,7 @@ function awardUncontested(room: OnlineRoomState, hand: OnlineHandState, winnerSe
   recordCompletedHand(room, hand);
   hand.pendingShowSeat = winnerSeat;
   room.seats.forEach((seat) => { seat.ready = false; });
-  room.phase = "showdown";
+  room.phase = "between_hands";
 }
 
 function dealNextStreet(room: OnlineRoomState, hand: OnlineHandState) {
@@ -1586,15 +1593,33 @@ function forceFoldDepartingPlayer(room: OnlineRoomState, seat: OnlineSeatState):
   }
 }
 
-function resolveDepartingShowChoice(room: OnlineRoomState): void {
+function muckPendingShowChoice(room: OnlineRoomState): void {
   const hand = room.hand;
-  if (room.phase !== "showdown" || !hand || hand.pendingShowSeat === null) return;
-  const pendingWinner = seatByNumber(room, hand.pendingShowSeat);
-  if (!pendingWinner?.pendingLeave) return;
-  const player = playerBySeat(hand, pendingWinner.seat);
+  if (!hand || hand.pendingShowSeat === null) return;
+  const player = playerBySeat(hand, hand.pendingShowSeat);
   if (player) player.shown = false;
   hand.pendingShowSeat = null;
-  room.phase = "between_hands";
+  hand.showDecisionDeadlineAt = null;
+}
+
+function completeBetweenHandsWait(room: OnlineRoomState): void {
+  const hand = room.hand;
+  if (!hand?.result) return;
+  muckPendingShowChoice(room);
+  hand.nextHandAt = null;
+  hand.betweenHandsWaitCompleted = true;
+}
+
+function resolveDepartingShowChoice(room: OnlineRoomState): void {
+  const hand = room.hand;
+  if (
+    (room.phase !== "between_hands" && room.phase !== "showdown")
+    || !hand
+    || hand.pendingShowSeat === null
+  ) return;
+  const pendingWinner = seatByNumber(room, hand.pendingShowSeat);
+  if (!pendingWinner?.pendingLeave) return;
+  muckPendingShowChoice(room);
 }
 
 function finishOnlineSession(room: OnlineRoomState, now: number): void {
@@ -1609,11 +1634,13 @@ function finishOnlineSession(room: OnlineRoomState, now: number): void {
     seat.ready = false;
   });
   if (room.hand) {
+    muckPendingShowChoice(room);
     room.hand.currentSeat = null;
     room.hand.actionStartedAt = null;
     room.hand.actionDeadlineAt = null;
     room.hand.showDecisionDeadlineAt = null;
     room.hand.nextHandAt = null;
+    room.hand.betweenHandsWaitCompleted = true;
   }
   room.phase = "finished";
 }
@@ -1621,7 +1648,10 @@ function finishOnlineSession(room: OnlineRoomState, now: number): void {
 function resolveFinishRequest(room: OnlineRoomState, now: number): void {
   if (!room.session.finishRequestedByAccountId || room.phase === "finished" || room.phase === "closed") return;
   if (room.phase === "playing") return;
-  if (room.phase === "showdown" && room.hand?.pendingShowSeat !== null) return;
+  if (room.phase === "between_hands" && room.hand?.result) {
+    if (!room.hand.betweenHandsWaitCompleted && !nextHandWindowOpen(room, now)) return;
+    completeBetweenHandsWait(room);
+  }
   finishOnlineSession(room, now);
 }
 
@@ -1655,9 +1685,9 @@ function transferOwnerOrCloseAbandonedRoom(room: OnlineRoomState): void {
 
 function finalizePendingLeaves(room: OnlineRoomState): void {
   if (room.phase === "playing" || room.phase === "showdown") return;
-  if (!room.seats.some((seat) => seat.pendingLeave)) return;
-
-  room.seats = room.seats.filter((seat) => !seat.pendingLeave);
+  if (room.seats.some((seat) => seat.pendingLeave)) {
+    room.seats = room.seats.filter((seat) => !seat.pendingLeave);
+  }
   if (!room.seats.length) {
     room.phase = "closed";
     room.hand = null;
@@ -1669,7 +1699,10 @@ function finalizePendingLeaves(room: OnlineRoomState): void {
       .sort((left, right) => left.seat - right.seat)[0].accountId;
   }
 
-  if (room.phase !== "finished" && room.seats.length < ONLINE_MIN_PLAYERS) {
+  const preservingSharedWait = room.phase === "between_hands"
+    && Boolean(room.hand?.result)
+    && room.hand?.betweenHandsWaitCompleted !== true;
+  if (room.phase !== "finished" && room.seats.length < ONLINE_MIN_PLAYERS && !preservingSharedWait) {
     room.phase = "lobby";
     // Keep a completed hand long enough for the remaining player to see its
     // result. A future join clears it before the lobby resumes.
@@ -1709,34 +1742,30 @@ function synchronizeTurnClock(room: OnlineRoomState, previousTurnKey: string | n
 function synchronizePhaseClocks(room: OnlineRoomState, now: number): void {
   const hand = room.hand;
   if (!hand) return;
-  if (room.phase === "showdown" && hand.pendingShowSeat !== null) {
-    if (!Object.prototype.hasOwnProperty.call(hand, "showDecisionDeadlineAt")) {
-      hand.showDecisionDeadlineAt = now;
-    }
-    if (
-      typeof hand.showDecisionDeadlineAt !== "number"
-      || !Number.isFinite(hand.showDecisionDeadlineAt)
-    ) {
-      hand.showDecisionDeadlineAt = now + ONLINE_SHOW_DECISION_TIME_MS;
-    }
-    hand.nextHandAt = null;
-    return;
-  }
+  // Be defensive when this helper receives an un-normalized legacy room.
+  if (room.phase === "showdown" && hand.result) room.phase = "between_hands";
   if (room.phase === "between_hands" && hand.result) {
-    hand.showDecisionDeadlineAt = null;
-    // A one-table tournament is complete once fewer than two funded seats
-    // remain. Keep the final hand available for review, but do not publish a
-    // deadline that clients could repeatedly try (and fail) to advance.
-    if (room.tableMode === "tournament" && nextHandSeats(room).length < ONLINE_MIN_PLAYERS) {
+    if (hand.betweenHandsWaitCompleted) {
+      muckPendingShowChoice(room);
       hand.nextHandAt = null;
+      hand.showDecisionDeadlineAt = null;
       return;
     }
-    if (!Object.prototype.hasOwnProperty.call(hand, "nextHandAt")) {
+    const hadNextHandClock = Object.prototype.hasOwnProperty.call(hand, "nextHandAt");
+    const legacyShowDeadline = typeof hand.showDecisionDeadlineAt === "number"
+      && Number.isFinite(hand.showDecisionDeadlineAt)
+      ? hand.showDecisionDeadlineAt
+      : null;
+    if (!hadNextHandClock) {
       hand.nextHandAt = now;
     }
     if (typeof hand.nextHandAt !== "number" || !Number.isFinite(hand.nextHandAt)) {
-      hand.nextHandAt = now + ONLINE_NEXT_HAND_DELAY_MS;
+      hand.nextHandAt = legacyShowDeadline ?? now + ONLINE_NEXT_HAND_DELAY_MS;
     }
+    // A room stored by the former two-stage clock may still carry an eight
+    // second reveal deadline. Never let migration extend the unified pause.
+    hand.nextHandAt = Math.min(hand.nextHandAt, now + ONLINE_NEXT_HAND_DELAY_MS);
+    hand.showDecisionDeadlineAt = hand.pendingShowSeat === null ? null : hand.nextHandAt;
     return;
   }
   hand.showDecisionDeadlineAt = null;
@@ -1755,11 +1784,11 @@ function turnExpired(room: OnlineRoomState, now: number): boolean {
 
 function showDecisionExpired(room: OnlineRoomState, now: number): boolean {
   return Boolean(
-    room.phase === "showdown"
+    room.phase === "between_hands"
     && room.hand?.pendingShowSeat !== null
-    && typeof room.hand?.showDecisionDeadlineAt === "number"
-    && Number.isFinite(room.hand.showDecisionDeadlineAt)
-    && now >= Number(room.hand.showDecisionDeadlineAt),
+    && typeof room.hand?.nextHandAt === "number"
+    && Number.isFinite(room.hand.nextHandAt)
+    && now >= Number(room.hand.nextHandAt),
   );
 }
 
@@ -1883,7 +1912,7 @@ export function applyOnlinePokerCommand(
       return fail(room, "WRONG_PHASE", "本局已经结束");
     }
     next.session.finishRequestedByAccountId = actor.accountId;
-    if (next.phase === "lobby" || next.phase === "between_hands") {
+    if (next.phase === "lobby") {
       finishOnlineSession(next, commandNow);
     }
   } else if (command.type === "restart") {
@@ -1899,8 +1928,13 @@ export function applyOnlinePokerCommand(
     if (
       next.phase === "between_hands"
       && eligibleSeats.length >= ONLINE_MIN_PLAYERS
+      && !next.session.finishRequestedByAccountId
       && (eligibleSeats.every((seat) => seat.ready) || (command.ready && nextHandWindowOpen(next, commandNow)))
     ) {
+      // Readying early explicitly gives up an outstanding optional reveal;
+      // the old hand must never carry a private pending choice into a new deal.
+      completeBetweenHandsWait(next);
+      finalizePendingLeaves(next);
       beginHand(next, options);
     }
   } else if (command.type === "start") {
@@ -1948,33 +1982,25 @@ export function applyOnlinePokerCommand(
         action: timeoutAction,
       }, true);
       if (timeoutError) return { ok: false, state: room, error: { ...timeoutError, revision: room.revision } };
-    } else if (next.phase === "showdown" && hand.pendingShowSeat !== null) {
-      if (!showDecisionExpired(next, commandNow)) {
-        return fail(room, "TIME_NOT_EXPIRED", "赢家仍可选择亮牌或盖牌");
-      }
-      const pendingPlayer = playerBySeat(hand, hand.pendingShowSeat);
-      if (pendingPlayer) pendingPlayer.shown = false;
-      hand.pendingShowSeat = null;
-      next.phase = "between_hands";
     } else if (next.phase === "between_hands" && hand.result) {
-      const eligibleSeats = nextHandSeats(next);
-      if (next.tableMode === "tournament" && eligibleSeats.length < ONLINE_MIN_PLAYERS) {
-        // Accept a stale deadline trigger once and persist the terminal state.
-        // The completed hand and winning stack remain visible to every member.
-        hand.nextHandAt = null;
-      } else if (!nextHandWindowOpen(next, commandNow)) {
+      if (!nextHandWindowOpen(next, commandNow)) {
         return fail(room, "TIME_NOT_EXPIRED", "下一手的统一等待时间尚未结束");
-      } else if (eligibleSeats.length < ONLINE_MIN_PLAYERS) {
-        return fail(room, "NOT_ENOUGH_PLAYERS", "至少需要两名可参赛玩家才能开始下一手");
       } else {
-        beginHand(next, options);
+        completeBetweenHandsWait(next);
+        if (!next.session.finishRequestedByAccountId) {
+          finalizePendingLeaves(next);
+          const eligibleSeats = nextHandSeats(next);
+          if (next.phase === "between_hands" && eligibleSeats.length >= ONLINE_MIN_PLAYERS) {
+            beginHand(next, options);
+          }
+        }
       }
     } else {
       return fail(room, "WRONG_PHASE", "当前没有可结算的超时行动");
     }
   } else if (command.type === "show") {
     const hand = next.hand;
-    if (next.phase !== "showdown" || !hand || hand.id !== command.handId) {
+    if (next.phase !== "between_hands" || !hand || hand.id !== command.handId) {
       return fail(room, hand && hand.id !== command.handId ? "WRONG_HAND" : "SHOW_NOT_ALLOWED", "当前不能亮牌或盖牌");
     }
     if (hand.pendingShowSeat !== member.seat) return fail(room, "SHOW_NOT_ALLOWED", "只有本手赢家可以选择亮牌");
@@ -1987,7 +2013,7 @@ export function applyOnlinePokerCommand(
       if (stats) stats.voluntaryShows += 1;
     }
     hand.pendingShowSeat = null;
-    next.phase = "between_hands";
+    hand.showDecisionDeadlineAt = null;
   } else if (command.type === "leave") {
     if (next.phase !== "finished") {
       const stats = ensureSessionPlayer(next, member);
@@ -2002,6 +2028,9 @@ export function applyOnlinePokerCommand(
   }
 
   resolveDepartingShowChoice(next);
+  // Settlement happens inside act/leave commands. Install the one shared
+  // result/reveal clock before deciding whether a queued session finish may run.
+  synchronizePhaseClocks(next, commandNow);
   resolveFinishRequest(next, commandNow);
   finalizePendingLeaves(next);
   synchronizeTurnClock(next, previousTurnKey, commandNow);

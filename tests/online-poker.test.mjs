@@ -5,7 +5,6 @@ import {
   ONLINE_BIG_BLIND,
   ONLINE_COMMAND_RECEIPT_LIMIT,
   ONLINE_NEXT_HAND_DELAY_MS,
-  ONLINE_SHOW_DECISION_TIME_MS,
   ONLINE_STARTING_STACK,
   applyOnlinePokerCommand,
   createOnlineRoom,
@@ -135,11 +134,10 @@ test("a current non-all-in player leaves by folding and is removed after the han
   const { room: started, options } = startRoom(2, { maxPlayers: 3 });
   let room = accepted(command(started, actors[0], { type: "leave" }, options));
 
-  assert.equal(room.phase, "showdown");
+  assert.equal(room.phase, "between_hands");
   assert.equal(room.hand.pendingShowSeat, 1);
   assert.equal(room.hand.players.find((player) => player.seat === 0).folded, true);
-  assert.equal(room.seats.find((seat) => seat.seat === 0).pendingLeave, true);
-  assert.equal(room.seats.find((seat) => seat.seat === 0).connected, false);
+  assert.equal(room.seats.some((seat) => seat.seat === 0), false, "the departed seat is released after settlement");
   assert.equal(room.ownerAccountId, actors[1].accountId, "ownership transfers before the pending seat is finalized");
 
   room = accepted(command(room, actors[1], {
@@ -147,7 +145,12 @@ test("a current non-all-in player leaves by folding and is removed after the han
     handId: room.hand.id,
     show: false,
   }, options));
-  assert.equal(room.phase, "lobby", "one remaining player returns to a joinable lobby");
+  assert.equal(room.phase, "between_hands", "choosing muck does not skip the shared post-hand wait");
+  const completedHandId = room.hand.id;
+  const nextHandAt = room.hand.nextHandAt;
+  options.now = () => nextHandAt;
+  room = accepted(command(room, actors[1], { type: "timeout", handId: completedHandId }, options));
+  assert.equal(room.phase, "lobby", "one remaining player returns to a joinable lobby when the shared wait ends");
   assert.ok(room.hand?.result, "the completed result remains visible until another player joins");
   assert.deepEqual(room.seats.map((seat) => seat.accountId), [actors[1].accountId]);
   assert.equal(room.ownerAccountId, actors[1].accountId);
@@ -160,7 +163,7 @@ test("a current non-all-in player leaves by folding and is removed after the han
 test("a room closes when every remaining player permanently leaves during a hand", () => {
   const { room: started, options } = startRoom(2);
   let room = accepted(command(started, actors[0], { type: "leave" }, options));
-  assert.equal(room.phase, "showdown");
+  assert.equal(room.phase, "between_hands");
   room = accepted(command(room, actors[1], { type: "leave" }, options));
   assert.equal(room.phase, "closed");
   assert.equal(room.hand, null);
@@ -177,7 +180,7 @@ test("an out-of-turn departure folds without skipping the current actor", () => 
   assert.equal(projectRoomState(room, actors[0].accountId).seats.find((seat) => seat.seat === 1).pendingLeave, true);
 
   room = accepted(act(room, actors[0], "fold", options));
-  assert.equal(room.phase, "showdown");
+  assert.equal(room.phase, "between_hands");
   room = accepted(command(room, actors[2], {
     type: "show",
     handId: room.hand.id,
@@ -193,13 +196,14 @@ test("an unmatched raise is returned to an out-of-turn player who permanently le
   assert.equal(room.hand.currentSeat, 1);
 
   room = accepted(command(room, actors[0], { type: "leave" }, options));
-  assert.equal(room.phase, "showdown");
+  assert.equal(room.phase, "between_hands");
   assert.deepEqual(room.hand.result.payouts, [{ seat: 1, amount: 20 }]);
   assert.deepEqual(room.hand.result.returns, [{ seat: 0, amount: 90 }]);
   assert.equal(room.hand.result.totalPot, 20);
-  assert.equal(room.seats.find((seat) => seat.seat === 0).stack, 990);
+  assert.equal(room.seats.some((seat) => seat.seat === 0), false);
+  assert.equal(room.session.players.find((player) => player.seat === 0).finalStack, 990);
   assert.equal(room.seats.find((seat) => seat.seat === 1).stack, 1_010);
-  assert.equal(room.seats.reduce((sum, seat) => sum + seat.stack, 0), 2_000);
+  assert.equal(room.session.players.reduce((sum, player) => sum + player.finalStack, 0), 2_000);
 });
 
 test("room settings control stacks, mode, action clock and per-player time banks", () => {
@@ -252,7 +256,7 @@ test("time cards extend only the current turn and timeout is server-authoritativ
   const lateCall = act(room, actors[0], "call", options);
   rejected(lateCall, "TIME_EXPIRED");
   room = accepted(command(room, actors[1], { type: "timeout", handId: room.hand.id }, options));
-  assert.equal(room.phase, "showdown");
+  assert.equal(room.phase, "between_hands");
   assert.equal(room.hand.players.find((player) => player.seat === 0).folded, true);
 });
 
@@ -713,7 +717,7 @@ test("dead blinds go to the only live hand when both blinds leave out of turn", 
   let room = accepted(command(scenario.room, actors[1], { type: "leave" }, scenario.options));
   room = accepted(command(room, actors[2], { type: "leave" }, scenario.options));
 
-  assert.equal(room.phase, "showdown");
+  assert.equal(room.phase, "between_hands");
   assert.deepEqual(room.hand.result.payouts, [{ seat: 0, amount: 10 }]);
   assert.deepEqual(room.hand.result.returns, [{ seat: 2, amount: 5 }]);
   assert.deepEqual(room.hand.result.winnerSeats, [0]);
@@ -764,7 +768,7 @@ test("side pots are paid only to eligible players", () => {
 test("uncontested winner chooses show or muck before the next hand", () => {
   const { room: started, options } = startRoom(2);
   let room = accepted(act(started, actors[0], "fold", options));
-  assert.equal(room.phase, "showdown");
+  assert.equal(room.phase, "between_hands");
   assert.equal(room.hand.pendingShowSeat, 1);
   assert.equal(room.hand.result.totalPot, 10);
   assert.deepEqual(room.hand.result.returns, [{ seat: 1, amount: 5 }]);
@@ -802,12 +806,12 @@ test("uncontested show choice expires on the server and any member can auto-muck
   room = accepted(command(room, actors[0], { type: "start" }, options));
   room = accepted(act(room, actors[0], "fold", options));
 
-  assert.equal(room.phase, "showdown");
-  assert.equal(room.hand.showDecisionDeadlineAt, now + ONLINE_SHOW_DECISION_TIME_MS);
-  assert.equal(room.hand.nextHandAt, null);
+  assert.equal(room.phase, "between_hands");
+  assert.equal(room.hand.nextHandAt, now + ONLINE_NEXT_HAND_DELAY_MS);
+  assert.equal(room.hand.showDecisionDeadlineAt, room.hand.nextHandAt);
   assert.equal(
     projectRoomState(room, actors[0].accountId).hand.showDecisionDeadlineAt,
-    now + ONLINE_SHOW_DECISION_TIME_MS,
+    room.hand.nextHandAt,
   );
 
   now = room.hand.showDecisionDeadlineAt - 1;
@@ -827,11 +831,11 @@ test("uncontested show choice expires on the server and any member can auto-muck
   };
   const timedOut = applyOnlinePokerCommand(room, actors[0], timeoutPayload, options);
   room = accepted(timedOut);
-  assert.equal(room.phase, "between_hands");
+  assert.equal(room.phase, "playing", "the same timeout both auto-mucks and deals the next hand");
+  assert.equal(room.hand.number, 2);
   assert.equal(room.hand.pendingShowSeat, null);
-  assert.equal(room.hand.players.find((player) => player.seat === 1).shown, false);
   assert.equal(room.hand.showDecisionDeadlineAt, null);
-  assert.equal(room.hand.nextHandAt, now + ONLINE_NEXT_HAND_DELAY_MS);
+  assert.equal(room.hand.nextHandAt, null);
 
   const duplicate = applyOnlinePokerCommand(room, actors[0], timeoutPayload, options);
   assert.equal(duplicate.ok, true);
@@ -924,6 +928,21 @@ test("manual show wins an optimistic race against a timeout without resolving tw
   assert.equal(timeoutLoser.state.hand.players.find((player) => player.seat === 1).shown, true);
 });
 
+test("all players readying early implicitly mucks an unanswered show choice", () => {
+  const { room: started, options } = startRoom(2);
+  let room = accepted(act(started, actors[0], "fold", options));
+  const completedHandId = room.hand.id;
+  assert.equal(room.hand.pendingShowSeat, 1);
+
+  room = accepted(command(room, actors[0], { type: "ready", ready: true }, options));
+  room = accepted(command(room, actors[1], { type: "ready", ready: true }, options));
+
+  assert.equal(room.phase, "playing");
+  assert.equal(room.hand.number, 2);
+  assert.notEqual(room.hand.id, completedHandId);
+  assert.equal(room.session.players.find((player) => player.seat === 1).voluntaryShows, 0);
+});
+
 test("legacy completed states without phase clocks normalize without stalling", () => {
   let now = 7_000_000;
   let handNumber = 0;
@@ -939,16 +958,48 @@ test("legacy completed states without phase clocks normalize without stalling", 
   room = accepted(command(room, actors[0], { type: "start" }, options));
   room = accepted(act(room, actors[0], "fold", options));
   const firstHandId = room.hand.id;
+  room.phase = "showdown";
+  delete room.hand.betweenHandsWaitCompleted;
   delete room.hand.showDecisionDeadlineAt;
   delete room.hand.nextHandAt;
 
   room = accepted(command(room, actors[0], { type: "timeout", handId: firstHandId }, options));
-  assert.equal(room.phase, "between_hands", "a pre-clock showdown is immediately auto-mucked on first timeout");
-  assert.equal(room.hand.nextHandAt, now + ONLINE_NEXT_HAND_DELAY_MS);
+  assert.equal(room.phase, "playing", "a pre-clock showdown migrates, auto-mucks, and advances without stalling");
+  assert.equal(room.hand.number, 2);
+});
 
-  delete room.hand.nextHandAt;
-  room = accepted(command(room, actors[1], { type: "timeout", handId: firstHandId }, options));
-  assert.equal(room.phase, "playing", "a pre-clock between-hands state can immediately advance");
+test("a legacy two-stage reveal clock is capped to one shared four-second wait", () => {
+  let now = 7_500_000;
+  const options = {
+    randomIndex: (maxExclusive) => maxExclusive - 1,
+    makeHandId: (() => {
+      let handNumber = 0;
+      return () => `legacy-reveal-${++handNumber}`;
+    })(),
+    now: () => now,
+  };
+  let room = createOnlineRoom({ roomId: "legacy-reveal-room", owner: actors[0], maxPlayers: 2 });
+  room = joinPlayers(room, 2, options);
+  room = accepted(command(room, actors[0], { type: "ready", ready: true }, options));
+  room = accepted(command(room, actors[1], { type: "ready", ready: true }, options));
+  room = accepted(command(room, actors[0], { type: "start" }, options));
+  room = accepted(act(room, actors[0], "fold", options));
+  const completedHandId = room.hand.id;
+
+  room.phase = "showdown";
+  room.hand.showDecisionDeadlineAt = now + 8_000;
+  room.hand.nextHandAt = null;
+  delete room.hand.betweenHandsWaitCompleted;
+
+  room = accepted(command(room, actors[0], { type: "ready", ready: true }, options));
+  assert.equal(room.phase, "between_hands");
+  assert.equal(room.hand.nextHandAt, now + ONLINE_NEXT_HAND_DELAY_MS);
+  now = room.hand.nextHandAt - 1;
+  const beforeDeadline = command(room, actors[0], { type: "timeout", handId: completedHandId }, options);
+  rejected(beforeDeadline, "TIME_NOT_EXPIRED");
+  now += 1;
+  room = accepted(command(room, actors[0], { type: "timeout", handId: completedHandId }, options));
+  assert.equal(room.phase, "playing");
   assert.equal(room.hand.number, 2);
 });
 
@@ -956,7 +1007,7 @@ test("a departing pending winner is auto-mucked and safely removed", () => {
   const { room: started, options } = startRoom(3);
   let room = accepted(act(started, actors[0], "fold", options));
   room = accepted(act(room, actors[1], "fold", options));
-  assert.equal(room.phase, "showdown");
+  assert.equal(room.phase, "between_hands");
   assert.equal(room.hand.pendingShowSeat, 2);
 
   room = accepted(command(room, actors[2], { type: "leave" }, options));
@@ -1052,7 +1103,7 @@ test("a completed heads-up tournament clears its phase clock instead of retrying
   assert.equal(projectRoomState(completed, actors[0].accountId).hand.nextHandAt, null);
 });
 
-test("only the owner can end a session and a queued finish waits for show or muck", () => {
+test("only the owner can end a session and a queued finish keeps the shared post-hand window", () => {
   const { room: started, options } = startRoom(2, {
     roomOptions: { tableMode: "cash" },
   });
@@ -1073,7 +1124,8 @@ test("only the owner can end a session and a queued finish waits for show or muc
   assert.equal(duplicate.state.revision, room.revision);
 
   room = accepted(act(room, actors[0], "fold", options));
-  assert.equal(room.phase, "showdown", "uncontested winner still gets the normal show or muck choice");
+  assert.equal(room.phase, "between_hands", "the reveal choice lives inside the shared post-hand wait");
+  const nextHandAt = room.hand.nextHandAt;
   assert.equal(projectRoomState(room, actors[0].accountId).sessionReport, null);
 
   room = accepted(command(room, actors[1], {
@@ -1081,6 +1133,12 @@ test("only the owner can end a session and a queued finish waits for show or muc
     handId: room.hand.id,
     show: false,
   }, options));
+  assert.equal(room.phase, "between_hands", "manual muck cannot finish the session before the shared deadline");
+  assert.equal(room.hand.nextHandAt, nextHandAt, "manual muck never restarts the post-hand clock");
+  assert.equal(projectRoomState(room, actors[0].accountId).sessionReport, null);
+
+  options.now = () => nextHandAt;
+  room = accepted(command(room, actors[0], { type: "timeout", handId: room.hand.id }, options));
   assert.equal(room.phase, "finished");
   assert.equal(room.hand.nextHandAt, null);
 
@@ -1092,6 +1150,33 @@ test("only the owner can end a session and a queued finish waits for show or muc
   assert.deepEqual(ownerView.sessionReport.players.map((player) => player.netChips).sort((a, b) => a - b), [-5, 5]);
   assert.doesNotMatch(JSON.stringify(ownerView.sessionReport), /user-[0-9]/, "authentication identities remain private");
   rejected(command(room, actors[0], { type: "ready", ready: true }, options), "WRONG_PHASE");
+});
+
+test("ending the session during the post-hand wait keeps its original deadline", () => {
+  const { room: started, options } = startRoom(2, {
+    roomOptions: { tableMode: "cash" },
+  });
+  let room = accepted(act(started, actors[0], "fold", options));
+  const completedHandId = room.hand.id;
+  const nextHandAt = room.hand.nextHandAt;
+
+  room = accepted(command(room, actors[0], { type: "finish" }, options));
+  assert.equal(room.phase, "between_hands");
+  assert.equal(room.hand.nextHandAt, nextHandAt);
+  assert.equal(room.session.finishRequestedByAccountId, actors[0].accountId);
+
+  room = accepted(command(room, actors[1], {
+    type: "show",
+    handId: completedHandId,
+    show: true,
+  }, options));
+  assert.equal(room.phase, "between_hands");
+  assert.equal(room.hand.nextHandAt, nextHandAt, "showing cannot restart or shorten the shared wait");
+
+  options.now = () => nextHandAt;
+  room = accepted(command(room, actors[0], { type: "timeout", handId: completedHandId }, options));
+  assert.equal(room.phase, "finished");
+  assert.equal(projectRoomState(room, actors[1].accountId).sessionReport.handsCompleted, 1);
 });
 
 test("session report counts voluntary preflop money and postflop aggression from real actions", () => {
@@ -1110,6 +1195,10 @@ test("session report counts voluntary preflop money and postflop aggression from
     show: true,
   }, options));
   room = accepted(command(room, actors[0], { type: "finish" }, options));
+  const nextHandAt = room.hand.nextHandAt;
+  assert.equal(room.phase, "between_hands");
+  options.now = () => nextHandAt;
+  room = accepted(command(room, actors[0], { type: "timeout", handId: room.hand.id }, options));
 
   const report = projectRoomState(room, actors[0].accountId).sessionReport;
   const button = report.players.find((player) => player.seat === 0);
@@ -1139,6 +1228,10 @@ test("owner can restart a finished room without changing its members or invitati
   assert.equal(room.phase, "playing", "finishing during a live hand is queued");
   room = accepted(act(room, actors[0], "fold", options));
   room = accepted(command(room, actors[1], { type: "show", handId: room.hand.id, show: false }, options));
+  const nextHandAt = room.hand.nextHandAt;
+  assert.equal(room.phase, "between_hands");
+  options.now = () => nextHandAt;
+  room = accepted(command(room, actors[0], { type: "timeout", handId: room.hand.id }, options));
   assert.equal(room.phase, "finished");
 
   rejected(command(room, actors[1], { type: "restart" }, options), "NOT_ROOM_OWNER");

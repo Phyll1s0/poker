@@ -2394,19 +2394,23 @@
   border-top: 1px solid var(--mp-line);
 }
 
-.showDecisionPanel,
 .nextHandWaitingPanel {
   min-width: 0;
   padding: 9px 10px;
+  display: grid;
+  gap: 9px;
+  border: 1px solid rgba(99, 196, 156, 0.13);
+  border-radius: 6px;
+  background: linear-gradient(135deg, rgba(216, 183, 116, 0.035), rgba(99, 196, 156, 0.025));
+}
+
+.showDecisionInline {
+  min-width: 0;
+  padding-bottom: 9px;
   display: flex;
   align-items: center;
   gap: 12px;
-  border-radius: 6px;
-}
-
-.showDecisionPanel {
-  border: 1px solid rgba(216, 183, 116, 0.24);
-  background: linear-gradient(135deg, rgba(216, 183, 116, 0.08), rgba(216, 183, 116, 0.025));
+  border-bottom: 1px solid rgba(216, 183, 116, 0.17);
 }
 
 .showDecisionCopy {
@@ -2468,12 +2472,6 @@
   background: var(--mp-gold);
   box-shadow: 0 0 9px rgba(216, 183, 116, 0.5);
   animation: multiplayerThinking 1s ease-in-out infinite;
-}
-
-.nextHandWaitingPanel {
-  justify-content: space-between;
-  border: 1px solid rgba(99, 196, 156, 0.13);
-  background: rgba(99, 196, 156, 0.025);
 }
 
 .nextHandWaitingPanel .autoNextHand {
@@ -2725,8 +2723,7 @@
     flex: 1;
   }
 
-  .showDecisionPanel,
-  .nextHandWaitingPanel {
+  .showDecisionInline {
     align-items: stretch;
     flex-direction: column;
   }
