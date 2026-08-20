@@ -388,9 +388,32 @@ function makeSnapshot(row: RoomRow, state: OnlineRoomState, guestId: string) {
   const hand = table.hand;
   const game = hand ? (() => {
     const result = hand.result;
+    const gamePlayers = result
+      ? [
+          ...players,
+          ...result.winnerDetails.flatMap((winner) => {
+            if (players.some((player) => player.seat === winner.seat)) return [];
+            return [{
+              accountId: publicSeatId(winner.seat),
+              handle: winner.displayName,
+              seat: winner.seat,
+              stack: 0,
+              committed: 0,
+              streetCommitted: 0,
+              status: "out" as const,
+              ready: false,
+              timeBankMs: 0,
+              isOwner: false,
+              isDealer: winner.seat === hand.dealerSeat,
+              ...(winner.holeCards ? { holeCards: winner.holeCards.map(clientCard) } : {}),
+              holeCardCount: 2,
+            }];
+          }),
+        ]
+      : players;
     const resultSummary = result
       ? result.payouts.map((payout) => {
-          const player = players.find((candidate) => candidate.seat === payout.seat);
+          const player = gamePlayers.find((candidate) => candidate.seat === payout.seat);
           const handName = result.handNames.find((entry) => entry.seat === payout.seat)?.name;
           return `${player?.handle ?? `座位 ${payout.seat + 1}`}${handName ? `（${handName}）` : ""} 赢得 ${payout.amount}`;
         }).join("；")
@@ -398,7 +421,7 @@ function makeSnapshot(row: RoomRow, state: OnlineRoomState, guestId: string) {
     return {
       handId: hand.id,
       handNo: hand.number,
-      street: table.phase === "showdown" ? "showdown" : table.phase === "between_hands" ? "complete" : hand.street,
+      street: result ? "complete" : table.phase === "showdown" ? "showdown" : table.phase === "between_hands" ? "complete" : hand.street,
       pot: hand.committedPot,
       board: hand.community.map(clientCard),
       dealerSeat: hand.dealerSeat,
@@ -406,7 +429,7 @@ function makeSnapshot(row: RoomRow, state: OnlineRoomState, guestId: string) {
       currentBet: hand.highestBet,
       actionStartedAt: hand.actionStartedAt,
       actionDeadlineAt: hand.actionDeadlineAt,
-      players,
+      players: gamePlayers,
       legalActions: table.legalActions ? {
         fold: table.legalActions.fold,
         check: table.legalActions.check,
@@ -417,7 +440,7 @@ function makeSnapshot(row: RoomRow, state: OnlineRoomState, guestId: string) {
       result: result ? {
         summary: resultSummary || "本手已经结束。",
         winners: result.winnerSeats.flatMap((seat) => {
-          const winner = players.find((candidate) => candidate.seat === seat);
+          const winner = gamePlayers.find((candidate) => candidate.seat === seat);
           return winner ? [winner.accountId] : [];
         }),
       } : null,
@@ -425,7 +448,11 @@ function makeSnapshot(row: RoomRow, state: OnlineRoomState, guestId: string) {
   })() : null;
 
   return {
-    room: roomSummary({ ...row, status: stateStatus(state), revision: state.revision }, state.seats.length, publicOwnerId),
+    room: roomSummary(
+      { ...row, status: stateStatus(state), revision: state.revision },
+      state.seats.filter((seat) => !seat.pendingLeave).length,
+      publicOwnerId,
+    ),
     selfAccountId,
     players,
     game,
@@ -528,7 +555,9 @@ async function joinRoom(guest: GuestRow, payload: JsonObject) {
     if (!data) throw new ApiError(404, "ROOM_NOT_FOUND", "没有找到这个房间，请检查邀请码。");
     const room = data as RoomRow;
     const state = room.state as OnlineRoomState;
-    if (state.seats.some((seat) => seat.accountId === guest.id)) return roomSummary(room, state.seats.length);
+    if (state.seats.some((seat) => seat.accountId === guest.id && !seat.pendingLeave)) {
+      return roomSummary(room, state.seats.filter((seat) => !seat.pendingLeave).length);
+    }
     const command: OnlinePokerCommand = {
       type: "join",
       commandId: `join:${crypto.randomUUID()}`,
@@ -547,7 +576,12 @@ async function joinRoom(guest: GuestRow, payload: JsonObject) {
     });
     if (committed.error?.code === "23505") continue;
     if (committed.error) databaseFailure(committed.error, "加入房间失败，请稍后重试。");
-    if (committed.data === true) return roomSummary({ ...room, revision: result.state.revision, state: result.state }, result.state.seats.length);
+    if (committed.data === true) {
+      return roomSummary(
+        { ...room, revision: result.state.revision, state: result.state },
+        result.state.seats.filter((seat) => !seat.pendingLeave).length,
+      );
+    }
   }
   throw new ApiError(409, "REVISION_CONFLICT", "牌桌刚刚发生了变化，请重试。");
 }

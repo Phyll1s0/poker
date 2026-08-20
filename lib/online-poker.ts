@@ -34,11 +34,15 @@ export type OnlineSeatState = {
   timeBankMs: number;
   connected: boolean;
   disconnectedAt: number | null;
+  /** Explicitly leaving; retained only while the current hand still needs this seat. */
+  pendingLeave: boolean;
 };
 
 export type OnlineHandPlayerState = {
   seat: number;
   accountId: string;
+  /** Kept with the hand so completed results remain readable after a seat leaves. */
+  displayName: string;
   hole: [OnlineCard, OnlineCard];
   folded: boolean;
   bet: number;
@@ -203,6 +207,7 @@ export type OnlinePublicSeat = {
   ready: boolean;
   timeBankMs: number;
   connected: boolean;
+  pendingLeave: boolean;
   folded: boolean;
   bet: number;
   contributed: number;
@@ -226,7 +231,14 @@ export type OnlinePublicHand = {
   minRaise: number;
   lastAggressorSeat: number | null;
   raiseCount: number;
-  result: OnlineHandResult | null;
+  result: (OnlineHandResult & {
+    /** Public-safe winner details retained even after the winner releases their seat. */
+    winnerDetails: {
+      seat: number;
+      displayName: string;
+      holeCards: [OnlineCard, OnlineCard] | null;
+    }[];
+  }) | null;
   pendingShowSeat: number | null;
   actionStartedAt: number | null;
   actionDeadlineAt: number | null;
@@ -401,6 +413,12 @@ function normalizeStoredRoom(room: OnlineRoomState): void {
     if (!Number.isInteger(seat.timeBankMs) || seat.timeBankMs < 0 || seat.timeBankMs > ONLINE_MAX_TIME_BANK_MS) {
       seat.timeBankMs = room.initialTimeBankMs;
     }
+    seat.pendingLeave = seat.pendingLeave === true;
+  });
+  room.hand?.players.forEach((player) => {
+    if (typeof player.displayName !== "string" || !player.displayName.trim()) {
+      player.displayName = room.seats.find((seat) => seat.seat === player.seat)?.displayName ?? `座位 ${player.seat + 1}`;
+    }
   });
 }
 
@@ -493,6 +511,7 @@ export function createOnlineRoom(options: {
       timeBankMs: initialTimeBankMs,
       connected: true,
       disconnectedAt: null,
+      pendingLeave: false,
     }],
     hand: null,
     lastDealerSeat: null,
@@ -585,6 +604,7 @@ function beginHand(room: OnlineRoomState, options: OnlineEngineOptions): void {
     return {
       seat: seat.seat,
       accountId: seat.accountId,
+      displayName: seat.displayName,
       hole: [cards[0], cards[1]],
       folded: false,
       bet: 0,
@@ -975,6 +995,76 @@ function applyAction(
   return null;
 }
 
+function forceFoldDepartingPlayer(room: OnlineRoomState, seat: OnlineSeatState): void {
+  const hand = room.hand;
+  if (room.phase !== "playing" || !hand) return;
+  const player = playerBySeat(hand, seat.seat);
+  if (!player || player.folded || seat.stack <= 0) return;
+
+  player.folded = true;
+  player.hasActed = true;
+  player.actedAtBet = betToMatchForActor(room, hand, seat.seat);
+
+  if (hand.currentSeat === seat.seat) {
+    finishAction(room, hand, seat.seat);
+    return;
+  }
+
+  const remaining = hand.players.filter((candidate) => !candidate.folded);
+  if (remaining.length === 1) awardUncontested(room, hand, remaining[0].seat);
+}
+
+function resolveDepartingShowChoice(room: OnlineRoomState): void {
+  const hand = room.hand;
+  if (room.phase !== "showdown" || !hand || hand.pendingShowSeat === null) return;
+  const pendingWinner = seatByNumber(room, hand.pendingShowSeat);
+  if (!pendingWinner?.pendingLeave) return;
+  const player = playerBySeat(hand, pendingWinner.seat);
+  if (player) player.shown = false;
+  hand.pendingShowSeat = null;
+  room.phase = "between_hands";
+}
+
+function transferOwnerOrCloseAbandonedRoom(room: OnlineRoomState): void {
+  const remaining = room.seats
+    .filter((seat) => !seat.pendingLeave)
+    .sort((left, right) => left.seat - right.seat);
+  if (!remaining.length) {
+    room.seats = [];
+    room.hand = null;
+    room.phase = "closed";
+    return;
+  }
+  if (!remaining.some((seat) => seat.accountId === room.ownerAccountId)) {
+    room.ownerAccountId = remaining[0].accountId;
+  }
+}
+
+function finalizePendingLeaves(room: OnlineRoomState): void {
+  if (room.phase === "playing" || room.phase === "showdown") return;
+  if (!room.seats.some((seat) => seat.pendingLeave)) return;
+
+  room.seats = room.seats.filter((seat) => !seat.pendingLeave);
+  if (!room.seats.length) {
+    room.phase = "closed";
+    room.hand = null;
+    return;
+  }
+
+  if (!room.seats.some((seat) => seat.accountId === room.ownerAccountId)) {
+    room.ownerAccountId = [...room.seats]
+      .sort((left, right) => left.seat - right.seat)[0].accountId;
+  }
+
+  if (room.seats.length < ONLINE_MIN_PLAYERS) {
+    room.phase = "lobby";
+    // Keep a completed hand long enough for the remaining player to see its
+    // result. A future join clears it before the lobby resumes.
+    if (!room.hand?.result) room.hand = null;
+    room.seats.forEach((seat) => { seat.ready = false; });
+  }
+}
+
 function activeTurnKey(room: OnlineRoomState): string | null {
   const hand = room.hand;
   if (room.phase !== "playing" || !hand || hand.currentSeat === null) return null;
@@ -1097,8 +1187,10 @@ export function applyOnlinePokerCommand(
       timeBankMs: next.initialTimeBankMs,
       connected: true,
       disconnectedAt: null,
+      pendingLeave: false,
     });
     next.seats.sort((left, right) => left.seat - right.seat);
+    if (next.hand?.result) next.hand = null;
   } else if (!member) {
     return fail(room, "NOT_A_MEMBER", "你不在这个房间");
   } else if (command.type === "ready") {
@@ -1165,18 +1257,17 @@ export function applyOnlinePokerCommand(
     player.shown = command.show;
     hand.pendingShowSeat = null;
     next.phase = "between_hands";
-  } else {
-    if (next.phase === "playing" || next.phase === "showdown") {
-      return fail(room, "WRONG_PHASE", "牌局进行中不能离开座位；可以断线后重连");
-    }
-    next.seats = next.seats.filter((seat) => seat.accountId !== actor.accountId);
-    if (!next.seats.length) {
-      next.phase = "closed";
-    } else if (next.ownerAccountId === actor.accountId) {
-      next.ownerAccountId = [...next.seats].sort((left, right) => left.seat - right.seat)[0].accountId;
-    }
+  } else if (command.type === "leave") {
+    member.pendingLeave = true;
+    member.ready = false;
+    member.connected = false;
+    member.disconnectedAt = commandNow;
+    forceFoldDepartingPlayer(next, member);
+    transferOwnerOrCloseAbandonedRoom(next);
   }
 
+  resolveDepartingShowChoice(next);
+  finalizePendingLeaves(next);
   synchronizeTurnClock(next, previousTurnKey, commandNow);
 
   next.revision = room.revision + 1;
@@ -1222,6 +1313,7 @@ export function projectRoomState(room: OnlineRoomState, viewerAccountId: string 
       ready: seat.ready,
       timeBankMs: Number.isInteger(seat.timeBankMs) ? seat.timeBankMs : initialTimeBankMs,
       connected: seat.connected,
+      pendingLeave: seat.pendingLeave === true,
       folded: player?.folded ?? false,
       bet: player?.bet ?? 0,
       contributed: player?.contributed ?? 0,
@@ -1271,6 +1363,18 @@ export function projectRoomState(room: OnlineRoomState, viewerAccountId: string 
                 payouts: hand.result.payouts.map((payout) => ({ ...payout })),
                 returns: hand.result.returns.map((entry) => ({ ...entry })),
                 handNames: hand.result.handNames.map((entry) => ({ ...entry })),
+                winnerDetails: hand.result.winnerSeats.map((winnerSeat) => {
+                  const winner = playerBySeat(hand, winnerSeat);
+                  return {
+                    seat: winnerSeat,
+                    displayName: winner?.displayName
+                      ?? room.seats.find((seat) => seat.seat === winnerSeat)?.displayName
+                      ?? `座位 ${winnerSeat + 1}`,
+                    holeCards: winner?.shown
+                      ? [cloneCard(winner.hole[0]), cloneCard(winner.hole[1])]
+                      : null,
+                  };
+                }),
               }
             : null,
           pendingShowSeat: hand.pendingShowSeat,

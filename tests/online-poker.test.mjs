@@ -105,6 +105,85 @@ test("room enforces a 2-6 seat capacity and lobby readiness", () => {
   rejected(nonOwnerStart, "NOT_ROOM_OWNER");
 });
 
+test("lobby leave releases the seat, transfers ownership, and closes an empty room", () => {
+  const options = deterministicOptions();
+  let room = createOnlineRoom({ roomId: "leave-lobby", owner: actors[0], maxPlayers: 3 });
+  room = accepted(command(room, actors[1], { type: "join" }, options));
+  room = accepted(command(room, actors[0], { type: "leave" }, options));
+
+  assert.equal(room.phase, "lobby");
+  assert.equal(room.ownerAccountId, actors[1].accountId);
+  assert.deepEqual(room.seats.map((seat) => [seat.accountId, seat.seat]), [[actors[1].accountId, 1]]);
+
+  room = accepted(command(room, actors[2], { type: "join" }, options));
+  assert.deepEqual(room.seats.map((seat) => [seat.accountId, seat.seat]), [
+    [actors[2].accountId, 0],
+    [actors[1].accountId, 1],
+  ]);
+
+  let solo = createOnlineRoom({ roomId: "leave-last", owner: actors[0], maxPlayers: 2 });
+  solo = accepted(command(solo, actors[0], { type: "leave" }, options));
+  assert.equal(solo.phase, "closed");
+  assert.equal(solo.seats.length, 0);
+  assert.equal(solo.hand, null);
+});
+
+test("a current non-all-in player leaves by folding and is removed after the hand", () => {
+  const { room: started, options } = startRoom(2, { maxPlayers: 3 });
+  let room = accepted(command(started, actors[0], { type: "leave" }, options));
+
+  assert.equal(room.phase, "showdown");
+  assert.equal(room.hand.pendingShowSeat, 1);
+  assert.equal(room.hand.players.find((player) => player.seat === 0).folded, true);
+  assert.equal(room.seats.find((seat) => seat.seat === 0).pendingLeave, true);
+  assert.equal(room.seats.find((seat) => seat.seat === 0).connected, false);
+  assert.equal(room.ownerAccountId, actors[1].accountId, "ownership transfers before the pending seat is finalized");
+
+  room = accepted(command(room, actors[1], {
+    type: "show",
+    handId: room.hand.id,
+    show: false,
+  }, options));
+  assert.equal(room.phase, "lobby", "one remaining player returns to a joinable lobby");
+  assert.ok(room.hand?.result, "the completed result remains visible until another player joins");
+  assert.deepEqual(room.seats.map((seat) => seat.accountId), [actors[1].accountId]);
+  assert.equal(room.ownerAccountId, actors[1].accountId);
+
+  room = accepted(command(room, actors[2], { type: "join" }, options));
+  assert.equal(room.hand, null, "joining a lobby clears the previous result before ready-up");
+  assert.deepEqual(room.seats.map((seat) => seat.seat), [0, 1]);
+});
+
+test("a room closes when every remaining player permanently leaves during a hand", () => {
+  const { room: started, options } = startRoom(2);
+  let room = accepted(command(started, actors[0], { type: "leave" }, options));
+  assert.equal(room.phase, "showdown");
+  room = accepted(command(room, actors[1], { type: "leave" }, options));
+  assert.equal(room.phase, "closed");
+  assert.equal(room.hand, null);
+  assert.deepEqual(room.seats, []);
+});
+
+test("an out-of-turn departure folds without skipping the current actor", () => {
+  const { room: started, options } = startRoom(3);
+  let room = accepted(command(started, actors[1], { type: "leave" }, options));
+
+  assert.equal(room.phase, "playing");
+  assert.equal(room.hand.currentSeat, 0);
+  assert.equal(room.hand.players.find((player) => player.seat === 1).folded, true);
+  assert.equal(projectRoomState(room, actors[0].accountId).seats.find((seat) => seat.seat === 1).pendingLeave, true);
+
+  room = accepted(act(room, actors[0], "fold", options));
+  assert.equal(room.phase, "showdown");
+  room = accepted(command(room, actors[2], {
+    type: "show",
+    handId: room.hand.id,
+    show: false,
+  }, options));
+  assert.equal(room.phase, "between_hands");
+  assert.deepEqual(room.seats.map((seat) => seat.seat), [0, 2]);
+});
+
 test("room settings control stacks, mode, action clock and per-player time banks", () => {
   const { room } = startRoom(2, {
     roomOptions: {
@@ -425,6 +504,35 @@ test("all-in call runs the board, reveals live hands, and conserves chips", () =
   assert.ok(room.seats.every((seat) => seat.stack >= 0));
 });
 
+test("an all-in departure remains eligible and another command finalizes the seat after settlement", () => {
+  const { room: started, options } = startRoom(3, { stacks: [20, 100, 100] });
+  started.hand.players.find((player) => player.seat === 0).hole = [card(14, "♠"), card(14, "♥")];
+  started.hand.players.find((player) => player.seat === 1).hole = [card(13, "♠"), card(13, "♥")];
+  started.hand.players.find((player) => player.seat === 2).hole = [card(12, "♠"), card(12, "♥")];
+  started.hand.deck = [
+    card(2, "♣"), card(3, "♦"), card(7, "♣"), card(8, "♦"), card(9, "♣"),
+  ];
+
+  let room = accepted(act(started, actors[0], "raise", options, 20));
+  assert.equal(room.seats.find((seat) => seat.seat === 0).stack, 0);
+  room = accepted(command(room, actors[0], { type: "leave" }, options));
+  assert.equal(room.seats.find((seat) => seat.seat === 0).pendingLeave, true);
+  assert.equal(room.hand.players.find((player) => player.seat === 0).folded, false, "all-in hand stays live");
+
+  room = accepted(act(room, actors[1], "call", options));
+  room = accepted(act(room, actors[2], "call", options));
+  room = accepted(act(room, actors[1], "fold", options));
+
+  assert.equal(room.phase, "between_hands");
+  assert.equal(room.hand.result.payouts.some((payout) => payout.seat === 0), true, "departing all-in may still win");
+  assert.equal(room.hand.players.find((player) => player.seat === 0).folded, false);
+  assert.deepEqual(room.seats.map((seat) => seat.seat), [1, 2], "terminal action finalizes an earlier departure");
+  const publicResult = projectRoomState(room, actors[1].accountId).hand.result;
+  const departedWinner = publicResult.winnerDetails.find((winner) => winner.seat === 0);
+  assert.equal(departedWinner.displayName, actors[0].displayName);
+  assert.deepEqual(departedWinner.holeCards, [card(14, "♠"), card(14, "♥")], "shown winning cards survive seat release");
+});
+
 test("uncalled all-in chips are returned instead of reported as pot winnings", () => {
   const shortCall = startRoom(2, { stacks: [100, 20] });
   let room = accepted(act(shortCall.room, actors[0], "raise", shortCall.options, 100));
@@ -508,6 +616,24 @@ test("uncontested winner chooses show or muck before the next hand", () => {
   assert.equal(room.hand.dealerSeat, 1);
   assert.equal(room.hand.smallBlindSeat, 1);
   assert.equal(room.hand.currentSeat, 1);
+});
+
+test("a departing pending winner is auto-mucked and safely removed", () => {
+  const { room: started, options } = startRoom(3);
+  let room = accepted(act(started, actors[0], "fold", options));
+  room = accepted(act(room, actors[1], "fold", options));
+  assert.equal(room.phase, "showdown");
+  assert.equal(room.hand.pendingShowSeat, 2);
+
+  room = accepted(command(room, actors[2], { type: "leave" }, options));
+  assert.equal(room.phase, "between_hands");
+  assert.equal(room.hand.pendingShowSeat, null);
+  assert.equal(room.hand.players.find((player) => player.seat === 2).shown, false);
+  assert.deepEqual(room.seats.map((seat) => seat.seat), [0, 1]);
+  const hiddenWinner = projectRoomState(room, actors[0].accountId).hand.result.winnerDetails
+    .find((winner) => winner.seat === 2);
+  assert.equal(hiddenWinner.displayName, actors[2].displayName);
+  assert.equal(hiddenWinner.holeCards, null, "a departed winner's mucked cards stay private");
 });
 
 test("starting the next hand never silently tops up a short stack", () => {

@@ -384,11 +384,15 @@ export default function MultiplayerClient({
   const [raiseTo, setRaiseTo] = useState(0);
   const [nextHandCountdown, setNextHandCountdown] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [leaving, setLeaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [clockNow, setClockNow] = useState(() => Date.now());
   const latestRevision = useRef(-1);
   const timeoutSentFor = useRef<string | null>(null);
+  const leavingRef = useRef(false);
+  const roomViewGeneration = useRef(0);
+  const viewedRoomId = useRef<string | null>(null);
 
   const loadRooms = useCallback(async () => {
     const body = await request<{ rooms: RoomSummary[] }>("listRooms");
@@ -407,8 +411,22 @@ export default function MultiplayerClient({
   }, [loadRooms, request]);
 
   const loadRoom = useCallback(async (roomId: string, quiet = false) => {
+    if (!quiet) {
+      roomViewGeneration.current += 1;
+      viewedRoomId.current = roomId;
+      leavingRef.current = false;
+      setLeaving(false);
+    } else if (viewedRoomId.current !== roomId) {
+      return;
+    }
+    const generation = roomViewGeneration.current;
     try {
       const next = await request<RoomSnapshot>("getRoom", { roomId });
+      if (
+        generation !== roomViewGeneration.current
+        || viewedRoomId.current !== roomId
+        || (quiet && (leavingRef.current || next.room.revision < latestRevision.current))
+      ) return;
       latestRevision.current = next.room.revision;
       setSnapshot(next);
       if (next.game?.legalActions?.minRaiseTo != null) {
@@ -492,26 +510,37 @@ export default function MultiplayerClient({
     command: Record<string, unknown>,
     options: { quiet?: boolean } = {},
   ) => {
-    if (!activeRoomId) return false;
+    if (!activeRoomId || leavingRef.current) return false;
+    const roomId = activeRoomId;
+    const generation = roomViewGeneration.current;
+    const viewIsCurrent = () => (
+      generation === roomViewGeneration.current
+      && viewedRoomId.current === roomId
+      && !leavingRef.current
+    );
     setBusy(true);
     if (!options.quiet) setError(null);
     try {
       const next = await request<RoomSnapshot>("command", {
-        roomId: activeRoomId,
+        roomId,
         command: {
           ...command,
           requestId: requestId(),
           expectedRevision: latestRevision.current,
         },
       });
-      latestRevision.current = next.room.revision;
-      setSnapshot(next);
+      if (viewIsCurrent() && next.room.revision >= latestRevision.current) {
+        latestRevision.current = next.room.revision;
+        setSnapshot(next);
+      }
       await loadRooms();
       return true;
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : "牌桌行动失败。请稍后重试。";
-      if (!options.quiet) setError(message);
-      await loadRoom(activeRoomId, true);
+      if (viewIsCurrent()) {
+        if (!options.quiet) setError(message);
+        await loadRoom(roomId, true);
+      }
       return false;
     } finally {
       setBusy(false);
@@ -519,12 +548,69 @@ export default function MultiplayerClient({
   }, [activeRoomId, loadRoom, loadRooms, request]);
 
   const leaveRoom = async () => {
-    if (!snapshot) return;
-    const left = await sendCommand({ type: "leave" });
-    if (!left) return;
-    setSnapshot(null);
-    latestRevision.current = -1;
-    await loadRooms();
+    if (!snapshot || leavingRef.current) return;
+    leavingRef.current = true;
+
+    const roomId = snapshot.room.id;
+    const roomLabel = snapshot.room.name;
+    const activeHand = phase === "playing" || phase === "showdown";
+    const confirmed = window.confirm(activeHand
+      ? "确定永久离开这个房间吗？未全下的手牌会自动弃牌；已经全下的手牌会继续结算，结算后离桌。"
+      : "确定永久离开这个房间吗？离开后如需回来，必须重新输入邀请码。"
+    );
+    if (!confirmed) {
+      leavingRef.current = false;
+      return;
+    }
+
+    roomViewGeneration.current += 1;
+    viewedRoomId.current = null;
+
+    setLeaving(true);
+    setBusy(true);
+    setError(null);
+    const finishLeaving = (nextRooms?: RoomSummary[]) => {
+      setSnapshot(null);
+      setRooms((currentRooms) => (nextRooms ?? currentRooms).filter((room) => room.id !== roomId));
+      latestRevision.current = -1;
+      timeoutSentFor.current = null;
+      setNextHandCountdown(null);
+      setNotice(`已永久离开「${roomLabel}」，你的牌手昵称仍然保留。`);
+    };
+    try {
+      await request<RoomSnapshot>("command", {
+        roomId,
+        command: {
+          type: "leave",
+          requestId: requestId(),
+          expectedRevision: latestRevision.current,
+        },
+      });
+      finishLeaving();
+      try {
+        const body = await request<{ rooms: RoomSummary[] }>("listRooms");
+        setRooms(body.rooms.filter((room) => room.id !== roomId));
+      } catch {
+        // The membership has already been removed; the optimistic list is authoritative for this view.
+      }
+    } catch (reason) {
+      try {
+        const body = await request<{ rooms: RoomSummary[] }>("listRooms");
+        if (!body.rooms.some((room) => room.id === roomId)) {
+          finishLeaving(body.rooms);
+          return;
+        }
+      } catch {
+        // Keep the original error when membership state cannot be verified.
+      }
+      leavingRef.current = false;
+      const message = reason instanceof Error ? reason.message : "离开房间失败，请稍后重试。";
+      await loadRoom(roomId);
+      setError(message);
+    } finally {
+      setLeaving(false);
+      setBusy(false);
+    }
   };
 
   const copyJoinCode = async (code: string) => {
@@ -559,7 +645,8 @@ export default function MultiplayerClient({
   const isOwner = snapshot?.room.ownerAccountId === snapshot?.selfAccountId;
   const isMyTurn = Boolean(game && game.actorAccountId === snapshot?.selfAccountId && legal);
   const phase = snapshot?.table.phase ?? null;
-  const canLeave = phase === "lobby" || phase === "between_hands";
+  const selfPlayerAccountId = selfPlayer?.accountId ?? null;
+  const selfPlayerReady = selfPlayer?.ready ?? false;
   const canRejoinNextHand = Boolean(
     selfPlayer
     && (selfPlayer.stack > 0 || snapshot?.table.tableMode === "cash"),
@@ -573,14 +660,19 @@ export default function MultiplayerClient({
 
   useEffect(() => {
     if (phase !== "playing" || game?.actionDeadlineAt == null || !game.actorAccountId) return;
-    setClockNow(Date.now());
+    const initialTimer = window.setTimeout(() => setClockNow(Date.now()), 0);
     const timer = window.setInterval(() => setClockNow(Date.now()), 200);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(timer);
+    };
   }, [game?.actionDeadlineAt, game?.actorAccountId, phase]);
 
   useEffect(() => {
     if (
-      phase !== "playing"
+      leaving
+      || leavingRef.current
+      || phase !== "playing"
       || !game
       || !game.actorAccountId
       || game.actionDeadlineAt == null
@@ -591,15 +683,15 @@ export default function MultiplayerClient({
     if (timeoutSentFor.current === timeoutKey) return;
     timeoutSentFor.current = timeoutKey;
     void sendCommand({ type: "timeout", handId: game.handId }, { quiet: true }).then((succeeded) => {
-      if (!succeeded && timeoutSentFor.current === timeoutKey) {
+      if (!succeeded && !leavingRef.current && timeoutSentFor.current === timeoutKey) {
         timeoutSentFor.current = null;
         setClockNow(Date.now());
       }
     });
-  }, [actionMillisecondsLeft, game, phase, sendCommand]);
+  }, [actionMillisecondsLeft, game, leaving, phase, sendCommand]);
 
   useEffect(() => {
-    if (phase !== "between_hands" || !selfPlayer || selfPlayer.ready || !canRejoinNextHand) {
+    if (leaving || leavingRef.current || phase !== "between_hands" || !selfPlayerAccountId || selfPlayerReady || !canRejoinNextHand) {
       setNextHandCountdown(null);
       return;
     }
@@ -614,8 +706,9 @@ export default function MultiplayerClient({
       setNextHandCountdown(Math.max(1, Math.ceil((deadline - Date.now()) / 1_000)));
     };
     const markReady = async () => {
+      if (cancelled || leavingRef.current) return;
       const succeeded = await sendCommand({ type: "ready", ready: true });
-      if (!succeeded && !cancelled && retriesRemaining > 0) {
+      if (!succeeded && !cancelled && !leavingRef.current && retriesRemaining > 0) {
         retriesRemaining -= 1;
         retryTimer = window.setTimeout(() => void markReady(), 800);
       }
@@ -624,6 +717,7 @@ export default function MultiplayerClient({
     updateCountdown();
     const countdownTimer = window.setInterval(updateCountdown, 200);
     const readyTimer = window.setTimeout(() => {
+      if (leavingRef.current) return;
       window.clearInterval(countdownTimer);
       setNextHandCountdown(0);
       void markReady();
@@ -635,7 +729,7 @@ export default function MultiplayerClient({
       window.clearTimeout(readyTimer);
       if (retryTimer !== null) window.clearTimeout(retryTimer);
     };
-  }, [canRejoinNextHand, game?.handId, phase, selfPlayer?.accountId, selfPlayer?.ready, sendCommand]);
+  }, [canRejoinNextHand, game?.handId, leaving, phase, selfPlayerAccountId, selfPlayerReady, sendCommand]);
 
   const mustChooseShow = Boolean(
     snapshot
@@ -643,6 +737,15 @@ export default function MultiplayerClient({
       && snapshot.table.viewerSeat !== null
       && snapshot.table.hand?.pendingShowSeat === snapshot.table.viewerSeat,
   );
+
+  const temporarilyLeaveTable = () => {
+    roomViewGeneration.current += 1;
+    viewedRoomId.current = null;
+    latestRevision.current = -1;
+    timeoutSentFor.current = null;
+    setNextHandCountdown(null);
+    setSnapshot(null);
+  };
 
   return (
     <div className={styles.multiplayerPage}>
@@ -802,7 +905,7 @@ export default function MultiplayerClient({
           <section className={styles.tableShell}>
             <header className={styles.tableTopbar}>
               <div>
-                <button className={styles.textButton} type="button" onClick={() => setSnapshot(null)}>← 返回大厅</button>
+                <button className={styles.textButton} type="button" onClick={temporarilyLeaveTable}>← 暂离牌桌（保留座位）</button>
                 <h1>{snapshot.room.name}</h1>
               </div>
               <div className={styles.roomMeta}>
@@ -810,7 +913,7 @@ export default function MultiplayerClient({
                 <span className={styles.statusPill}>{snapshot.table.tableMode === "cash" ? "现金练习" : "单桌赛"} · {snapshot.table.startingStack}</span>
                 <span className={styles.statusPill}>读秒 {snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s</span>
                 <span className={styles.statusPill}>{snapshot.players.length}/{snapshot.room.maxPlayers} 人</span>
-                <button className={styles.dangerButton} type="button" onClick={() => void leaveRoom()} disabled={busy || !canLeave} title={canLeave ? "离开房间" : "本手结束后才能离开"}>离开</button>
+                <button className={styles.dangerButton} type="button" onClick={() => void leaveRoom()} disabled={busy || leaving} title="永久离开房间；牌局中未全下的手牌将自动弃牌">{leaving ? "正在离开…" : "永久离开"}</button>
               </div>
             </header>
 

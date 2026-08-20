@@ -65,6 +65,17 @@ class SqliteD1Database {
   }
 }
 
+class RacingSqliteD1Database extends SqliteD1Database {
+  beforeNextBatch = null;
+
+  async batch(statements) {
+    const race = this.beforeNextBatch;
+    this.beforeNextBatch = null;
+    if (race) race(this.database);
+    return super.batch(statements);
+  }
+}
+
 async function testStore() {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec("PRAGMA foreign_keys = ON");
@@ -243,6 +254,48 @@ test("a concurrent retry from the same account increments the room revision only
   assert.equal(persisted.revision, 1);
 });
 
+test("a stale D1 leave never deletes membership after another command wins the revision", async (context) => {
+  const { sqlite, store } = await testStore();
+  context.after(() => sqlite.close());
+
+  const owner = (await store.registerAccount("race-leave-owner", "并发庄家")).account;
+  const guest = (await store.registerAccount("race-leave-guest", "并发来宾")).account;
+  const room = await store.createRoom(owner.id, "并发退出桌", 2);
+  await store.joinRoom(guest.id, room.joinCode);
+  const database = new RacingSqliteD1Database(sqlite);
+  const service = new MultiplayerGameService(database);
+  let snapshot = await service.getSnapshot(room.id, owner.id);
+  snapshot = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
+    type: "ready",
+    ready: true,
+    requestId: "race-leave-prime-state",
+    expectedRevision: snapshot.room.revision,
+  }));
+
+  database.beforeNextBatch = (connection) => {
+    const persisted = connection.prepare("SELECT revision, state_json FROM rooms WHERE id = ?").get(room.id);
+    const state = JSON.parse(persisted.state_json);
+    state.revision = persisted.revision + 1;
+    state.seats.find((seat) => seat.accountId === guest.id).ready = true;
+    connection.prepare("UPDATE rooms SET revision = ?, state_json = ? WHERE id = ?")
+      .run(state.revision, JSON.stringify(state), room.id);
+  };
+
+  await assert.rejects(
+    service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
+      type: "leave",
+      requestId: "race-leave-command",
+      expectedRevision: snapshot.room.revision,
+    })),
+    (error) => error instanceof MultiplayerGameError && error.code === "REVISION_CONFLICT",
+  );
+
+  assert.equal(sqlite.prepare("SELECT count(*) AS count FROM room_members WHERE room_id = ? AND account_id = ?")
+    .get(room.id, owner.id).count, 1);
+  const intact = await service.getSnapshot(room.id, owner.id);
+  assert.equal(intact.table.seats.find((seat) => seat.seat === 0).pendingLeave, false);
+});
+
 test("schema and routes keep identity server-owned and enable the D1 binding", async () => {
   const [hosting, schema, accountRoute, roomsRoute, joinRoute] = await Promise.all([
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
@@ -320,6 +373,70 @@ test("D1 room state executes commands and never projects another player's hole c
       })),
       (error) => error instanceof MultiplayerGameError && error.code === "NOT_YOUR_TURN",
     );
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("D1 permanently leaves during a hand, frees membership, and makes a one-player table joinable", async () => {
+  const { sqlite, store } = await testStore();
+  try {
+    const owner = (await store.registerAccount("leave-owner", "离桌庄家")).account;
+    const guest = (await store.registerAccount("leave-guest", "留桌玩家")).account;
+    const room = await store.createRoom(owner.id, "退出回归桌", 2);
+    await store.joinRoom(guest.id, room.joinCode);
+    const service = new MultiplayerGameService(new SqliteD1Database(sqlite));
+
+    let ownerView = await service.getSnapshot(room.id, owner.id);
+    ownerView = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
+      type: "ready",
+      ready: true,
+      requestId: "leave-ready-owner",
+      expectedRevision: ownerView.room.revision,
+    }));
+    let guestView = await service.applyCommand(room.id, guest.id, parseMultiplayerCommand({
+      type: "ready",
+      ready: true,
+      requestId: "leave-ready-guest",
+      expectedRevision: ownerView.room.revision,
+    }));
+    ownerView = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
+      type: "start",
+      requestId: "leave-start-owner",
+      expectedRevision: guestView.room.revision,
+    }));
+    assert.equal(ownerView.table.phase, "playing");
+
+    const departedView = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
+      type: "leave",
+      requestId: "leave-during-hand",
+      expectedRevision: ownerView.room.revision,
+    }));
+    assert.equal(departedView.table.phase, "showdown");
+    assert.equal(departedView.room.memberCount, 1);
+    assert.equal(sqlite.prepare("SELECT count(*) AS count FROM room_members WHERE room_id = ? AND account_id = ?")
+      .get(room.id, owner.id).count, 0);
+    assert.deepEqual(await store.listRooms(owner.id), []);
+
+    guestView = await service.getSnapshot(room.id, guest.id);
+    assert.equal(guestView.table.seats.find((seat) => seat.seat === 0).pendingLeave, true);
+    guestView = await service.applyCommand(room.id, guest.id, parseMultiplayerCommand({
+      type: "show",
+      handId: guestView.game.handId,
+      show: false,
+      requestId: "leave-winner-muck",
+      expectedRevision: guestView.room.revision,
+    }));
+    assert.equal(guestView.table.phase, "lobby");
+    assert.equal(guestView.room.ownerAccountId, guestView.selfAccountId);
+    assert.equal(guestView.room.memberCount, 1);
+
+    const rejoined = await store.joinRoom(owner.id, room.joinCode);
+    assert.equal(rejoined.joined, true);
+    assert.equal(rejoined.room.memberCount, 2);
+    const restored = await service.getSnapshot(room.id, owner.id);
+    assert.equal(restored.table.phase, "lobby");
+    assert.equal(restored.table.viewerSeat, 0);
   } finally {
     sqlite.close();
   }

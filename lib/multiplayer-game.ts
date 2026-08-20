@@ -224,16 +224,17 @@ function actorFor(member: GameMemberRow): OnlineActor {
 }
 
 function hydrateRoomState(row: GameRoomRow, members: GameMemberRow[]): OnlineRoomState {
-  const owner = members.find((member) => member.account_id === row.owner_account_id);
-  if (!owner) throw new Error("The room owner is not a room member.");
-
   let state = row.state_json
     ? parseStoredState(row.state_json)
-    : createOnlineRoom({
-        roomId: row.id,
-        owner: actorFor(owner),
-        maxPlayers: row.max_players,
-      });
+    : (() => {
+        const owner = members.find((member) => member.account_id === row.owner_account_id);
+        if (!owner) throw new Error("The room owner is not a room member.");
+        return createOnlineRoom({
+          roomId: row.id,
+          owner: actorFor(owner),
+          maxPlayers: row.max_players,
+        });
+      })();
 
   if (state.roomId !== row.id || state.maxPlayers !== row.max_players) {
     throw new Error("The stored multiplayer state does not match the room record.");
@@ -252,7 +253,7 @@ function hydrateRoomState(row: GameRoomRow, members: GameMemberRow[]): OnlineRoo
   }
 
   const databaseMembers = new Set(members.map((member) => member.account_id));
-  if (state.seats.some((seat) => !databaseMembers.has(seat.accountId))) {
+  if (state.seats.some((seat) => !databaseMembers.has(seat.accountId) && seat.pendingLeave !== true)) {
     throw new Error("The stored multiplayer state contains an unexpected member.");
   }
   if (state.revision !== row.revision) {
@@ -313,9 +314,32 @@ function clientGame(table: OnlinePublicRoomState, players: ClientPublicPlayer[])
     : publicSeatId(hand.currentSeat);
   const legal = table.legalActions;
   const result = hand.result;
+  const gamePlayers = result
+    ? [
+        ...players,
+        ...result.winnerDetails.flatMap((winner) => {
+          if (players.some((player) => player.seat === winner.seat)) return [];
+          return [{
+            accountId: publicSeatId(winner.seat),
+            handle: winner.displayName,
+            seat: winner.seat,
+            stack: 0,
+            committed: 0,
+            streetCommitted: 0,
+            status: "out" as const,
+            ready: false,
+            timeBankMs: 0,
+            isOwner: false,
+            isDealer: winner.seat === hand.dealerSeat,
+            ...(winner.holeCards ? { holeCards: winner.holeCards.map(clientCard) } : {}),
+            holeCardCount: 2,
+          }];
+        }),
+      ]
+    : players;
   const resultSummary = result
     ? result.payouts.map((payout) => {
-        const player = players.find((candidate) => candidate.seat === payout.seat);
+        const player = gamePlayers.find((candidate) => candidate.seat === payout.seat);
         const handName = result.handNames.find((entry) => entry.seat === payout.seat)?.name;
         return `${player?.handle ?? `座位 ${payout.seat + 1}`}${handName ? `（${handName}）` : ""} 赢得 ${payout.amount}`;
       }).join("；")
@@ -323,7 +347,9 @@ function clientGame(table: OnlinePublicRoomState, players: ClientPublicPlayer[])
   return {
     handId: hand.id,
     handNo: hand.number,
-    street: table.phase === "showdown"
+    street: result
+      ? "complete"
+      : table.phase === "showdown"
       ? "showdown"
       : table.phase === "between_hands"
         ? "complete"
@@ -335,7 +361,7 @@ function clientGame(table: OnlinePublicRoomState, players: ClientPublicPlayer[])
     currentBet: hand.highestBet,
     actionStartedAt: hand.actionStartedAt,
     actionDeadlineAt: hand.actionDeadlineAt,
-    players,
+    players: gamePlayers,
     legalActions: legal
       ? {
           fold: legal.fold,
@@ -349,7 +375,7 @@ function clientGame(table: OnlinePublicRoomState, players: ClientPublicPlayer[])
       ? {
           summary: resultSummary || "本手已经结束。",
           winners: result.winnerSeats.flatMap((seat) => {
-            const winner = players.find((candidate) => candidate.seat === seat);
+            const winner = gamePlayers.find((candidate) => candidate.seat === seat);
             return winner ? [winner.accountId] : [];
           }),
         }
@@ -405,7 +431,7 @@ export class MultiplayerGameService {
         owner_account_id: publicOwnerId,
         status: stateStatus(state),
         revision: state.revision,
-        member_count: state.seats.length,
+        member_count: state.seats.filter((seat) => !seat.pendingLeave).length,
       }),
       selfAccountId,
       table,
@@ -477,6 +503,7 @@ export class MultiplayerGameService {
         this.database.prepare(`
           DELETE FROM room_members
           WHERE room_id = ? AND account_id = ?
+            AND changes() = 1
             AND EXISTS (SELECT 1 FROM rooms WHERE id = ? AND revision = ?)
         `).bind(roomId, accountId, roomId, next.revision),
       ]);
@@ -503,7 +530,7 @@ export class MultiplayerGameService {
       status: nextStatus,
       revision: next.revision,
       state_json: JSON.stringify(next),
-      member_count: next.seats.length,
+      member_count: next.seats.filter((seat) => !seat.pendingLeave).length,
     }, next, accountId);
   }
 }
