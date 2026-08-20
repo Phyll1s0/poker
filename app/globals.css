@@ -977,6 +977,13 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
 .modal-grid b { color: var(--gold); font-size: 9px; letter-spacing: .08em; }
 .modal-grid span { color: #797d77; font-size: 10px; line-height: 1.6; }
 .modal-primary { width: 100%; border: 0; border-radius: 3px; padding: 12px; background: var(--green); color: #f1eee6; font-weight: 700; cursor: pointer; }
+.install-modal { width: min(620px, 100%); }
+.install-guide { margin: 24px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.install-guide > div { min-height: 122px; padding: 17px; display: flex; flex-direction: column; gap: 9px; border: 1px solid var(--line); background: rgba(255,255,255,.012); }
+.install-guide > div.install-guide-primary { border-color: rgba(101,198,159,.28); background: rgba(101,198,159,.045); }
+.install-guide b { color: var(--gold); font-size: 9px; letter-spacing: .08em; }
+.install-guide strong { color: #d9d8d1; font-size: 11px; line-height: 1.6; }
+.install-guide span { color: #797d77; font-size: 9px; line-height: 1.6; }
 
 @media (prefers-reduced-motion: reduce) {
   .community-cards .dealt-card { opacity: 1; animation: none; }
@@ -1078,6 +1085,8 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
   .modal-grid { grid-template-columns: 1fr; }
   .modal-grid > div, .modal-grid > div:nth-child(2n), .modal-grid > div:nth-last-child(-n+2) { border-right: 0; border-bottom: 1px solid var(--line); }
   .modal-grid > div:last-child { border-bottom: 0; }
+  .install-guide { grid-template-columns: 1fr; }
+  .install-guide > div { min-height: auto; }
 }
 
 @media (pointer: coarse) {

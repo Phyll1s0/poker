@@ -1164,6 +1164,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   const [feedback, setFeedback] = useState<Review | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [installHelpOpen, setInstallHelpOpen] = useState(false);
   const [dealing, setDealing] = useState(false);
   const [soundOn, setSoundOn] = useState(true);
   const [mode, setMode] = useState<GameMode>("hand");
@@ -1448,7 +1449,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
 
   const installApp = useCallback(async () => {
     if (!installPrompt) {
-      setInfoOpen(true);
+      setInstallHelpOpen(true);
       return;
     }
     await installPrompt.prompt();
@@ -1894,6 +1895,40 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
               <div><b>如何打开</b><span>线上地址无需启动服务器；本地地址只有运行开发服务时可用。安装后可直接从桌面或程序坞点图标进入。</span></div>
             </div>
             <button className="modal-primary" onClick={() => setInfoOpen(false)}>回到牌桌</button>
+          </section>
+        </div>
+      )}
+
+      {installHelpOpen && (
+        <div className="modal-backdrop">
+          <section className="info-modal install-modal" role="dialog" aria-modal="true" aria-labelledby="install-title">
+            <button className="modal-close" onClick={() => setInstallHelpOpen(false)} aria-label="关闭安装说明">×</button>
+            <span className="eyebrow">INSTALL RANGECRAFT</span>
+            <h2 id="install-title">把 RangeCraft<br />放到桌面或主屏幕</h2>
+            <p>当前浏览器没有提供直接安装弹窗。游戏本身没有出错，请在系统浏览器中按下面对应的一项操作。</p>
+            <div className="install-guide">
+              <div className="install-guide-primary">
+                <b>Chrome / Edge · 电脑</b>
+                <strong>右上角 ⋮ → 投放、保存和分享 → 将网页安装为应用</strong>
+                <span>如果地址栏右侧直接出现安装图标，也可以点图标后确认安装。</span>
+              </div>
+              <div>
+                <b>Safari · Mac</b>
+                <strong>点工具栏“分享” → 添加到程序坞</strong>
+                <span>也可以使用菜单栏“文件 → 添加到程序坞”。</span>
+              </div>
+              <div>
+                <b>Safari · iPhone / iPad</b>
+                <strong>点“分享” → 添加到主屏幕 → 添加</strong>
+                <span>安装后会像普通 App 一样从主屏幕启动。</span>
+              </div>
+              <div>
+                <b>ChatGPT / 微信等内置浏览器</b>
+                <strong>先选择“在 Safari 中打开”或“在 Chrome 中打开”</strong>
+                <span>内置浏览器通常不会提供网页应用安装权限。</span>
+              </div>
+            </div>
+            <button className="modal-primary" onClick={() => setInstallHelpOpen(false)}>我知道怎么安装了</button>
           </section>
         </div>
       )}

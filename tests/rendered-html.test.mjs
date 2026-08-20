@@ -73,6 +73,9 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /function setHeroShowChoice/);
   assert.match(page, /function WinningHands/);
   assert.match(page, /赢家手牌/);
+  assert.match(page, /setInstallHelpOpen\(true\)/);
+  assert.match(page, /ChatGPT \/ 微信等内置浏览器/);
+  assert.doesNotMatch(page, /if \(!installPrompt\) \{\s*setInfoOpen\(true\)/);
   assert.match(globalsCss, /width: min\(800px, 78%, calc\(82dvh - 59px\)\)/);
   assert.match(globalsCss, /\.seat-0 \{ left: 50%; bottom: -100px/);
   assert.match(globalsCss, /\.seat-3 \{ left: 50%; top: -84px/);
