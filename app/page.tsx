@@ -1,7 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AI_PROFILES, sampleAiLineup } from "../lib/poker-ai";
+import {
+  AI_PROFILES,
+  adaptAiProfileToHeroImage,
+  sampleAiLineup,
+  updateHeroTableImage,
+  type HeroTableImage,
+} from "../lib/poker-ai";
 import { playPokerSound, setPokerAudioEnabled, unlockPokerAudio } from "../lib/poker-audio";
 import {
   analyzeBoardTexture,
@@ -24,6 +30,15 @@ import {
   type PokerPolicyProfile,
 } from "../lib/poker-policy";
 import { createPublicOpponentRanges, type PublicBettingAction } from "../lib/poker-range";
+import {
+  POKER_RUN_DECISION_HISTORY_LIMIT,
+  POKER_RUN_HAND_HISTORY_LIMIT,
+  createPokerRunDecisionStats,
+  pokerRunBbPer100,
+  pokerRunCanStartNextHand,
+  recordPokerRunDecision,
+  upsertPokerRunHand,
+} from "../lib/poker-run";
 import { settlePokerShowdown } from "../lib/poker-settlement";
 import { resolveNextCashGameBankrolls, resolvePokerDecisionStacks } from "../lib/poker-stack";
 import {
@@ -43,9 +58,9 @@ import { settleSquidRound, squidMultiplier } from "../lib/poker-squid";
 type Suit = "♠" | "♥" | "♦" | "♣";
 type Street = "preflop" | "flop" | "turn" | "river";
 type ActionKind = "fold" | "check" | "call" | "raise";
-type GameMode = "per_hand" | "session";
+type GameMode = "per_hand" | "session" | "endless";
 type TablePresetKey = "short" | "standard" | "deep" | "squid";
-type TableImage = { loose: number; aggressive: number; deceptive: number; observations: number };
+type TableImage = HeroTableImage;
 type InstallPromptEvent = Event & {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
@@ -952,37 +967,26 @@ function act(game: Game, playerId: number, kind: ActionKind, raiseTo?: number): 
   return { ...withLog, current: nextEligible(players, playerId) };
 }
 
-function chooseAiAction(game: Game, player: Player, heroImage: TableImage): { kind: ActionKind; raiseTo?: number } {
+function chooseAiAction(
+  game: Game,
+  player: Player,
+  heroImage: TableImage,
+  mode: GameMode,
+): { kind: ActionKind; raiseTo?: number } {
   const styleKey = player.styleKey as keyof typeof AI_PROFILES;
-  const baseline = AI_PROFILES[styleKey];
-  const confidence = clamp(heroImage.observations / 24);
-  const tightness = 0.5 - heroImage.loose;
-  const passivity = 0.5 - heroImage.aggressive;
-  const deceptivePressure = heroImage.deceptive - 0.5;
-  const profile: PokerPolicyProfile = styleKey === "adaptive"
-    ? {
-        aggression: clamp(baseline.aggression + confidence * (tightness * 0.18 + passivity * 0.12)),
-        looseness: clamp(baseline.looseness + confidence * (tightness * 0.08 - deceptivePressure * 0.06)),
-        bluff: clamp(baseline.bluff + confidence * (tightness * 0.2 + passivity * 0.12 - deceptivePressure * 0.1)),
-      }
-    : { ...baseline };
   const equity = currentEquity(game, player, game.street === "preflop" ? 300 : 600);
   const facingHero = game.lastAggressor === 0;
-  const readSensitivity: Record<keyof typeof AI_PROFILES, number> = {
-    gto: 0.28,
-    lag: 0.42,
-    tag: 0.34,
-    adaptive: 1,
-    nit: 0.2,
+  const adapted = adaptAiProfileToHeroImage(styleKey, heroImage, {
+    heroActive: !game.players[0].folded,
+    facingHero,
+    intensity: mode === "endless" ? 1.25 : 0.7,
+  });
+  const profile: PokerPolicyProfile = {
+    aggression: adapted.aggression,
+    looseness: adapted.looseness,
+    bluff: adapted.bluff,
   };
-  const heroCallAdjustment = facingHero
-    ? confidence * readSensitivity[styleKey] * (
-        (heroImage.deceptive - 0.5) * 0.14
-        + (heroImage.loose - 0.5) * 0.08
-        + (heroImage.aggressive - 0.5) * 0.12
-      )
-    : 0;
-  const effectiveEquity = clamp(equity + heroCallAdjustment, 0.02, 0.98);
+  const effectiveEquity = clamp(equity + adapted.equityAdjustment, 0.02, 0.98);
   return choosePokerPolicyAction(buildPokerPolicyInput(game, player, effectiveEquity, profile));
 }
 
@@ -1398,7 +1402,7 @@ function LandingHome({ onEnterSolo }: { onEnterSolo: () => void }) {
             }}
           >
             <span className="mode-index">01</span>
-            <div><small>LOCAL TRAINING</small><h3>单人训练</h3><p>浅筹、标准、深筹与血战鱿鱼；电脑风格每桌随机，支持逐手即时指导与整局统一复盘。</p></div>
+            <div><small>LOCAL TRAINING</small><h3>单人训练</h3><p>浅筹、标准、深筹与血战鱿鱼；电脑风格每桌随机，支持逐手、整局与画像自适应无尽对局。</p></div>
             <strong>立即开始 <span>→</span></strong>
           </a>
           <a className="landing-mode-card multiplayer" href={multiplayerHref}>
@@ -1431,6 +1435,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   const [mode, setMode] = useState<GameMode>("per_hand");
   const [sessionEnded, setSessionEnded] = useState(false);
   const [sessionResults, setSessionResults] = useState<SessionHandResult[]>([]);
+  const [runDecisionStats, setRunDecisionStats] = useState(createPokerRunDecisionStats);
   const [heroImage, setHeroImage] = useState<TableImage>({ loose: 0.5, aggressive: 0.5, deceptive: 0.5, observations: 0 });
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
   const [appInstalled, setAppInstalled] = useState(() => typeof window !== "undefined" && (
@@ -1438,6 +1443,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     || Boolean((navigator as Navigator & { standalone?: boolean }).standalone)
   ));
   const winSoundHand = useRef(0);
+  const observedShowdownImageHand = useRef(0);
   const soundOnRef = useRef(true);
 
   useEffect(() => {
@@ -1518,19 +1524,16 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     };
   }, [communityLength, dealCount, currentHandNo]);
 
-  const recordSessionHand = useCallback((finishedGame: Game) => {
-    if (mode !== "session" || finishedGame.status !== "showdown" || !finishedGame.showChoiceMade) return;
+  const recordRunHand = useCallback((finishedGame: Game) => {
+    if (mode === "per_hand" || finishedGame.status !== "showdown" || !finishedGame.showChoiceMade) return;
     const entry = buildSessionHandResult(finishedGame, review);
-    setSessionResults((items) => [
-      ...items.filter((item) => item.hand !== finishedGame.handNo),
-      entry,
-    ]);
+    setSessionResults((items) => upsertPokerRunHand(items, entry, POKER_RUN_HAND_HISTORY_LIMIT));
   }, [mode, review]);
 
   useEffect(() => {
     if (game?.status === "showdown" && !dealing) {
       const timer = window.setTimeout(() => {
-        recordSessionHand(game);
+        recordRunHand(game);
         if (mode === "per_hand" && game.showChoiceMade) setShowLog(true);
         if (mode === "session" && isSessionComplete(game) && game.showChoiceMade) {
           setSessionEnded(true);
@@ -1543,7 +1546,25 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       }, 0);
       return () => window.clearTimeout(timer);
     }
-  }, [game, dealing, mode, recordSessionHand]);
+  }, [game, dealing, mode, recordRunHand]);
+
+  useEffect(() => {
+    if (
+      !game
+      || dealing
+      || game.status !== "showdown"
+      || game.endedUncontested
+      || !game.shownPlayerIds.includes(0)
+      || observedShowdownImageHand.current === game.handNo
+    ) return;
+    observedShowdownImageHand.current = game.handNo;
+    const strength = visibleHandStrength(game.players[0], game.community);
+    const heroRaised = game.actionHistory.some((action) => action.playerId === 0 && action.kind === "raise");
+    setHeroImage((image) => updateHeroTableImage(image, {
+      loose: strength < 0.45 ? 0.72 : strength > 0.72 ? 0.38 : 0.52,
+      deceptive: heroRaised && strength < 0.45 ? 0.86 : heroRaised && strength > 0.72 ? 0.34 : 0.5,
+    }));
+  }, [game, dealing]);
 
   useEffect(() => {
     if (!isHumanTurn || maxTarget <= 0) return;
@@ -1563,7 +1584,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     const player = game.players[game.current];
     if (!player || player.isHuman) return;
     const timer = window.setTimeout(() => {
-      const decision = chooseAiAction(game, player, heroImage);
+      const decision = chooseAiAction(game, player, heroImage, mode);
       if (soundOn) playPokerSound(decision.kind);
       setGame((current) => {
         if (!current || current.handNo !== game.handNo || current.status !== "playing" || current.current !== player.id) return current;
@@ -1571,18 +1592,25 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       });
     }, 520 + Math.random() * 620);
     return () => window.clearTimeout(timer);
-  }, [game, dealing, soundOn, heroImage]);
+  }, [game, dealing, soundOn, heroImage, mode]);
 
   const startNextHand = useCallback(() => {
-    if (mode === "session" && (sessionEnded || (game ? isSessionComplete(game) : false))) return;
-    if (game) recordSessionHand(game);
+    if (!pokerRunCanStartNextHand(mode, sessionEnded, game ? isSessionComplete(game) : false)) return;
+    if (game) recordRunHand(game);
     setFeedback(null);
     setShowLog(false);
     setGame((current) => freshGame(current ?? undefined, {
       resetStacks: false,
       shuffleStyles: false,
     }));
-  }, [mode, sessionEnded, game, recordSessionHand]);
+  }, [mode, sessionEnded, game, recordRunHand]);
+
+  const finishEndlessRun = useCallback(() => {
+    if (mode !== "endless" || !game || game.status !== "showdown" || !game.showChoiceMade || sessionEnded) return;
+    recordRunHand(game);
+    setSessionEnded(true);
+    setShowLog(true);
+  }, [mode, game, sessionEnded, recordRunHand]);
 
   const resetRun = useCallback((nextMode: GameMode, nextPreset: TablePresetKey) => {
     setMode(nextMode);
@@ -1592,10 +1620,12 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     setShowLog(false);
     setSessionEnded(false);
     setSessionResults([]);
+    setRunDecisionStats(createPokerRunDecisionStats());
     setHeroImage({ loose: 0.5, aggressive: 0.5, deceptive: 0.5, observations: 0 });
     setDealing(false);
     setRaiseTo(BIG_BLIND * 3);
     winSoundHand.current = 0;
+    observedShowdownImageHand.current = 0;
     setGame(freshGame(undefined, { shuffleStyles: true, presetKey: nextPreset }));
   }, []);
 
@@ -1614,7 +1644,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   }, [hasRunProgress, onExit]);
 
   const switchMode = useCallback((nextMode: GameMode) => {
-    if (nextMode === mode || (currentPresetKey === "squid" && nextMode === "per_hand")) return;
+    if (nextMode === mode || (currentPresetKey === "squid" && nextMode !== "session")) return;
     if (hasRunProgress && !window.confirm("切换训练模式会重新开始当前练习，确定继续吗？")) return;
     resetRun(nextMode, currentPresetKey);
   }, [mode, currentPresetKey, hasRunProgress, resetRun]);
@@ -1633,11 +1663,9 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   const chooseHeroShow = useCallback((show: boolean) => {
     if (!game || !game.endedUncontested || game.winnerIds[0] !== 0 || game.showChoiceMade) return;
     const strength = visibleHandStrength(game.players[0], game.community);
-    setHeroImage((image) => ({
-      loose: clamp(image.loose * 0.82 + (show && strength < 0.45 ? 0.78 : show ? 0.38 : 0.52) * 0.18),
-      aggressive: image.aggressive,
-      deceptive: clamp(image.deceptive * 0.75 + (show && strength < 0.45 ? 0.92 : show ? 0.28 : 0.62) * 0.25),
-      observations: image.observations + 1,
+    setHeroImage((image) => updateHeroTableImage(image, {
+      loose: show && strength < 0.45 ? 0.78 : show ? 0.38 : 0.52,
+      deceptive: show && strength < 0.45 ? 0.92 : show ? 0.28 : 0.62,
     }));
     setGame(setHeroShowChoice(game, show));
   }, [game]);
@@ -1721,17 +1749,13 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       score,
       note: advice.note,
     };
-    setReview((items) => [entry, ...items].slice(0, 400));
+    setReview((items) => [entry, ...items].slice(0, POKER_RUN_DECISION_HISTORY_LIMIT));
+    setRunDecisionStats((stats) => recordPokerRunDecision(stats, game.street, score));
     setFeedback(mode === "per_hand" ? entry : null);
     setHeroImage((image) => {
       const looseSignal = kind === "fold" ? 0.18 : kind === "check" ? 0.4 : kind === "call" ? 0.68 : 0.78;
       const aggressionSignal = kind === "raise" ? 0.9 : kind === "fold" ? 0.34 : 0.24;
-      return {
-        loose: clamp(image.loose * 0.88 + looseSignal * 0.12),
-        aggressive: clamp(image.aggressive * 0.88 + aggressionSignal * 0.12),
-        deceptive: image.deceptive,
-        observations: image.observations + 1,
-      };
+      return updateHeroTableImage(image, { loose: looseSignal, aggressive: aggressionSignal });
     });
     setGame((current) => (current ? act(current, human.id, kind, actualRaiseTo ?? undefined) : current));
   }, [game, human, isHumanTurn, advice, raiseTo, toCall, equity, soundOn, mode]);
@@ -1786,25 +1810,36 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   }
 
   const handFinished = game.status === "showdown" && !dealing;
-  const sessionScore = review.length ? Math.round(review.reduce((sum, item) => sum + item.score, 0) / review.length) : "—";
+  const isReviewRun = mode !== "per_hand";
+  const sessionScore = runDecisionStats.count
+    ? Math.round(runDecisionStats.scoreTotal / runDecisionStats.count)
+    : "—";
   const handReview = review.filter((item) => item.hand === game.handNo);
   const handScore = handReview.length ? Math.round(handReview.reduce((sum, item) => sum + item.score, 0) / handReview.length) : "—";
   const reviewUnlocked = mode === "per_hand" ? handFinished && game.showChoiceMade : sessionEnded;
   const reportReview = [...(mode === "per_hand" ? handReview : review)].reverse();
   const reportScore = mode === "per_hand" ? handScore : sessionScore;
-  const completedHands = mode === "session"
-    ? Math.max(sessionResults.length, handFinished ? game.handNo : game.handNo - 1)
+  const completedHands = isReviewRun
+    ? Math.max(0, handFinished ? game.handNo : game.handNo - 1)
     : game.handNo;
   const squidAwarded = game.squid.total - game.squid.remaining;
   const sessionProgressDone = game.presetKey === "squid" ? squidAwarded : Math.min(completedHands, SESSION_HANDS);
   const sessionProgressGoal = game.presetKey === "squid" ? game.squid.total : SESSION_HANDS;
-  const sessionIsComplete = isSessionComplete(game);
+  const sessionIsComplete = mode === "session" && isSessionComplete(game);
   const heroNet = human.stack - game.cashInvested[0];
+  const heroNetBb = heroNet / BIG_BLIND;
+  const heroBbPer100 = pokerRunBbPer100(heroNet, BIG_BLIND, completedHands);
   const showDecisionPending = handFinished && game.endedUncontested && game.winnerIds[0] === 0 && !game.showChoiceMade;
   const imageLabel = (value: number, low: string, middle: string, high: string) => value < 0.42 ? low : value > 0.58 ? high : middle;
   const streetScores = (["翻牌前", "翻牌", "转牌", "河牌"] as const).map((street) => {
-    const items = review.filter((item) => item.street === street);
-    return { street, count: items.length, score: items.length ? Math.round(items.reduce((sum, item) => sum + item.score, 0) / items.length) : null };
+    const streetKey = ({ 翻牌前: "preflop", 翻牌: "flop", 转牌: "turn", 河牌: "river" } as const)[street];
+    const aggregate = runDecisionStats.byStreet[streetKey];
+    const items = handReview.filter((item) => item.street === street);
+    const count = isReviewRun ? aggregate.count : items.length;
+    const score = count
+      ? Math.round((isReviewRun ? aggregate.scoreTotal : items.reduce((sum, item) => sum + item.score, 0)) / count)
+      : null;
+    return { street, count, score };
   });
 
   return (
@@ -1823,7 +1858,9 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
           <i />
           <span>盲注 {SMALL_BLIND}/{BIG_BLIND} · 6-MAX</span>
           <i />
-          <span>{TABLE_PRESETS[game.presetKey].shortLabel} · {mode === "session" ? game.presetKey === "squid" ? `第 ${game.handNo} 手 · 剩余 ${game.squid.remaining} 条` : `${Math.min(game.handNo, SESSION_HANDS)} / ${SESSION_HANDS} 手` : `第 ${game.handNo} 手`}</span>
+          <span>{TABLE_PRESETS[game.presetKey].shortLabel} · {mode === "session"
+            ? game.presetKey === "squid" ? `第 ${game.handNo} 手 · 剩余 ${game.squid.remaining} 条` : `${Math.min(game.handNo, SESSION_HANDS)} / ${SESSION_HANDS} 手`
+            : mode === "endless" ? `无尽对局 · 第 ${game.handNo} 手` : `第 ${game.handNo} 手`}</span>
         </div>
         <div className="header-actions">
           {!appInstalled && (
@@ -1835,12 +1872,14 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
             <span>{soundOn ? "♪" : "—"}</span><b>音效</b><em>{soundOn ? "ON" : "OFF"}</em>
           </button>
           <button
-            className={`training-toggle ${training && mode === "per_hand" ? "on" : ""}`}
+            className={`training-toggle ${training && !isReviewRun ? "on" : ""}`}
             onClick={() => setTraining((value) => !value)}
-            disabled={mode === "session"}
-            title={mode === "session" ? game.presetKey === "squid" ? "鱿鱼整局在 9 条发完后统一点评" : "整局模式在第 20 手后统一点评" : undefined}
+            disabled={isReviewRun}
+            title={mode === "session"
+              ? game.presetKey === "squid" ? "鱿鱼整局在 9 条发完后统一点评" : "整局模式在第 20 手后统一点评"
+              : mode === "endless" ? "无尽对局在你主动结束后统一点评" : undefined}
           >
-            <span>{mode === "session" ? "赛后点评" : "训练提示"}</span><b>{mode === "session" ? "LOCK" : training ? "ON" : "OFF"}</b>
+            <span>{isReviewRun ? "赛后点评" : "训练提示"}</span><b>{isReviewRun ? "LOCK" : training ? "ON" : "OFF"}</b>
           </button>
           <button className="icon-button" aria-label="查看游戏说明" onClick={() => setInfoOpen(true)}>?</button>
         </div>
@@ -1872,10 +1911,24 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                 <button className={mode === "session" ? "active" : ""} aria-pressed={mode === "session"} onClick={() => switchMode("session")}>
                   <b>{currentPresetKey === "squid" ? "鱿鱼整局" : "20 手整局"}</b><span>{currentPresetKey === "squid" ? "9 条发完统一点评" : "结束后统一点评"}</span>
                 </button>
+                <button
+                  className={mode === "endless" ? "active" : ""}
+                  aria-pressed={mode === "endless"}
+                  onClick={() => switchMode("endless")}
+                  disabled={currentPresetKey === "squid"}
+                  title={currentPresetKey === "squid" ? "血战鱿鱼有固定结算终点，使用鱿鱼整局模式" : undefined}
+                >
+                  <b>无尽对局</b><span>画像自适应 · 主动结束复盘</span>
+                </button>
               </div>
             </div>
             <div className="table-status-row">
               {mode === "session" && <div className="session-progress"><i style={{ width: `${sessionProgressDone / Math.max(1, sessionProgressGoal) * 100}%` }} /><span>{sessionProgressDone}/{sessionProgressGoal}</span></div>}
+              {mode === "endless" && (
+                <div className="endless-run-status">
+                  <span>∞ 无尽对局</span><b>已完成 {completedHands} 手</b><em>当前净收益 {heroNet >= 0 ? "+" : ""}{heroNet}</em>
+                </div>
+              )}
               {game.presetKey === "squid" && (
                 <div className="squid-race-status"><span>🦑 第 {game.squid.round} 轮</span><b>剩余 {game.squid.remaining}/{game.squid.total}</b><em>基础 {game.squid.bounty / BIG_BLIND} BB</em></div>
               )}
@@ -1913,7 +1966,9 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
             {handFinished ? (
               <div className="hand-end-dock">
                 <div className="hand-end-copy">
-                  <span>{mode === "session" ? game.presetKey === "squid" ? `第 ${game.handNo} 手 · 本轮已发 ${squidAwarded}/${game.squid.total}` : `整局进度 ${Math.min(game.handNo, SESSION_HANDS)}/${SESSION_HANDS}` : "本手结束"}</span>
+                  <span>{mode === "session"
+                    ? game.presetKey === "squid" ? `第 ${game.handNo} 手 · 本轮已发 ${squidAwarded}/${game.squid.total}` : `整局进度 ${Math.min(game.handNo, SESSION_HANDS)}/${SESSION_HANDS}`
+                    : mode === "endless" ? `无尽对局 · 已完成 ${game.handNo} 手` : "本手结束"}</span>
                   <strong>{game.result}</strong>
                   {showDecisionPending && (
                     <p>{game.presetKey === "squid" ? "亮牌可获得本手鱿鱼；盖牌能隐藏信息，但会放弃这条鱿鱼。" : "要公开这两张手牌来塑造桌上形象吗？AI 会记住你的选择。"}</p>
@@ -1926,6 +1981,13 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                   </div>
                 ) : mode === "session" && sessionIsComplete ? (
                   <button className="next-hand-button" onClick={() => setShowLog(true)}>查看{game.presetKey === "squid" ? "鱿鱼" : ""}整局复盘</button>
+                ) : mode === "endless" && sessionEnded ? (
+                  <button className="next-hand-button" onClick={() => setShowLog(true)}>查看无尽对局复盘</button>
+                ) : mode === "endless" ? (
+                  <div className="endless-hand-actions">
+                    <button className="next-hand-button" onClick={startNextHand}>下一手 · 筹码延续 <kbd>N</kbd></button>
+                    <button className="finish-endless-button" onClick={finishEndlessRun}>结束无尽局并复盘</button>
+                  </div>
                 ) : (
                   <button className="next-hand-button" onClick={startNextHand}>下一手 · 筹码延续 <kbd>N</kbd></button>
                 )}
@@ -1995,30 +2057,44 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
           <div className="coach-heading">
             <div><span>AI COACH</span><h2>决策实验室</h2></div>
             <div className="score-badge">
-              <strong>{mode === "session" && !sessionEnded ? "—" : reportScore}</strong>
-              <span>{mode === "session" ? sessionEnded ? "整局匹配度" : "赛后评分" : "本手匹配度"}</span>
+              <strong>{isReviewRun && !sessionEnded ? "—" : reportScore}</strong>
+              <span>{isReviewRun ? sessionEnded ? mode === "endless" ? "长期匹配度" : "整局匹配度" : "赛后评分" : "本手匹配度"}</span>
             </div>
           </div>
 
           <div className="tabs" role="tablist">
-            <button className={!showLog ? "active" : ""} onClick={() => setShowLog(false)}>{mode === "session" ? "整局进行中" : "实时教练"}</button>
+            <button className={!showLog ? "active" : ""} onClick={() => setShowLog(false)}>{mode === "session" ? "整局进行中" : mode === "endless" ? "无尽对局中" : "实时教练"}</button>
             <button className={showLog ? "active" : ""} onClick={() => setShowLog(true)} aria-disabled={!reviewUnlocked}>
-              {mode === "session" ? game.presetKey === "squid" ? `鱿鱼复盘 · ${squidAwarded}/${game.squid.total}` : `整局复盘 · ${completedHands}/${SESSION_HANDS}` : `本手复盘${reviewUnlocked ? " · 已解锁" : ""}`}
+              {mode === "session"
+                ? game.presetKey === "squid" ? `鱿鱼复盘 · ${squidAwarded}/${game.squid.total}` : `整局复盘 · ${completedHands}/${SESSION_HANDS}`
+                : mode === "endless" ? `无尽复盘 · ${completedHands} 手` : `本手复盘${reviewUnlocked ? " · 已解锁" : ""}`}
             </button>
           </div>
 
-          {!showLog ? mode === "session" ? (
+          {!showLog ? isReviewRun ? (
             <div className="analysis-content session-live">
               <section className="session-lock">
                 <div className="lock-orbit">◇</div>
                 <span>SESSION REVIEW LOCKED</span>
-                <h3>{game.presetKey === "squid" ? "答案留到 9 条鱿鱼发完之后" : "答案留到第 20 手之后"}</h3>
-                <p>整局模式不显示实时胜率、推荐动作、决策分数和对手类型，避免答案影响你的下一次判断。</p>
-                <div className="session-progress-card">
-                  <div><b>{sessionProgressDone}</b><span>{game.presetKey === "squid" ? "已发出" : "已完成"}</span></div>
-                  <i><em style={{ width: `${sessionProgressDone / Math.max(1, sessionProgressGoal) * 100}%` }} /></i>
-                  <strong>{sessionProgressGoal}</strong>
-                </div>
+                <h3>{mode === "endless"
+                  ? "答案留到你主动结束之后"
+                  : game.presetKey === "squid" ? "答案留到 9 条鱿鱼发完之后" : "答案留到第 20 手之后"}</h3>
+                <p>{mode === "endless"
+                  ? "无尽模式不显示实时胜率、推荐动作、决策分数和对手类型；电脑会持续学习你的公开行为，但具体画像只在结束后公开。"
+                  : "整局模式不显示实时胜率、推荐动作、决策分数和对手类型，避免答案影响你的下一次判断。"}</p>
+                {mode === "endless" ? (
+                  <div className="session-progress-card endless-progress-card">
+                    <div><b>{completedHands}</b><span>已完成</span></div>
+                    <i><em /></i>
+                    <strong>∞</strong>
+                  </div>
+                ) : (
+                  <div className="session-progress-card">
+                    <div><b>{sessionProgressDone}</b><span>{game.presetKey === "squid" ? "已发出" : "已完成"}</span></div>
+                    <i><em style={{ width: `${sessionProgressDone / Math.max(1, sessionProgressGoal) * 100}%` }} /></i>
+                    <strong>{sessionProgressGoal}</strong>
+                  </div>
+                )}
               </section>
               <section className="public-state">
                 <div className="section-label"><span>公开牌局状态</span><small>不含策略提示</small></div>
@@ -2031,7 +2107,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
               <SquidScoreboard game={game} />
               <section className="locked-profile">
                 <span>◇</span>
-                <div><b>桌上形象正在形成</b><p>AI 会根据你的松紧、侵略性和亮牌行为调整应对；具体画像只在整局结束后公开。</p></div>
+                <div><b>桌上形象正在形成</b><p>AI 会根据你的松紧、侵略性和亮牌行为渐进调整应对；样本越多，反制越稳定，具体画像只在结束后公开。</p></div>
               </section>
             </div>
           ) : (
@@ -2090,8 +2166,14 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
               <section className="session-lock compact">
                 <div className="lock-orbit">◇</div>
                 <span>REVIEW LOCKED</span>
-                <h3>{showDecisionPending ? "请先选择亮牌或盖牌" : mode === "session" ? game.presetKey === "squid" ? `还剩 ${game.squid.remaining} 条鱿鱼` : `还需完成 ${Math.max(0, SESSION_HANDS - completedHands)} 手` : "本手尚未结束"}</h3>
-                <p>{showDecisionPending ? "完成本手的展示决策后再生成报告，避免复盘信息影响你的选择。" : mode === "session" ? "整局结束后一次生成完整报告，不显示中途答案、分数和对手类型。" : "牌局结束后会自动生成这手牌的决策点评。"}</p>
+                <h3>{showDecisionPending
+                  ? "请先选择亮牌或盖牌"
+                  : mode === "session" ? game.presetKey === "squid" ? `还剩 ${game.squid.remaining} 条鱿鱼` : `还需完成 ${Math.max(0, SESSION_HANDS - completedHands)} 手`
+                  : mode === "endless" ? "完成本手后可主动结束并生成复盘" : "本手尚未结束"}</h3>
+                <p>{showDecisionPending
+                  ? "完成本手的展示决策后再生成报告，避免复盘信息影响你的选择。"
+                  : isReviewRun ? mode === "endless" ? "继续对局，或在一手完整结算后点击“结束无尽局并复盘”。中途不公开答案、分数和对手类型。" : "整局结束后一次生成完整报告，不显示中途答案、分数和对手类型。"
+                  : "牌局结束后会自动生成这手牌的决策点评。"}</p>
                 <button onClick={() => setShowLog(false)}>回到牌桌</button>
               </section>
             </div>
@@ -2099,26 +2181,31 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
             <div className="log-content">
               <div className="review-summary unlocked">
                 <div>
-                  <span>{mode === "session" ? game.presetKey === "squid" ? "鱿鱼整局报告已生成" : "20 手整局报告已生成" : "本手复盘已生成"}</span>
-                  <h3>{TABLE_PRESETS[game.presetKey].shortLabel} · {mode === "session" ? `${sessionResults.length} 手 · ${review.length} 个决策节点` : `第 ${game.handNo} 手 · ${STREET_LABELS[game.street]}`}</h3>
+                  <span>{mode === "session"
+                    ? game.presetKey === "squid" ? "鱿鱼整局报告已生成" : "20 手整局报告已生成"
+                    : mode === "endless" ? "无尽对局报告已生成" : "本手复盘已生成"}</span>
+                  <h3>{TABLE_PRESETS[game.presetKey].shortLabel} · {isReviewRun ? `${completedHands} 手 · ${runDecisionStats.count} 个决策节点` : `第 ${game.handNo} 手 · ${STREET_LABELS[game.street]}`}</h3>
                 </div>
                 <strong>{reportScore}<small>{reportReview.length ? "策略匹配度" : "暂无决策"}</small></strong>
               </div>
 
-              {mode === "session" && (
+              {isReviewRun && (
                 <>
                   <div className="session-stats">
-                    <div><span>完成手数</span><strong>{sessionResults.length}{game.presetKey === "squid" ? "" : `/${SESSION_HANDS}`}</strong></div>
+                    <div><span>完成手数</span><strong>{completedHands}{mode === "session" && game.presetKey !== "squid" ? `/${SESSION_HANDS}` : ""}</strong></div>
                     <div><span>桌面筹码</span><strong>{human.stack}</strong></div>
-                    <div><span>本局总投入</span><strong>{game.cashInvested[0]}</strong></div>
-                    <div><span>净结果（含鱿鱼）</span><strong className={heroNet >= 0 ? "good" : "bad"}>{heroNet >= 0 ? "+" : ""}{heroNet}</strong></div>
+                    <div><span>累计投入</span><strong>{game.cashInvested[0]}</strong></div>
+                    <div><span>{game.presetKey === "squid" ? "净结果（含鱿鱼）" : "累计净收益"}</span><strong className={heroNet >= 0 ? "good" : "bad"}>{heroNet >= 0 ? "+" : ""}{heroNet}</strong></div>
+                    <div><span>净收益（BB）</span><strong className={heroNet >= 0 ? "good" : "bad"}>{heroNetBb >= 0 ? "+" : ""}{heroNetBb.toFixed(1)}</strong></div>
+                    <div><span>BB / 100</span><strong className={heroBbPer100 >= 0 ? "good" : "bad"}>{heroBbPer100 >= 0 ? "+" : ""}{heroBbPer100.toFixed(1)}</strong></div>
                     <div><span>AI 眼中的松紧</span><strong>{imageLabel(heroImage.loose, "偏紧", "均衡", "偏松")}</strong></div>
                     <div><span>AI 眼中的风格</span><strong>{imageLabel(heroImage.aggressive, "偏被动", "均衡", "偏激进")}</strong></div>
+                    <div><span>AI 眼中的欺骗性</span><strong>{imageLabel(heroImage.deceptive, "偏直白", "均衡", "难预测")}</strong></div>
                     <div><span>画像样本</span><strong>{heroImage.observations} 次</strong></div>
                   </div>
                   <SquidScoreboard game={game} report />
                   <div className="session-hand-list">
-                    <div className="section-label"><span>逐手结果</span><small>低于 1 BB 自动补至该桌型的初始买入</small></div>
+                    <div className="section-label"><span>{completedHands > sessionResults.length ? `最近 ${sessionResults.length} 手结果` : "逐手结果"}</span><small>累计统计保留全部样本 · 低于 1 BB 自动补至初始买入</small></div>
                     {[...sessionResults].sort((a, b) => a.hand - b.hand).map((item) => (
                       <div key={item.hand}>
                         <span>{String(item.hand).padStart(2, "0")}</span>
@@ -2135,12 +2222,12 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
               )}
 
               <div className="review-log">
-                <div className="section-label"><span>{mode === "session" ? "整局决策路径" : "你的决策路径"}</span><small>{reportReview.length} 个节点</small></div>
+                <div className="section-label"><span>{mode === "session" ? "整局决策路径" : mode === "endless" ? "最近决策路径" : "你的决策路径"}</span><small>{reportReview.length}{isReviewRun && runDecisionStats.count > reportReview.length ? ` / 累计 ${runDecisionStats.count}` : ""} 个节点</small></div>
                 {reportReview.length ? reportReview.map((item) => (
                   <div className="review-row" key={item.id}>
                     <span className={item.score >= 85 ? "good" : item.score >= 65 ? "ok" : "bad"}>{item.score}</span>
                     <div>
-                      <b>{mode === "session" ? `第 ${item.hand} 手 · ` : ""}{item.street} · 手牌 {item.cards}</b>
+                      <b>{isReviewRun ? `第 ${item.hand} 手 · ` : ""}{item.street} · 手牌 {item.cards}</b>
                       <p>公共牌 {item.board} · 底池 {item.pot} · 面对 {item.toCall}</p>
                       <p>你的选择：{item.action}（{item.actionVerdict}，约 {Math.round(item.selectedFrequency * 100)}%）；最高频线路：{item.recommended}</p>
                       <p>参考混合：{item.mix}</p>
@@ -2158,6 +2245,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
 
               <div className="opponent-review">
                 <div className="section-label"><span>对手策略画像</span><small>复盘时公开</small></div>
+                {mode === "endless" && <p className="range-note">以下是每位电脑的基准风格；无尽对局中它们都依据你的累计画像渐进调整了进攻、入池、诈唬与直接对抗频率，但不会因此收敛成同一种打法。</p>}
                 <div className="profile-list revealed">
                   {game.players.slice(1).map((player) => (
                     <div key={player.id}>
@@ -2169,9 +2257,9 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                 </div>
               </div>
 
-              {mode === "session" && (
+              {isReviewRun && (
                 <button className="session-restart" onClick={restartCurrentRun}>
-                  {game.presetKey === "squid" ? "开始新一轮鱿鱼" : "开始新的 20 手整局"}
+                  {mode === "endless" ? "开始新的无尽对局" : game.presetKey === "squid" ? "开始新一轮鱿鱼" : "开始新的 20 手整局"}
                 </button>
               )}
 
@@ -2200,10 +2288,10 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
             <p>翻前先查询六人桌 169 手牌基准表，再按位置、前序行动、尺度与筹码深度修正；翻后综合对行动加权范围的估算权益、直接赔率、权益实现、SPR、牌面纹理、听牌与阻断牌，连续生成动作和条件尺度混合。电脑、实时建议与复盘共用同一策略；评分是频率匹配度，不是求解器计算出的精确 EV 损失。</p>
             <div className="modal-grid">
               <div><b>四种桌型</b><span>初始买入分别为浅筹 40 BB、标准 100 BB、深筹 200 BB，以及 200 BB 的血战鱿鱼；之后筹码跨手延续，每手策略按实际起始有效筹码计算。</span></div>
-              <div><b>两种训练</b><span>逐手模式保留同桌筹码与对手、每手即时点评；常规整局固定 20 手，鱿鱼整局以 9 条全部发完为终点，答案都在结束后统一公开。任一玩家低于 1 BB 时，下一手按现金桌规则自动补回桌型基准。</span></div>
+              <div><b>三种训练</b><span>逐手模式每手即时点评；常规整局固定 20 手；无尽模式持续保留筹码、对手和玩家画像，主动结束后统计累计收益与 BB/100。鱿鱼以 9 条全部发完为终点。任一玩家低于 1 BB 时，下一手按现金桌规则自动补回桌型基准。</span></div>
               <div><b>血战鱿鱼</b><span>六人桌争夺 9 条；3/5/7 条触发 ×2/×3/×4。无人跟注时亮牌才获得。</span></div>
               <div><b>完整 GTO 的边界</b><span>任意 6 人动态牌局需要预计算策略库或外部求解服务；现有传输接口可在后续接入。</span></div>
-              <div><b>形象博弈</b><span>你和 AI 都可选择亮牌或盖牌；AI 会用可见信息形成对你的松紧、侵略性与欺骗性判断。</span></div>
+              <div><b>形象博弈</b><span>你和 AI 都可选择亮牌或盖牌；所有电脑都会用公开信息形成对你的松紧、侵略性与欺骗性判断，无尽模式下会随样本增加持续反制，同时保留各自风格。</span></div>
               <div><b>规则范围</b><span>6 人现金桌、边池、全下跑牌、不足额全下加注权与鱿鱼跨手结算均在本地处理。</span></div>
               <div><b>安装成应用</b><span>Chrome 或 Edge 点顶栏“安装应用”；Mac Safari 选“文件 → 添加到程序坞”，iPhone/iPad 选“分享 → 添加到主屏幕”。</span></div>
               <div><b>如何打开</b><span>线上地址无需启动服务器；本地地址只有运行开发服务时可用。安装后可直接从桌面或程序坞点图标进入。</span></div>

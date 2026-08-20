@@ -82,6 +82,16 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /allIn: actualRaiseTo === sizingContext\.playerBet \+ sizingContext\.playerStack/);
   assert.doesNotMatch(page, /allIn: actualRaiseTo === pokerSizingMaxTarget/);
   assert.match(page, /20 手整局/);
+  assert.match(page, /type GameMode = "per_hand" \| "session" \| "endless"/);
+  assert.match(page, /无尽对局/);
+  assert.match(page, /画像自适应 · 主动结束复盘/);
+  assert.match(page, /结束无尽局并复盘/);
+  assert.match(page, /function pokerRunBbPer100|pokerRunBbPer100/);
+  assert.match(page, /BB \/ 100/);
+  assert.match(page, /mode === "endless" \? 1\.25 : 0\.7/);
+  assert.match(page, /heroActive: !game\.players\[0\]\.folded/);
+  assert.match(page, /pokerRunCanStartNextHand\(mode, sessionEnded/);
+  assert.match(page, /mode === "per_hand" \|\| finishedGame\.status/);
   assert.match(page, /function setHeroShowChoice/);
   assert.match(page, /function WinningHands/);
   assert.match(page, /赢家手牌/);

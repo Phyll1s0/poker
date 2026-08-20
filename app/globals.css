@@ -377,7 +377,7 @@ button { color: inherit; }
 .preset-select small { grid-column: 1 / -1; color: #6d716c; font-size: 7px; white-space: nowrap; }
 .mode-switch {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   padding: 3px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -386,7 +386,7 @@ button { color: inherit; }
   backdrop-filter: blur(12px);
 }
 .mode-switch button {
-  min-width: 132px;
+  min-width: 112px;
   min-height: 42px;
   padding: 6px 13px;
   display: flex;
@@ -408,6 +408,10 @@ button { color: inherit; }
 .session-progress { width: 210px; height: 3px; position: relative; overflow: visible; border-radius: 3px; background: rgba(255,255,255,.07); }
 .session-progress i { height: 100%; display: block; border-radius: inherit; background: linear-gradient(90deg, var(--green), var(--green-bright)); transition: width .3s ease; }
 .session-progress span { position: absolute; top: -1px; left: calc(100% + 8px); color: #777c76; font-size: 7px; white-space: nowrap; }
+.endless-run-status { display: flex; align-items: center; gap: 10px; color: #7e837d; font-size: 7px; white-space: nowrap; }
+.endless-run-status span { color: var(--gold); letter-spacing: .08em; }
+.endless-run-status b { color: #c9c5bb; font-weight: 600; }
+.endless-run-status em { color: #7f9f90; font-style: normal; }
 .squid-race-status { display: flex; align-items: center; gap: 9px; color: #7e837d; font-size: 7px; white-space: nowrap; }
 .squid-race-status span { color: #d6b675; }
 .squid-race-status b { color: #c9c5bb; font-weight: 600; }
@@ -735,6 +739,10 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
 .show-cards { border: 1px solid var(--green-bright); background: linear-gradient(135deg, #79cfac, #51aa86); color: #14251e; }
 .muck-cards { border: 1px solid var(--line); background: transparent; color: #b9b5ab; }
 .next-hand-button { flex: 0 0 auto; border: 0; background: #e5ddca; color: #1a1d1b; }
+.endless-hand-actions { min-width: 304px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.endless-hand-actions .next-hand-button { padding-inline: 12px; }
+.finish-endless-button { min-height: 44px; padding: 0 12px; border: 1px solid rgba(216,183,116,.28); border-radius: 5px; background: rgba(216,183,116,.07); color: #cdbb93; cursor: pointer; font-size: 9px; font-weight: 600; }
+.finish-endless-button:hover { border-color: rgba(216,183,116,.48); background: rgba(216,183,116,.12); }
 .winning-hands {
   grid-column: 1 / -1;
   min-width: 0;
@@ -915,6 +923,8 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
 .session-progress-card span { margin-top: 3px; color: #626762; font-size: 7px; }
 .session-progress-card > i { height: 4px; overflow: hidden; border-radius: 4px; background: #292e2b; }
 .session-progress-card > i em { height: 100%; display: block; border-radius: inherit; background: var(--green-bright); }
+.endless-progress-card > i em { width: 100%; background: linear-gradient(90deg, transparent, var(--green-bright), transparent); animation: endless-progress 1.8s ease-in-out infinite; }
+@keyframes endless-progress { from { transform: translateX(-75%); } to { transform: translateX(75%); } }
 .public-state { border-bottom: 1px solid var(--line) !important; }
 
 .squid-scoreboard { margin-bottom: 25px; padding: 18px !important; border: 1px solid rgba(216,183,116,.18) !important; border-radius: 7px; background: linear-gradient(135deg, rgba(216,183,116,.075), rgba(62,157,121,.025)); }
@@ -1073,6 +1083,7 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
   .hand-end-copy > p { line-height: 1.45; }
   .show-choice { flex: 0 0 auto; width: 100%; }
   .show-choice button, .next-hand-button { min-height: 44px; }
+  .endless-hand-actions { min-width: 0; width: 100%; }
   .winning-hands { grid-column: 1; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; }
   .winning-hand { min-width: 166px; }
   .turn-summary { display: none; }
