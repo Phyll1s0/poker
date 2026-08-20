@@ -2042,6 +2042,55 @@
   letter-spacing: 0;
 }
 
+.navSoundToggle {
+  min-height: 32px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  color: #777d77;
+  background: rgba(255, 255, 255, 0.022);
+  cursor: pointer;
+}
+
+.navSoundToggle span {
+  width: 12px;
+  color: #8b908b;
+  font: 600 11px/1 Georgia, serif;
+  text-align: center;
+}
+
+.navSoundToggle b,
+.navSoundToggle small {
+  font-family: Arial, sans-serif;
+  line-height: 1;
+}
+
+.navSoundToggle b {
+  font-size: 8px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+
+.navSoundToggle small {
+  color: #666c67;
+  font-size: 7px;
+  letter-spacing: 0.04em;
+}
+
+.navSoundToggleOn {
+  border-color: rgba(216, 183, 116, 0.28);
+  color: #c8bd9f;
+  background: rgba(216, 183, 116, 0.055);
+}
+
+.navSoundToggleOn span,
+.navSoundToggleOn small {
+  color: var(--mp-gold);
+}
+
 .createWideField {
   grid-column: 1 / -1;
 }
@@ -3199,6 +3248,17 @@
 }
 
 @media (max-width: 600px) {
+  .navSoundToggle {
+    min-width: 32px;
+    padding: 0 7px;
+    justify-content: center;
+  }
+
+  .navSoundToggle b,
+  .navSoundToggle small {
+    display: none;
+  }
+
   .summaryHeader,
   .summaryNotice,
   .summaryActions {

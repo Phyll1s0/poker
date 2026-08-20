@@ -2,6 +2,11 @@ export type PokerSound = "check" | "call" | "raise" | "fold" | "deal" | "win";
 
 let audioContext: AudioContext | null = null;
 let masterGain: GainNode | null = null;
+let pokerAudioEnabled = true;
+
+export function isPokerAudioEnabled() {
+  return pokerAudioEnabled;
+}
 
 function getAudioContext() {
   if (typeof window === "undefined") return null;
@@ -34,6 +39,7 @@ export async function unlockPokerAudio() {
 }
 
 export async function setPokerAudioEnabled(enabled: boolean) {
+  pokerAudioEnabled = enabled;
   if (!enabled && !audioContext) return;
   const context = getAudioContext();
   if (!context || !masterGain) return;
@@ -111,6 +117,7 @@ function chipClick(context: AudioContext, at: number, volume = 0.28) {
 }
 
 export function playPokerSound(sound: PokerSound, delaySeconds = 0) {
+  if (!pokerAudioEnabled) return;
   const context = getAudioContext();
   if (!context || context.state !== "running") return;
   const at = context.currentTime + Math.max(0, delaySeconds);

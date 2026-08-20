@@ -435,6 +435,16 @@ function makeSnapshot(row: RoomRow, state: OnlineRoomState, guestId: string) {
       currentBet: hand.highestBet,
       actionStartedAt: hand.actionStartedAt,
       actionDeadlineAt: hand.actionDeadlineAt,
+      actionSeq: hand.actionSeq,
+      recentActions: hand.recentActions.map((event) => ({
+        seq: event.seq,
+        accountId: publicSeatId(event.seat),
+        seat: event.seat,
+        street: event.street,
+        action: event.action,
+        timedOut: event.timedOut,
+        occurredAt: event.occurredAt,
+      })),
       players: gamePlayers,
       legalActions: table.legalActions ? {
         fold: table.legalActions.fold,

@@ -135,6 +135,15 @@ test("a current non-all-in player leaves by folding and is removed after the han
   let room = accepted(command(started, actors[0], { type: "leave" }, options));
 
   assert.equal(room.phase, "between_hands");
+  assert.deepEqual(room.hand.recentActions, [{
+    seq: 1,
+    seat: 0,
+    street: "preflop",
+    action: "fold",
+    timedOut: false,
+    source: "leave",
+    occurredAt: 1_000_000,
+  }]);
   assert.equal(room.hand.pendingShowSeat, 1);
   assert.equal(room.hand.players.find((player) => player.seat === 0).folded, true);
   assert.equal(room.seats.some((seat) => seat.seat === 0), false, "the departed seat is released after settlement");
@@ -258,6 +267,15 @@ test("time cards extend only the current turn and timeout is server-authoritativ
   room = accepted(command(room, actors[1], { type: "timeout", handId: room.hand.id }, options));
   assert.equal(room.phase, "between_hands");
   assert.equal(room.hand.players.find((player) => player.seat === 0).folded, true);
+  assert.deepEqual(room.hand.recentActions, [{
+    seq: 1,
+    seat: 0,
+    street: "preflop",
+    action: "fold",
+    timedOut: true,
+    source: "timeout",
+    occurredAt: now,
+  }]);
 });
 
 test("an expired free action checks automatically instead of folding", () => {
@@ -282,6 +300,85 @@ test("an expired free action checks automatically instead of folding", () => {
   assert.equal(room.phase, "playing");
   assert.equal(room.hand.currentSeat, 0);
   assert.equal(room.hand.players.find((player) => player.seat === 1).folded, false);
+  assert.deepEqual(room.hand.recentActions.map(({ seq, seat, street, action, timedOut, source }) => ({
+    seq,
+    seat,
+    street,
+    action,
+    timedOut,
+    source,
+  })), [
+    { seq: 1, seat: 0, street: "preflop", action: "call", timedOut: false, source: "player" },
+    { seq: 2, seat: 1, street: "preflop", action: "check", timedOut: false, source: "player" },
+    { seq: 3, seat: 1, street: "flop", action: "check", timedOut: true, source: "timeout" },
+  ]);
+});
+
+test("public action journal preserves every accepted action without exposing account identities", () => {
+  let now = 1_000_100;
+  const { room: started, options } = startRoom(2);
+  options.now = () => now;
+
+  let room = accepted(act(started, actors[0], "call", options));
+  now += 25;
+  room = accepted(act(room, actors[1], "check", options));
+
+  assert.equal(room.hand.actionSeq, 2);
+  assert.deepEqual(room.hand.recentActions.map((event) => ({
+    seq: event.seq,
+    seat: event.seat,
+    street: event.street,
+    action: event.action,
+    occurredAt: event.occurredAt,
+  })), [
+    { seq: 1, seat: 0, street: "preflop", action: "call", occurredAt: 1_000_100 },
+    { seq: 2, seat: 1, street: "preflop", action: "check", occurredAt: 1_000_125 },
+  ]);
+
+  room.hand.recentActions[0].accountId = actors[0].accountId;
+  room.hand.recentActions[0].hole = ["private-test-value"];
+  const publicHand = projectRoomState(room, actors[0].accountId).hand;
+  assert.equal(publicHand.actionSeq, 2);
+  assert.equal(publicHand.recentActions.length, 2);
+  assert.deepEqual(Object.keys(publicHand.recentActions[0]).sort(), [
+    "action",
+    "occurredAt",
+    "seat",
+    "seq",
+    "source",
+    "street",
+    "timedOut",
+  ]);
+  assert.doesNotMatch(JSON.stringify(publicHand.recentActions), /user-[0-9]/);
+  assert.doesNotMatch(JSON.stringify(publicHand.recentActions), /hole|deck|accountId/);
+});
+
+test("action receipts stay idempotent and legacy hands acquire a sound cursor", () => {
+  const firstScenario = startRoom(2);
+  const actionPayload = {
+    type: "act",
+    handId: firstScenario.room.hand.id,
+    action: "call",
+    commandId: "idempotent-sound-action",
+    expectedRevision: firstScenario.room.revision,
+  };
+  const first = applyOnlinePokerCommand(firstScenario.room, actors[0], actionPayload, firstScenario.options);
+  assert.equal(first.ok, true);
+  assert.equal(first.state.hand.actionSeq, 1);
+  const duplicate = applyOnlinePokerCommand(first.state, actors[0], actionPayload, firstScenario.options);
+  assert.equal(duplicate.ok, true);
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(duplicate.state.hand.actionSeq, 1);
+  assert.equal(duplicate.state.hand.recentActions.length, 1);
+
+  const legacyScenario = startRoom(2);
+  delete legacyScenario.room.hand.actionSeq;
+  delete legacyScenario.room.hand.recentActions;
+  const normalized = accepted(act(legacyScenario.room, actors[0], "call", legacyScenario.options));
+  assert.equal(normalized.hand.actionSeq, 1);
+  assert.deepEqual(normalized.hand.recentActions.map(({ seq, action }) => ({ seq, action })), [
+    { seq: 1, action: "call" },
+  ]);
 });
 
 test("commands use optimistic revision checks and idempotent command IDs", () => {

@@ -45,7 +45,7 @@ test("server-renders the RangeCraft landing page before mounting a poker table",
 });
 
 test("keeps the multiplayer and strategy boundaries with product metadata", async () => {
-  const [page, globalsCss, multiplayerClient, multiplayerCss, staticMultiplayer, edgeFunction, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, history, packageJson] = await Promise.all([
+  const [page, globalsCss, multiplayerClient, multiplayerCss, staticMultiplayer, edgeFunction, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, history, packageJson, multiplayerAudio, pokerAudio] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/multiplayer/MultiplayerClient.tsx", import.meta.url), "utf8"),
@@ -63,6 +63,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
     readFile(new URL("../github-pages/index.html", import.meta.url), "utf8"),
     readFile(new URL("../lib/poker-history.ts", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../lib/multiplayer-audio-events.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/poker-audio.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /function settleShowdown/);
@@ -158,6 +160,12 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /const BOARD_DEAL_STAGGER_MS = 300/);
   assert.match(multiplayerClient, /styles\.boardDealtCard/);
   assert.match(multiplayerClient, /index - boardDeal\.dealFrom/);
+  assert.match(multiplayerClient, /multiplayerAudioTransition\(lastAudioFrame\.current, nextAudioFrame\)/);
+  assert.match(multiplayerClient, /lastAudioFrame\.current = nextAudioFrame/);
+  assert.match(multiplayerClient, /audioCues\.forEach\(\(cue\) => playPokerSound\(cue\.sound, cue\.delaySeconds\)\)/);
+  assert.match(multiplayerClient, /setPokerAudioEnabled\(next\)/);
+  assert.match(multiplayerClient, /styles\.navSoundToggle/);
+  assert.match(multiplayerClient, /aria-label=\{soundOn \? "关闭牌桌音效" : "开启牌桌音效"\}/);
   assert.match(multiplayerClient, /2: \[0, 3\]/);
   assert.match(multiplayerClient, /3: \[0, 2, 4\]/);
   assert.match(multiplayerClient, /浅筹/);
@@ -240,6 +248,15 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(edgeFunction, /type === "use-time-bank" \|\| type === "timeout"/);
   assert.match(edgeFunction, /type === "finish"/);
   assert.match(edgeFunction, /type === "restart"/);
+  assert.match(edgeFunction, /actionSeq: hand\.actionSeq/);
+  assert.match(edgeFunction, /recentActions: hand\.recentActions\.map/);
+  assert.match(multiplayerAudio, /MULTIPLAYER_AUDIO_EVENT_MAX_AGE_MS = 5_000/);
+  assert.match(multiplayerAudio, /event\.seq > previous\.actionSeq/);
+  assert.match(multiplayerAudio, /sound: "deal"/);
+  assert.match(multiplayerAudio, /sound: "win"/);
+  assert.match(pokerAudio, /export function isPokerAudioEnabled/);
+  assert.match(pokerAudio, /if \(!pokerAudioEnabled\) return/);
+  assert.match(page, /useState\(\(\) => isPokerAudioEnabled\(\)\)/);
   assert.match(page, /choosePokerPolicyAction/);
   assert.match(page, /policyPlan\.actionFrequencies/);
   assert.match(page, /resolvePokerDecisionStacks/);

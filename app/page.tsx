@@ -8,7 +8,7 @@ import {
   updateHeroTableImage,
   type HeroTableImage,
 } from "../lib/poker-ai";
-import { playPokerSound, setPokerAudioEnabled, unlockPokerAudio } from "../lib/poker-audio";
+import { isPokerAudioEnabled, playPokerSound, setPokerAudioEnabled, unlockPokerAudio } from "../lib/poker-audio";
 import {
   analyzeBoardTexture,
   bestHand,
@@ -1658,7 +1658,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   const [rulesOpen, setRulesOpen] = useState(false);
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
   const [dealing, setDealing] = useState(false);
-  const [soundOn, setSoundOn] = useState(true);
+  const [soundOn, setSoundOn] = useState(() => isPokerAudioEnabled());
   const [mode, setMode] = useState<GameMode>("per_hand");
   const [sessionEnded, setSessionEnded] = useState(false);
   const [sessionResults, setSessionResults] = useState<SessionHandResult[]>([]);
@@ -1678,7 +1678,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   ));
   const winSoundHand = useRef(0);
   const observedShowdownImageHand = useRef(0);
-  const soundOnRef = useRef(true);
+  const soundOnRef = useRef(isPokerAudioEnabled());
   const historyRunId = useRef(createSoloHistoryRunId());
 
   useEffect(() => {

@@ -10,6 +10,16 @@ import {
   type MultiplayerBoardDeal,
   type MultiplayerBoardFrame,
 } from "../../lib/multiplayer-board-animation";
+import {
+  multiplayerAudioTransition,
+  type MultiplayerAudioFrame,
+} from "../../lib/multiplayer-audio-events";
+import {
+  isPokerAudioEnabled,
+  playPokerSound,
+  setPokerAudioEnabled,
+  unlockPokerAudio,
+} from "../../lib/poker-audio";
 import styles from "./multiplayer.module.css";
 
 type Account = {
@@ -70,6 +80,16 @@ type PublicGame = {
   currentBet: number;
   actionStartedAt: number | null;
   actionDeadlineAt: number | null;
+  actionSeq?: number;
+  recentActions?: {
+    seq: number;
+    accountId: string;
+    seat: number;
+    street: "preflop" | "flop" | "turn" | "river";
+    action: "fold" | "check" | "call" | "raise";
+    timedOut: boolean;
+    occurredAt: number;
+  }[];
   players: PublicPlayer[];
   legalActions: LegalActions | null;
   result: { summary: string; winners: string[] } | null;
@@ -664,6 +684,7 @@ export default function MultiplayerClient({
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null);
   const [boardDeal, setBoardDeal] = useState<MultiplayerBoardDeal | null>(null);
+  const [soundOn, setSoundOn] = useState(() => isPokerAudioEnabled());
   const [handle, setHandle] = useState("");
   const [roomName, setRoomName] = useState("朋友练习桌");
   const [maxPlayers, setMaxPlayers] = useState(6);
@@ -684,6 +705,8 @@ export default function MultiplayerClient({
   const roomViewGeneration = useRef(0);
   const viewedRoomId = useRef<string | null>(null);
   const lastBoardFrame = useRef<MultiplayerBoardFrame | null>(null);
+  const lastAudioFrame = useRef<MultiplayerAudioFrame | null>(null);
+  const soundOnRef = useRef(isPokerAudioEnabled());
 
   const acceptSnapshot = useCallback((next: RoomSnapshot) => {
     const nextFrame: MultiplayerBoardFrame | null = next.game
@@ -696,6 +719,33 @@ export default function MultiplayerClient({
     const previousFrame = lastBoardFrame.current;
     const nextDeal = multiplayerBoardDealTransition(previousFrame, nextFrame);
     lastBoardFrame.current = nextFrame;
+
+    const nextAudioFrame: MultiplayerAudioFrame | null = next.game
+      ? {
+          roomId: next.room.id,
+          handId: next.game.handId,
+          actionSeq: typeof next.game.actionSeq === "number" && Number.isInteger(next.game.actionSeq)
+            ? next.game.actionSeq
+            : 0,
+          recentActions: next.game.recentActions ?? [],
+          boardCount: next.game.board.length,
+          hasResult: next.game.result !== null,
+        }
+      : null;
+    const audioCues = multiplayerAudioTransition(lastAudioFrame.current, nextAudioFrame);
+    lastAudioFrame.current = nextAudioFrame;
+    if (soundOnRef.current && audioCues.length) {
+      const soundRoomId = nextAudioFrame?.roomId;
+      const soundHandId = nextAudioFrame?.handId;
+      void unlockPokerAudio().then(() => {
+        if (
+          !soundOnRef.current
+          || lastAudioFrame.current?.roomId !== soundRoomId
+          || lastAudioFrame.current?.handId !== soundHandId
+        ) return;
+        audioCues.forEach((cue) => playPokerSound(cue.sound, cue.delaySeconds));
+      }).catch(() => undefined);
+    }
 
     if (nextDeal) {
       setBoardDeal(nextDeal);
@@ -713,6 +763,7 @@ export default function MultiplayerClient({
 
   const clearActiveRoomSnapshot = useCallback(() => {
     lastBoardFrame.current = null;
+    lastAudioFrame.current = null;
     setBoardDeal(null);
     setSnapshot(null);
   }, []);
@@ -762,6 +813,17 @@ export default function MultiplayerClient({
     const timer = window.setTimeout(() => void loadAccount(), 0);
     return () => window.clearTimeout(timer);
   }, [loadAccount]);
+
+  useEffect(() => {
+    if (!soundOn) return;
+    const unlock = () => { void unlockPokerAudio(); };
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, [soundOn]);
 
   useEffect(() => {
     if (!snapshot?.room.id) return;
@@ -847,6 +909,7 @@ export default function MultiplayerClient({
       && viewedRoomId.current === roomId
       && !leavingRef.current
     );
+    if (soundOnRef.current) void unlockPokerAudio();
     setBusy(true);
     if (!options.quiet) setError(null);
     try {
@@ -991,6 +1054,15 @@ export default function MultiplayerClient({
       setError("浏览器没有允许读取剪贴板，请点输入框后直接粘贴邀请码。");
     }
   };
+
+  const toggleSound = useCallback(() => {
+    const next = !soundOn;
+    setSoundOn(next);
+    soundOnRef.current = next;
+    void setPokerAudioEnabled(next).then(() => {
+      if (next) playPokerSound("call");
+    });
+  }, [soundOn]);
 
   const selfPlayer = useMemo(() => snapshot?.players.find((player) => player.accountId === snapshot.selfAccountId) ?? null, [snapshot]);
   const game = snapshot?.game ?? null;
@@ -1191,6 +1263,15 @@ export default function MultiplayerClient({
               {snapshot.room.joinCode}<small>复制</small>
             </button>
           )}
+          <button
+            className={`${styles.navSoundToggle} ${soundOn ? styles.navSoundToggleOn : ""}`}
+            type="button"
+            onClick={toggleSound}
+            aria-pressed={soundOn}
+            aria-label={soundOn ? "关闭牌桌音效" : "开启牌桌音效"}
+          >
+            <span>{soundOn ? "♪" : "—"}</span><b>音效</b><small>{soundOn ? "ON" : "OFF"}</small>
+          </button>
           <span>牌桌身份</span>
           <strong>{account?.handle ?? displayName}</strong>
           <a className={styles.signOut} href={signOutHref} onClick={onSignOut}>{signOutLabel}</a>
