@@ -234,6 +234,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerCss, /\.multiplayerPage \.boardDealtCard\s*\{[\s\S]*?animation:\s*multiplayerDealCommunityCard 0\.48s/);
   assert.match(multiplayerCss, /\.winningBestFive\s*\{/);
   assert.match(multiplayerCss, /\.multiplayerPage \.winningHandCards \.card\s*\{/);
+  assert.match(multiplayerCss, /\.multiplayerPage \.seatSelf \.miniCard,[\s\S]*?width:\s*48px/);
+  assert.match(multiplayerCss, /@media \(max-width: 700px\)[\s\S]*?\.multiplayerPage \.seatSelf \.miniCard,[\s\S]*?width:\s*52px/);
   assert.match(multiplayerCss, /@keyframes multiplayerDealCommunityCard/);
   assert.match(multiplayerCss, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.multiplayerPage \.boardDealtCard/);
   assert.match(multiplayerCss, /\[data-suit-tone="red"\][\s\S]*?-webkit-text-fill-color:\s*#c92f35/);

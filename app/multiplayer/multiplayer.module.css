@@ -3693,3 +3693,48 @@
     font-size: 17px;
   }
 }
+
+/* Keep the hero's hole cards immediately readable without changing the board,
+   opponents' cards, or the compact five-card settlement group. */
+.multiplayerPage .seatSelf .seatCards {
+  top: -72px;
+  z-index: 8;
+  gap: 6px;
+}
+
+.multiplayerPage .seatSelf .miniCard,
+.multiplayerPage .seatSelf .miniBack {
+  width: 48px;
+  border-radius: 6px;
+  font-size: 18px;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.42);
+}
+
+.multiplayerPage .seatSelf .miniCard > span {
+  margin-top: 2px;
+  font-size: 23px;
+}
+
+.multiplayerPage .seatSelf .tableBet {
+  top: -105px;
+}
+
+@media (max-width: 700px) {
+  .multiplayerPage .seatSelf .seatCards {
+    top: -78px;
+  }
+
+  .multiplayerPage .seatSelf .miniCard,
+  .multiplayerPage .seatSelf .miniBack {
+    width: 52px;
+    font-size: 20px;
+  }
+
+  .multiplayerPage .seatSelf .miniCard > span {
+    font-size: 25px;
+  }
+
+  .multiplayerPage .seatSelf .tableBet {
+    top: -112px;
+  }
+}
