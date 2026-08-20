@@ -101,17 +101,20 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /className=\{styles\.raiseControl\}/);
   assert.match(multiplayerClient, /addEventListener\("keydown", handleTableShortcut\)/);
   assert.match(multiplayerClient, /SHOW OR MUCK · 赢家亮牌决定/);
-  assert.match(multiplayerClient, /全桌正在等待进入下一手/);
-  assert.match(multiplayerClient, /亮牌决定完成后开始全桌倒计时/);
+  assert.match(multiplayerClient, /亮牌决定完成后开始下一手倒计时/);
+  assert.match(multiplayerClient, /这是服务端统一倒计时/);
   assert.ok(
     multiplayerClient.indexOf("styles.showDecisionPanel") < multiplayerClient.indexOf("styles.nextHandWaitingPanel"),
     "赢家亮牌决定应显示在全桌下一手等待区上方",
   );
   assert.match(multiplayerClient, /street: game\.street/);
   assert.match(multiplayerClient, /bigBlind: snapshot\?\.table\.bigBlind/);
-  assert.match(multiplayerClient, /3_000 \+ Math\.floor\(Math\.random\(\) \* 2_001\)/);
+  assert.match(multiplayerClient, /showDecisionDeadlineAt/);
+  assert.match(multiplayerClient, /nextHandAt/);
+  assert.doesNotMatch(multiplayerClient, /3_000 \+ Math\.floor\(Math\.random\(\) \* 2_001\)/);
   assert.match(multiplayerClient, /秒后进入下一手/);
-  assert.match(multiplayerClient, /全桌倒计时完成后自动发牌/);
+  assert.match(multiplayerClient, /任一在线玩家都可在到点后触发发牌/);
+  assert.match(multiplayerClient, /单桌淘汰赛结束/);
   assert.match(multiplayerClient, /整局时间库/);
   assert.match(multiplayerClient, /时间牌 \+/);
   assert.match(multiplayerClient, /type: "timeout"/);

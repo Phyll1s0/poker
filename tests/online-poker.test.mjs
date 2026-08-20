@@ -3,6 +3,9 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   ONLINE_BIG_BLIND,
+  ONLINE_COMMAND_RECEIPT_LIMIT,
+  ONLINE_NEXT_HAND_DELAY_MS,
+  ONLINE_SHOW_DECISION_TIME_MS,
   ONLINE_STARTING_STACK,
   applyOnlinePokerCommand,
   createOnlineRoom,
@@ -326,6 +329,22 @@ test("idempotency receipts survive long room sessions", () => {
   assert.equal(retry.duplicate, true);
   assert.equal(retry.resultRevision, 1);
   assert.equal(retry.state.revision, 301);
+});
+
+test("idempotency receipts use a bounded replay window", () => {
+  const options = deterministicOptions();
+  let room = createOnlineRoom({ roomId: "bounded-receipts", owner: actors[0], maxPlayers: 2 });
+  for (let index = 0; index < ONLINE_COMMAND_RECEIPT_LIMIT + 37; index += 1) {
+    room = accepted(applyOnlinePokerCommand(room, actors[0], {
+      type: "ready",
+      ready: index % 2 === 0,
+      commandId: `bounded-${index}`,
+      expectedRevision: room.revision,
+    }, options));
+  }
+  assert.equal(room.processedCommands.length, ONLINE_COMMAND_RECEIPT_LIMIT);
+  assert.equal(room.processedCommands[0].commandId, "bounded-37");
+  assert.equal(room.processedCommands.at(-1).commandId, `bounded-${ONLINE_COMMAND_RECEIPT_LIMIT + 36}`);
 });
 
 test("deck is unique, deterministic when injected, and defaults to Web Crypto", async () => {
@@ -768,6 +787,171 @@ test("uncontested winner chooses show or muck before the next hand", () => {
   assert.equal(room.hand.currentSeat, 1);
 });
 
+test("uncontested show choice expires on the server and any member can auto-muck it", () => {
+  let now = 4_000_000;
+  let handNumber = 0;
+  const options = {
+    randomIndex: (maxExclusive) => maxExclusive - 1,
+    makeHandId: () => `show-clock-${++handNumber}`,
+    now: () => now,
+  };
+  let room = createOnlineRoom({ roomId: "show-clock-room", owner: actors[0], maxPlayers: 2 });
+  room = joinPlayers(room, 2, options);
+  room = accepted(command(room, actors[0], { type: "ready", ready: true }, options));
+  room = accepted(command(room, actors[1], { type: "ready", ready: true }, options));
+  room = accepted(command(room, actors[0], { type: "start" }, options));
+  room = accepted(act(room, actors[0], "fold", options));
+
+  assert.equal(room.phase, "showdown");
+  assert.equal(room.hand.showDecisionDeadlineAt, now + ONLINE_SHOW_DECISION_TIME_MS);
+  assert.equal(room.hand.nextHandAt, null);
+  assert.equal(
+    projectRoomState(room, actors[0].accountId).hand.showDecisionDeadlineAt,
+    now + ONLINE_SHOW_DECISION_TIME_MS,
+  );
+
+  now = room.hand.showDecisionDeadlineAt - 1;
+  rejected(command(room, actors[0], { type: "timeout", handId: room.hand.id }, options), "TIME_NOT_EXPIRED");
+  now += 1;
+  rejected(command(room, actors[1], {
+    type: "show",
+    handId: room.hand.id,
+    show: true,
+  }, options), "TIME_EXPIRED");
+
+  const timeoutPayload = {
+    type: "timeout",
+    handId: room.hand.id,
+    commandId: "show-timeout-idempotent",
+    expectedRevision: room.revision,
+  };
+  const timedOut = applyOnlinePokerCommand(room, actors[0], timeoutPayload, options);
+  room = accepted(timedOut);
+  assert.equal(room.phase, "between_hands");
+  assert.equal(room.hand.pendingShowSeat, null);
+  assert.equal(room.hand.players.find((player) => player.seat === 1).shown, false);
+  assert.equal(room.hand.showDecisionDeadlineAt, null);
+  assert.equal(room.hand.nextHandAt, now + ONLINE_NEXT_HAND_DELAY_MS);
+
+  const duplicate = applyOnlinePokerCommand(room, actors[0], timeoutPayload, options);
+  assert.equal(duplicate.ok, true);
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(duplicate.state.revision, room.revision);
+});
+
+test("the shared next-hand deadline advances despite disconnected or unready seats", () => {
+  let now = 5_000_000;
+  let handNumber = 0;
+  const options = {
+    randomIndex: (maxExclusive) => maxExclusive - 1,
+    makeHandId: () => `next-clock-${++handNumber}`,
+    now: () => now,
+  };
+  let room = createOnlineRoom({ roomId: "next-clock-room", owner: actors[0], maxPlayers: 2 });
+  room = joinPlayers(room, 2, options);
+  room = accepted(command(room, actors[0], { type: "ready", ready: true }, options));
+  room = accepted(command(room, actors[1], { type: "ready", ready: true }, options));
+  room = accepted(command(room, actors[0], { type: "start" }, options));
+  room = accepted(act(room, actors[0], "fold", options));
+  room = accepted(command(room, actors[1], {
+    type: "show",
+    handId: room.hand.id,
+    show: false,
+  }, options));
+  const completedHandId = room.hand.id;
+  const nextHandAt = room.hand.nextHandAt;
+  assert.equal(nextHandAt, now + ONLINE_NEXT_HAND_DELAY_MS);
+
+  room = setOnlinePlayerConnection(room, actors[1].accountId, false, now + 10);
+  room = accepted(command(room, actors[0], { type: "ready", ready: true }, options));
+  assert.equal(room.seats.find((seat) => seat.seat === 1).ready, false);
+  assert.equal(room.seats.find((seat) => seat.seat === 1).connected, false);
+
+  now = nextHandAt - 1;
+  rejected(command(room, actors[0], { type: "timeout", handId: completedHandId }, options), "TIME_NOT_EXPIRED");
+  now += 1;
+  room = accepted(command(room, actors[0], { type: "ready", ready: false }, options));
+  assert.equal(room.phase, "between_hands", "explicitly becoming unready is not an advance command");
+  const expectedRevision = room.revision;
+  const advancePayload = {
+    type: "timeout",
+    handId: completedHandId,
+    commandId: "advance-next-hand-once",
+    expectedRevision,
+  };
+  const advanced = applyOnlinePokerCommand(room, actors[0], advancePayload, options);
+  room = accepted(advanced);
+  assert.equal(room.phase, "playing");
+  assert.equal(room.hand.number, 2);
+  assert.notEqual(room.hand.id, completedHandId);
+  assert.equal(room.hand.nextHandAt, null);
+  assert.ok(room.hand.players.some((player) => player.seat === 1), "disconnection preserves the player's seat");
+
+  const duplicate = applyOnlinePokerCommand(room, actors[0], advancePayload, options);
+  assert.equal(duplicate.ok, true);
+  assert.equal(duplicate.duplicate, true);
+  const losingRace = applyOnlinePokerCommand(room, actors[1], {
+    ...advancePayload,
+    commandId: "advance-next-hand-racer",
+  }, options);
+  rejected(losingRace, "STALE_REVISION");
+  assert.equal(losingRace.state.hand.number, 2, "an optimistic race cannot deal a second extra hand");
+});
+
+test("manual show wins an optimistic race against a timeout without resolving twice", () => {
+  const scenario = startRoom(2);
+  let room = accepted(act(scenario.room, actors[0], "fold", scenario.options));
+  const sharedRevision = room.revision;
+  const handId = room.hand.id;
+  const shown = applyOnlinePokerCommand(room, actors[1], {
+    type: "show",
+    handId,
+    show: true,
+    commandId: "manual-show-race",
+    expectedRevision: sharedRevision,
+  }, scenario.options);
+  room = accepted(shown);
+  assert.equal(room.phase, "between_hands");
+  assert.equal(room.hand.players.find((player) => player.seat === 1).shown, true);
+
+  const timeoutLoser = applyOnlinePokerCommand(room, actors[0], {
+    type: "timeout",
+    handId,
+    commandId: "timeout-show-race",
+    expectedRevision: sharedRevision,
+  }, scenario.options);
+  rejected(timeoutLoser, "STALE_REVISION");
+  assert.equal(timeoutLoser.state.hand.players.find((player) => player.seat === 1).shown, true);
+});
+
+test("legacy completed states without phase clocks normalize without stalling", () => {
+  let now = 7_000_000;
+  let handNumber = 0;
+  const options = {
+    randomIndex: (maxExclusive) => maxExclusive - 1,
+    makeHandId: () => `legacy-clock-${++handNumber}`,
+    now: () => now,
+  };
+  let room = createOnlineRoom({ roomId: "legacy-clock-room", owner: actors[0], maxPlayers: 2 });
+  room = joinPlayers(room, 2, options);
+  room = accepted(command(room, actors[0], { type: "ready", ready: true }, options));
+  room = accepted(command(room, actors[1], { type: "ready", ready: true }, options));
+  room = accepted(command(room, actors[0], { type: "start" }, options));
+  room = accepted(act(room, actors[0], "fold", options));
+  const firstHandId = room.hand.id;
+  delete room.hand.showDecisionDeadlineAt;
+  delete room.hand.nextHandAt;
+
+  room = accepted(command(room, actors[0], { type: "timeout", handId: firstHandId }, options));
+  assert.equal(room.phase, "between_hands", "a pre-clock showdown is immediately auto-mucked on first timeout");
+  assert.equal(room.hand.nextHandAt, now + ONLINE_NEXT_HAND_DELAY_MS);
+
+  delete room.hand.nextHandAt;
+  room = accepted(command(room, actors[1], { type: "timeout", handId: firstHandId }, options));
+  assert.equal(room.phase, "playing", "a pre-clock between-hands state can immediately advance");
+  assert.equal(room.hand.number, 2);
+});
+
 test("a departing pending winner is auto-mucked and safely removed", () => {
   const { room: started, options } = startRoom(3);
   let room = accepted(act(started, actors[0], "fold", options));
@@ -834,6 +1018,38 @@ test("busted seats do not block funded players from readying the next hand", () 
   assert.equal(room.hand.dealerSeat, 2, "the previous BB must not post the BB twice when play contracts to HU");
   assert.equal(room.hand.smallBlindSeat, 2);
   assert.equal(room.hand.bigBlindSeat, 1);
+});
+
+test("a completed heads-up tournament clears its phase clock instead of retrying forever", () => {
+  const { room: active, options } = startRoom(2, {
+    roomOptions: { tableMode: "tournament" },
+  });
+  const terminal = structuredClone(active);
+  terminal.phase = "between_hands";
+  terminal.seats[0].stack = 0;
+  terminal.seats[1].stack = 2_000;
+  terminal.hand.pendingShowSeat = null;
+  terminal.hand.showDecisionDeadlineAt = null;
+  terminal.hand.nextHandAt = 1_000_000;
+  terminal.hand.result = {
+    kind: "showdown",
+    totalPot: 2_000,
+    winnerSeats: [1],
+    mainPotWinnerSeats: [1],
+    payouts: [{ seat: 1, amount: 2_000 }],
+    returns: [],
+    handNames: [{ seat: 1, name: "一对" }],
+  };
+
+  const result = command(terminal, actors[0], {
+    type: "timeout",
+    handId: terminal.hand.id,
+  }, options);
+  const completed = accepted(result);
+  assert.equal(completed.phase, "between_hands");
+  assert.equal(completed.hand.id, terminal.hand.id);
+  assert.equal(completed.hand.nextHandAt, null);
+  assert.equal(projectRoomState(completed, actors[0].accountId).hand.nextHandAt, null);
 });
 
 test("viewer projection exposes only their own or explicitly shown hole cards", () => {

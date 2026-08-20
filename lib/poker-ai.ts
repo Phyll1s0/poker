@@ -1,9 +1,9 @@
 export const AI_PROFILES = {
   gto: { aggression: 0.7, looseness: 0.27, bluff: 0.12 },
-  lag: { aggression: 0.78, looseness: 0.4, bluff: 0.2 },
-  tag: { aggression: 0.64, looseness: 0.22, bluff: 0.05 },
-  adaptive: { aggression: 0.7, looseness: 0.28, bluff: 0.15 },
-  nit: { aggression: 0.38, looseness: 0.16, bluff: 0.02 },
+  lag: { aggression: 0.9, looseness: 0.34, bluff: 0.18 },
+  tag: { aggression: 0.74, looseness: 0.22, bluff: 0.06 },
+  adaptive: { aggression: 0.72, looseness: 0.28, bluff: 0.15 },
+  nit: { aggression: 0.48, looseness: 0.16, bluff: 0.025 },
 } as const;
 
 export type AiStyleKey = keyof typeof AI_PROFILES;

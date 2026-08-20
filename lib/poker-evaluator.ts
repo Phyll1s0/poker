@@ -235,25 +235,61 @@ export function preflopPercentile(hole: readonly PokerCard[]): number {
   return lower / PREFLOP_STRENGTH_DISTRIBUTION.length;
 }
 
+function straightRanks(cards: readonly PokerCard[]) {
+  const ranks = new Set(cards.map((card) => card.rank));
+  if (ranks.has(14)) ranks.add(1);
+  return ranks;
+}
+
+function normalizedStraightRank(rank: number) {
+  return rank === 1 ? 14 : rank;
+}
+
 export function drawPotential(hole: readonly PokerCard[], community: readonly PokerCard[]): number {
   if (community.length >= 5) return 0;
   if (hole.length !== 2) return 0;
   const cards = [...hole, ...community];
   assertUniqueCards(cards);
-  const suitCounts = new Map<string, number>();
+  const totalSuitCounts = new Map<string, number>();
+  const holeSuitCounts = new Map<string, number>();
   for (const card of cards) {
     const key = suitKey(card.suit);
-    suitCounts.set(key, (suitCounts.get(key) ?? 0) + 1);
+    totalSuitCounts.set(key, (totalSuitCounts.get(key) ?? 0) + 1);
   }
-  const flushDraw = Math.max(0, ...suitCounts.values()) === 4 ? 0.11 : 0;
-  const ranks = [...new Set(cards.map((card) => card.rank))];
-  if (ranks.includes(14)) ranks.push(1);
+  for (const card of hole) {
+    const key = suitKey(card.suit);
+    holeSuitCounts.set(key, (holeSuitCounts.get(key) ?? 0) + 1);
+  }
+
+  // A four-flush entirely on the board is a public runout, not a personal
+  // flush draw. At least one hole card must supply one of the four cards.
+  const flushDraw = [...totalSuitCounts.entries()].some(([suit, count]) => (
+    count === 4 && (holeSuitCounts.get(suit) ?? 0) > 0
+  )) ? 0.11 : 0;
+
+  const totalRanks = straightRanks(cards);
+  const boardRanks = straightRanks(community);
+  const personalRanks = new Set(
+    [...straightRanks(hole)].filter((rank) => !boardRanks.has(rank)),
+  );
+  const oneCardStraightOuts = new Set<number>();
+  let hasContributedThreeCardWindow = false;
   let straightDraw = 0;
   for (let low = 1; low <= 10; low += 1) {
-    const hits = [low, low + 1, low + 2, low + 3, low + 4].filter((rank) => ranks.includes(rank)).length;
-    if (hits >= 4) straightDraw = Math.max(straightDraw, 0.09);
-    else if (hits === 3) straightDraw = Math.max(straightDraw, 0.035);
+    const window = [low, low + 1, low + 2, low + 3, low + 4];
+    const hits = window.filter((rank) => totalRanks.has(rank));
+    const holeContributes = hits.some((rank) => personalRanks.has(rank));
+    if (!holeContributes) continue;
+    if (hits.length === 4) {
+      const missing = window.find((rank) => !totalRanks.has(rank));
+      if (missing !== undefined) oneCardStraightOuts.add(normalizedStraightRank(missing));
+    } else if (hits.length === 3) {
+      hasContributedThreeCardWindow = true;
+    }
   }
+  if (oneCardStraightOuts.size >= 2) straightDraw = 0.09;
+  else if (oneCardStraightOuts.size === 1) straightDraw = 0.05;
+  else if (hasContributedThreeCardWindow) straightDraw = 0.035;
   return flushDraw + straightDraw;
 }
 
@@ -261,16 +297,53 @@ export function blockerValue(hole: readonly PokerCard[], community: readonly Pok
   if (hole.length !== 2) return 0;
   const cards = [...hole, ...community];
   assertUniqueCards(cards);
+
+  // Before the flop, A/K removal is intrinsically relevant to premium opening
+  // and re-raising ranges. Post-flop it is only a blocker when the board makes
+  // that specific rank or suit relevant.
+  if (community.length === 0) {
+    return clamp(hole.reduce((value, card) => (
+      value + (card.rank === 14 ? 0.03 : card.rank === 13 ? 0.02 : 0)
+    ), 0), 0, 0.15);
+  }
+
   const suitCounts = new Map<string, number>();
   for (const card of community) {
     const key = suitKey(card.suit);
     suitCounts.set(key, (suitCounts.get(key) ?? 0) + 1);
   }
-  const blockedSuit = [...suitCounts.entries()].sort((a, b) => b[1] - a[1])[0];
-  const nutSuitBlocker = blockedSuit?.[1] >= 3
-    && hole.some((card) => suitKey(card.suit) === blockedSuit[0] && card.rank === 14);
-  const highBlockers = hole.filter((card) => card.rank >= 13).length;
-  return clamp((nutSuitBlocker ? 0.1 : 0) + highBlockers * 0.025, 0, 0.15);
+  let value = 0;
+  for (const [suit, count] of suitCounts) {
+    if (count < 3) continue;
+    const boardSuitRanks = new Set(
+      community.filter((card) => suitKey(card.suit) === suit).map((card) => card.rank),
+    );
+    let highestUnseenRank = 14;
+    while (highestUnseenRank >= 2 && boardSuitRanks.has(highestUnseenRank)) highestUnseenRank -= 1;
+    if (hole.some((card) => suitKey(card.suit) === suit && card.rank === highestUnseenRank)) {
+      value += 0.1;
+    }
+  }
+
+  // On a four-straight board, holding the exact missing rank removes a large
+  // share of the opponent's straight value combinations. Unrelated overcards
+  // deliberately receive no post-flop blocker credit.
+  const boardRanks = straightRanks(community);
+  const straightCompletionRanks = new Set<number>();
+  for (let low = 1; low <= 10; low += 1) {
+    const window = [low, low + 1, low + 2, low + 3, low + 4];
+    const hits = window.filter((rank) => boardRanks.has(rank));
+    if (hits.length !== 4) continue;
+    const missing = window.find((rank) => !boardRanks.has(rank));
+    if (missing !== undefined) straightCompletionRanks.add(normalizedStraightRank(missing));
+  }
+  if (hole.some((card) => straightCompletionRanks.has(card.rank))) value += 0.04;
+
+  const boardRankCounts = new Map<number, number>();
+  for (const card of community) boardRankCounts.set(card.rank, (boardRankCounts.get(card.rank) ?? 0) + 1);
+  if (hole.some((card) => (boardRankCounts.get(card.rank) ?? 0) >= 2)) value += 0.03;
+
+  return clamp(value, 0, 0.15);
 }
 
 /**

@@ -317,6 +317,90 @@ test("uses position ranges for first-in decisions instead of raw pot-odds equity
   assert.ok(button.preflopTargetRange > early.preflopTargetRange * 2);
 });
 
+test("uses the 169-class chart for canonical opening and blind-defense hands", () => {
+  const chartSpot = {
+    ...baseSpot,
+    profile: { aggression: 0.7, looseness: 0.27, bluff: 0.12 },
+    street: "preflop",
+    pot: 15,
+    toCall: 10,
+    highestBet: 10,
+    playerBet: 0,
+    minRaise: 10,
+    playerStack: 990,
+    effectiveStackBb: 99,
+    preflopRaiseCount: 0,
+  };
+  const pairOfDeuces = { highRank: 2, lowRank: 2, pair: true, suited: false, gap: 0 };
+  const kingJackOff = { highRank: 13, lowRank: 11, pair: false, suited: false, gap: 2 };
+  const queenJackOff = { highRank: 12, lowRank: 11, pair: false, suited: false, gap: 1 };
+
+  const buttonDeuces = evaluatePokerPolicy({ ...chartSpot, preflopPosition: "BTN", preflopHand: pairOfDeuces });
+  const cutoffDeuces = evaluatePokerPolicy({ ...chartSpot, preflopPosition: "CO", preflopHand: pairOfDeuces });
+  const utgKingJack = evaluatePokerPolicy({ ...chartSpot, preflopPosition: "UTG", preflopHand: kingJackOff });
+  const utgQueenJack = evaluatePokerPolicy({ ...chartSpot, preflopPosition: "UTG", preflopHand: queenJackOff });
+
+  assert.ok(buttonDeuces.actionFrequencies.raise >= 0.95);
+  assert.ok(cutoffDeuces.actionFrequencies.raise >= 0.9);
+  assert.ok(utgKingJack.actionFrequencies.fold >= 0.9);
+  assert.ok(utgQueenJack.actionFrequencies.fold >= 0.9);
+
+  const bigBlindDefense = evaluatePokerPolicy({
+    ...chartSpot,
+    preflopPosition: "BB",
+    preflopOpenerPosition: "BTN",
+    preflopRaiseCount: 1,
+    preflopHand: pairOfDeuces,
+    pot: 40,
+    highestBet: 25,
+    playerBet: 10,
+    toCall: 15,
+    playerStack: 990,
+  });
+  assert.ok(bigBlindDefense.actionFrequencies.call + bigBlindDefense.actionFrequencies.raise >= 0.88);
+  assert.ok(bigBlindDefense.actionFrequencies.call > bigBlindDefense.actionFrequencies.raise);
+});
+
+test("preserves charted ace-five suited bluff branches", () => {
+  const aceFiveSuited = { highRank: 14, lowRank: 5, pair: false, suited: true, gap: 9 };
+  const facingButtonOpen = evaluatePokerPolicy({
+    ...baseSpot,
+    profile: { aggression: 0.7, looseness: 0.27, bluff: 0.12 },
+    street: "preflop",
+    preflopPosition: "SB",
+    preflopOpenerPosition: "BTN",
+    preflopRaiseCount: 1,
+    preflopHand: aceFiveSuited,
+    pot: 40,
+    highestBet: 25,
+    playerBet: 5,
+    toCall: 20,
+    minRaise: 15,
+    playerStack: 995,
+    effectiveStackBb: 100,
+  });
+  const facingThreeBet = evaluatePokerPolicy({
+    ...baseSpot,
+    profile: { aggression: 0.7, looseness: 0.27, bluff: 0.12 },
+    street: "preflop",
+    preflopPosition: "BTN",
+    preflopOpenerPosition: "SB",
+    preflopRaiseCount: 2,
+    preflopPreviouslyRaised: true,
+    preflopHand: aceFiveSuited,
+    pot: 125,
+    highestBet: 90,
+    playerBet: 25,
+    toCall: 65,
+    minRaise: 65,
+    playerStack: 975,
+    effectiveStackBb: 100,
+  });
+
+  assert.ok(facingButtonOpen.actionFrequencies.raise >= 0.25);
+  assert.ok(facingThreeBet.actionFrequencies.raise >= 0.1);
+});
+
 test("builds a separate four-bet and shallow-jam branch against a three-bet", () => {
   const aces = {
     highRank: 14,
@@ -438,6 +522,65 @@ test("responds continuously to price, board texture, initiative and number of op
   assert.ok(dryHeadsUp.actionFrequencies.raise > wetHeadsUp.actionFrequencies.raise);
   assert.ok(dryHeadsUp.sizingIntents[0].frequency > wetHeadsUp.sizingIntents[0].frequency);
   assert.ok(dryMultiway.actionFrequencies.raise < dryHeadsUp.actionFrequencies.raise * 0.6);
+});
+
+test("centers non-terminal fold-call mixing on the published realization threshold", () => {
+  const multiwayRiver = {
+    ...baseSpot,
+    street: "river",
+    pot: 840,
+    toCall: 225,
+    highestBet: 225,
+    playerBet: 0,
+    playerStack: 900,
+    effectiveStackBb: 90,
+    activeOpponents: 3,
+    inPosition: false,
+    callEndsHand: false,
+    raiseLocked: true,
+    draw: 0,
+    blockers: 0,
+    boardWetness: 0.65,
+    streetRaiseCount: 1,
+  };
+  const reference = evaluatePokerPolicy({ ...multiwayRiver, equity: 0.3, handStrength: 0.3 });
+  assert.ok(reference.equityRealization < 0.9);
+  assert.ok(reference.realizationThreshold > 225 / 1_065);
+
+  const below = evaluatePokerPolicy({
+    ...multiwayRiver,
+    equity: reference.realizationThreshold - 0.02,
+    handStrength: reference.realizationThreshold - 0.02,
+  });
+  const above = evaluatePokerPolicy({
+    ...multiwayRiver,
+    equity: reference.realizationThreshold + 0.02,
+    handStrength: reference.realizationThreshold + 0.02,
+  });
+  assert.ok(below.actionFrequencies.fold > below.actionFrequencies.call);
+  assert.ok(above.actionFrequencies.call > above.actionFrequencies.fold);
+});
+
+test("never recommends folding a large equity edge over the direct price", () => {
+  const plan = evaluatePokerPolicy({
+    ...baseSpot,
+    street: "turn",
+    equity: 0.44,
+    handStrength: 0.42,
+    pot: 840,
+    toCall: 225,
+    highestBet: 225,
+    playerBet: 0,
+    activeOpponents: 3,
+    inPosition: false,
+    callEndsHand: false,
+    raiseLocked: true,
+    boardWetness: 0.75,
+    streetRaiseCount: 1,
+  });
+  assert.ok(plan.realizationThreshold < 0.3);
+  assert.ok(plan.actionFrequencies.call > 0.9);
+  assert.ok(plan.actionFrequencies.fold < 0.1);
 });
 
 test("does not turn a profitable all-in call into a 94% threshold when the bettor has no chips behind", () => {

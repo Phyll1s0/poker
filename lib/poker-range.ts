@@ -6,6 +6,12 @@ import {
   type OpponentRangeWeight,
   type PokerCard,
 } from "./poker-evaluator.ts";
+import {
+  encodePreflopHandClass,
+  getPreflopStrategy,
+  type PreflopPosition,
+  type PreflopScenario,
+} from "./poker-preflop.ts";
 
 export type PublicActionStreet = "preflop" | "flop" | "turn" | "river";
 export type PublicActionKind = "fold" | "check" | "call" | "raise";
@@ -22,12 +28,16 @@ export type PublicBettingAction = {
   potBefore: number;
   raiseCountBefore: number;
   activeOpponents: number;
+  /** Latest preflop raiser this action was facing; derived from public history. */
+  aggressorPositionBefore?: PreflopPosition;
 };
 
 export type OpponentRangeEvidence = {
   actions: readonly PublicBettingAction[];
   positionFactor: number;
   bigBlind: number;
+  position?: PreflopPosition;
+  openerPosition?: PreflopPosition;
 };
 
 export type PublicRangePlayer = {
@@ -42,6 +52,7 @@ export type PublicRangeState = {
   actions: readonly PublicBettingAction[];
   bigBlind: number;
   positionFactor: (playerId: number) => number;
+  position?: (playerId: number) => PreflopPosition;
 };
 
 const BOARD_CARDS: Record<PublicActionStreet, number> = {
@@ -93,9 +104,9 @@ function madeHandStrength(hole: readonly [PokerCard, PokerCard], board: readonly
 function preflopActionLikelihood(
   hole: readonly [PokerCard, PokerCard],
   action: PublicBettingAction,
-  positionFactor: number,
-  bigBlind: number,
+  evidence: OpponentRangeEvidence,
 ) {
+  const { positionFactor, bigBlind } = evidence;
   const percentile = preflopPercentile(hole);
   const callCost = action.kind === "call" ? Math.min(action.toCall, action.amount) : action.toCall;
   const pressure = callCost / Math.max(1, action.potBefore + callCost);
@@ -105,6 +116,38 @@ function preflopActionLikelihood(
 
   if (action.kind === "check") {
     return clamp(0.78 - percentile * 0.42 + premium * 0.16, 0.08, 1.15);
+  }
+  const chartScenario: PreflopScenario | null = action.raiseCountBefore === 0
+    ? action.kind === "raise" ? "rfi" : null
+    : action.raiseCountBefore === 1
+      ? "vs-open"
+      : action.raiseCountBefore === 2
+        ? "vs-three-bet"
+        : "vs-four-bet";
+  if (chartScenario && evidence.position) {
+    const sorted = [...hole].sort((left, right) => right.rank - left.rank);
+    const hand = encodePreflopHandClass(sorted[0].rank, sorted[1].rank, sameSuit(sorted[0], sorted[1]));
+    const blindInvestment = action.raiseCountBefore === 1
+      ? evidence.position === "BB" ? 1 : evidence.position === "SB" ? 0.5 : 0
+      : action.raiseCountBefore === 2 ? 2.5 : action.raiseCountBefore >= 3 ? 9 : 0;
+    const observedTargetBb = action.kind === "raise"
+      ? action.amount / Math.max(1, bigBlind) + blindInvestment
+      : action.toCall / Math.max(1, bigBlind) + blindInvestment;
+    const strategy = getPreflopStrategy({
+      hand,
+      scenario: chartScenario,
+      heroPosition: evidence.position,
+      aggressorPosition: action.aggressorPositionBefore ?? evidence.openerPosition,
+      effectiveStackBb: action.stackBefore / Math.max(1, bigBlind),
+      facingSizeBb: chartScenario === "rfi" ? undefined : observedTargetBb,
+    });
+    const chartFrequency = action.kind === "raise"
+      ? strategy.frequencies.raise
+      : strategy.frequencies.call;
+    const sizePolarization = action.kind === "raise"
+      ? 1 + Math.max(0, raiseFraction - 0.65) * premium * 0.22
+      : 1;
+    return clamp(0.004 + chartFrequency * 1.18 * sizePolarization, 0.004, 1.65);
   }
   if (action.kind === "call") {
     const continuingRange = clamp(
@@ -181,7 +224,7 @@ export function opponentHoldingWeight(
   for (const action of evidence.actions) {
     const board = community.slice(0, BOARD_CARDS[action.street]);
     const likelihood = action.street === "preflop"
-      ? preflopActionLikelihood(hole, action, evidence.positionFactor, evidence.bigBlind)
+      ? preflopActionLikelihood(hole, action, evidence)
       : board.length >= 3
         ? postflopActionLikelihood(hole, board, action)
         : 1;
@@ -199,14 +242,28 @@ export function createOpponentRangeWeight(
 
 /** Builds opponent samplers from public descriptors without touching hidden cards. */
 export function createPublicOpponentRanges(state: PublicRangeState) {
+  const openingRaise = state.actions.find((action) => (
+    action.street === "preflop" && action.kind === "raise" && action.raiseCountBefore === 0
+  ));
+  let latestPreflopRaiserId: number | null = null;
+  const actionsWithAggressor = state.actions.map((action) => {
+    if (action.street !== "preflop") return action;
+    const enriched = latestPreflopRaiserId === null || !state.position
+      ? action
+      : { ...action, aggressorPositionBefore: state.position(latestPreflopRaiserId) };
+    if (action.kind === "raise") latestPreflopRaiserId = action.playerId;
+    return enriched;
+  });
   return state.players
     .filter((player) => !player.folded && player.id !== state.viewerId)
     .map((player) => ({
       playerId: player.id,
       weight: createOpponentRangeWeight(state.community, {
-        actions: state.actions.filter((action) => action.playerId === player.id),
+        actions: actionsWithAggressor.filter((action) => action.playerId === player.id),
         positionFactor: state.positionFactor(player.id),
         bigBlind: state.bigBlind,
+        position: state.position?.(player.id),
+        openerPosition: openingRaise ? state.position?.(openingRaise.playerId) : undefined,
       }),
     }));
 }

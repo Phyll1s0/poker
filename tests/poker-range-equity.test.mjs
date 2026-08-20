@@ -85,6 +85,81 @@ test("preflop raises narrow the range while retaining bluff candidates", () => {
   assert.ok(weightedMeanPreflopPercentile(largeRaise) > weightedMeanPreflopPercentile(smallRaise));
 });
 
+test("preflop range inference follows the same position chart as coaching", () => {
+  const deuces = [c(2, "♠"), c(2, "♥")];
+  const kingJackOff = [c(13, "♠"), c(11, "♥")];
+  const buttonOpen = {
+    actions: [action()],
+    positionFactor: 1.28,
+    position: "BTN",
+    bigBlind: 10,
+  };
+  const underTheGunOpen = {
+    ...buttonOpen,
+    positionFactor: 0.72,
+    position: "UTG",
+  };
+  assert.ok(
+    opponentHoldingWeight(deuces, [], buttonOpen)
+      > opponentHoldingWeight(deuces, [], underTheGunOpen) * 1.15,
+  );
+  assert.ok(
+    opponentHoldingWeight(deuces, [], underTheGunOpen)
+      > opponentHoldingWeight(kingJackOff, [], underTheGunOpen) * 2,
+  );
+
+  const bigBlindCall = {
+    actions: [action({ kind: "call", amount: 15, toCall: 15, potBefore: 40, raiseCountBefore: 1 })],
+    positionFactor: 1.35,
+    position: "BB",
+    openerPosition: "BTN",
+    bigBlind: 10,
+  };
+  assert.ok(
+    opponentHoldingWeight(deuces, [], bigBlindCall)
+      > opponentHoldingWeight([c(7, "♠"), c(2, "♥")], [], bigBlindCall) * 8,
+  );
+});
+
+test("range inference uses the latest raiser position after a three-bet", () => {
+  const open = action({ playerId: 1, kind: "raise", amount: 25, toCall: 10, raiseCountBefore: 0 });
+  const threeBet = action({ playerId: 2, kind: "raise", amount: 85, toCall: 20, potBefore: 55, raiseCountBefore: 1 });
+  const callThreeBet = action({ playerId: 1, kind: "call", amount: 65, toCall: 65, potBefore: 140, raiseCountBefore: 2 });
+  const positions = new Map([[0, "BB"], [1, "BTN"], [2, "SB"]]);
+  const state = {
+    players: [
+      { id: 0, folded: false },
+      { id: 1, folded: false },
+      { id: 2, folded: false },
+    ],
+    viewerId: 0,
+    community: [],
+    actions: [open, threeBet, callThreeBet],
+    bigBlind: 10,
+    positionFactor: () => 1,
+    position: (playerId) => positions.get(playerId),
+  };
+  const inferredButton = createPublicOpponentRanges(state).find((range) => range.playerId === 1);
+  const candidate = [c(14, "♠"), c(5, "♠")];
+  const expected = opponentHoldingWeight(candidate, [], {
+    actions: [open, { ...callThreeBet, aggressorPositionBefore: "SB" }],
+    positionFactor: 1,
+    position: "BTN",
+    openerPosition: "BTN",
+    bigBlind: 10,
+  });
+  const wrongOpeningRaiser = opponentHoldingWeight(candidate, [], {
+    actions: [open, { ...callThreeBet, aggressorPositionBefore: "BTN" }],
+    positionFactor: 1,
+    position: "BTN",
+    openerPosition: "BTN",
+    bigBlind: 10,
+  });
+
+  assert.equal(inferredButton.weight(candidate), expected);
+  assert.notEqual(expected, wrongOpeningRaiser);
+});
+
 test("postflop betting is polarized between value and live bluffs", () => {
   const board = [c(13, "♠"), c(7, "♠"), c(2, "♦")];
   const evidence = {

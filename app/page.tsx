@@ -25,6 +25,7 @@ import {
   type PokerPolicyProfile,
 } from "../lib/poker-policy";
 import { createPublicOpponentRanges, type PublicBettingAction } from "../lib/poker-range";
+import { settlePokerShowdown } from "../lib/poker-settlement";
 import {
   formatPokerSizingRoute,
   legalPokerRaiseTarget,
@@ -44,7 +45,7 @@ type Street = "preflop" | "flop" | "turn" | "river";
 type ActionKind = "fold" | "check" | "call" | "raise";
 type GameMode = "hand" | "session";
 type TablePresetKey = "short" | "standard" | "deep" | "squid";
-type TableImage = { loose: number; aggressive: number; deceptive: number };
+type TableImage = { loose: number; aggressive: number; deceptive: number; observations: number };
 type InstallPromptEvent = Event & {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
@@ -107,6 +108,9 @@ type Game = {
   lastAggressor: number | null;
   raiseCount: number;
   winnerIds: number[];
+  mainPotWinnerIds: number[];
+  payouts: Array<{ playerId: number; amount: number }>;
+  returns: Array<{ playerId: number; amount: number }>;
   endedUncontested: boolean;
   shownPlayerIds: number[];
   showChoiceMade: boolean;
@@ -120,6 +124,7 @@ type Game = {
 type Review = {
   id: number;
   hand: number;
+  streetKey: Street;
   street: string;
   cards: string;
   board: string;
@@ -127,6 +132,16 @@ type Review = {
   toCall: number;
   equity: number;
   potOdds: number;
+  equityRealization: number;
+  realizationThreshold: number;
+  callEv: number | null;
+  effectiveStackBb: number;
+  spr: number;
+  strategySource: string;
+  preflopPosition: string;
+  preflopScenario: string;
+  preflopTargetRange: number;
+  preflopEnterFrequency: number;
   action: string;
   actionKind: ActionKind;
   actualRaiseTo: number | null;
@@ -177,11 +192,11 @@ const TABLE_PRESETS: Record<TablePresetKey, {
 };
 
 const AI_REVIEW_NOTES: Record<keyof typeof AI_PROFILES, string> = {
-  gto: "频率均衡，下注尺度稳定，很少暴露明显漏洞。",
-  lag: "入池范围宽、主动施压多，会用更多边缘牌制造困难。",
-  tag: "入池谨慎但进攻坚决，持续下注通常代表较强范围。",
-  adaptive: "会根据底池、牌面和行动压力动态调整进攻频率。",
-  nit: "范围偏强、诈唬较少，大额投入通常需要认真对待。",
+  gto: "以 169 手牌翻前表和混合频率为锚点，翻后保持多尺度与诈唬比例；这是本地近似策略，不冒充求解器解。",
+  lag: "在同一基准策略上扩大边缘入池与再加注分支，主动施压更多，但仍受位置、价格和阻断牌约束。",
+  tag: "在同一基准策略上收紧边缘继续范围，价值区间进攻坚决，低权益诈唬明显减少。",
+  adaptive: "会随已观察到的松紧、侵略性和亮牌信息逐步调整，样本少时仍以均衡基准为主。",
+  nit: "明显压缩边缘范围并降低诈唬率；面对其大额投入应尊重范围，但它仍会保留少量混合。",
 };
 
 const PLAYER_TEMPLATES = [
@@ -199,6 +214,15 @@ const STREET_LABELS: Record<Street, string> = {
   turn: "转牌",
   river: "河牌",
 };
+
+const PREFLOP_SCENARIO_LABELS = {
+  open: "首入池",
+  isolate: "隔离跛入者",
+  "check-option": "大盲免费过牌",
+  "vs-open": "面对开池",
+  "vs-three-bet": "面对 3-bet",
+  "vs-four-bet": "面对 4-bet 及以上",
+} as const;
 
 function makeDeck(): Card[] {
   return SUITS.flatMap((suit) => RANKS.map((rank) => ({ rank, suit })));
@@ -249,6 +273,7 @@ function currentEquity(game: Game, player: Player, iterations = 80): number {
     actions: game.actionHistory,
     bigBlind: BIG_BLIND,
     positionFactor: (playerId) => sixMaxPreflopPositionFactor(playerId, game.dealer),
+    position: (playerId) => sixMaxPreflopPosition(playerId, game.dealer),
   });
   if (!opponents.length) return 1;
   const publicSeed = [
@@ -400,7 +425,7 @@ function buildPokerPolicyInput(
 ): PokerPolicyInput {
   const context = pokerSizingContext(game, player);
   const preflopActions = game.actionHistory.filter((action) => action.street === "preflop");
-  const openingRaise = preflopActions.find((action) => action.kind === "raise");
+  const latestPreflopRaise = [...preflopActions].reverse().find((action) => action.kind === "raise");
   const latestAggressiveAction = [...game.actionHistory].reverse().find((action) => action.kind === "raise");
   const boardTexture = analyzeBoardTexture(game.community);
   const opponents = game.players
@@ -445,8 +470,10 @@ function buildPokerPolicyInput(
     preflopPosition: sixMaxPreflopPosition(player.id, game.dealer),
     preflopPositionFactor: sixMaxPreflopPositionFactor(player.id, game.dealer),
     preflopRaiseCount: game.raiseCount,
-    preflopOpenerPosition: openingRaise
-      ? sixMaxPreflopPosition(openingRaise.playerId, game.dealer)
+    // At vs-open this is the opener; at later nodes it must be the latest
+    // raiser (3-bettor/4-bettor), not the first player who opened the pot.
+    preflopOpenerPosition: latestPreflopRaise
+      ? sixMaxPreflopPosition(latestPreflopRaise.playerId, game.dealer)
       : undefined,
     preflopLimpers: preflopActions.filter((action) => action.kind === "call" && action.raiseCountBefore === 0).length,
     preflopColdCallers: preflopActions.filter((action) => action.kind === "call" && action.raiseCountBefore > 0).length,
@@ -615,6 +642,9 @@ function freshGame(
     lastAggressor: null,
     raiseCount: 0,
     winnerIds: [],
+    mainPotWinnerIds: [],
+    payouts: [],
+    returns: [],
     endedUncontested: false,
     shownPlayerIds: [],
     showChoiceMade: true,
@@ -631,15 +661,30 @@ function freshGame(
 
 function awardUncontested(game: Game, players: Player[]): Game {
   const winner = players.find((player) => !player.folded)!;
-  const total = game.pot + players.reduce((sum, player) => sum + player.bet, 0);
-  const finalPlayers = players.map((player) =>
-    player.id === winner.id ? { ...player, stack: player.stack + total, bet: 0 } : { ...player, bet: 0 },
-  );
+  const settlement = settlePokerShowdown({
+    dealerId: game.dealer,
+    players: players.map((player) => ({
+      id: player.id,
+      contributed: player.contributed,
+      folded: player.folded,
+      score: player.id === winner.id ? 0 : undefined,
+    })),
+  });
+  const payouts = new Map(settlement.payouts.map((entry) => [entry.playerId, entry.amount]));
+  const returns = new Map(settlement.returns.map((entry) => [entry.playerId, entry.amount]));
+  const finalPlayers = players.map((player) => ({
+    ...player,
+    stack: player.stack + (payouts.get(player.id) ?? 0) + (returns.get(player.id) ?? 0),
+    bet: 0,
+  }));
   const aiShows = !winner.isHuman && aiWantsToShow(winner, game);
   const squidAward = !winner.isHuman && aiShows
     ? grantSquid(game, finalPlayers, winner.id)
     : { players: finalPlayers, cashInvested: game.cashInvested, squid: game.squid, message: "" };
-  const result = `${winner.name} 收下底池 ${total}${aiShows ? " · 主动亮牌" : ""}${squidAward.message ? ` · ${squidAward.message}` : ""}`;
+  const returnText = settlement.returns.length
+    ? ` · 未跟注退回 ${settlement.returns.map((entry) => `${players.find((player) => player.id === entry.playerId)?.name ?? entry.playerId} ${entry.amount}`).join(" / ")}`
+    : "";
+  const result = `${winner.name} 收下争夺底池 ${settlement.totalPot}${returnText}${aiShows ? " · 主动亮牌" : ""}${squidAward.message ? ` · ${squidAward.message}` : ""}`;
   return {
     ...game,
     players: squidAward.players,
@@ -649,7 +694,10 @@ function awardUncontested(game: Game, players: Player[]): Game {
     current: -1,
     status: "showdown",
     result,
-    winnerIds: [winner.id],
+    winnerIds: settlement.winnerIds.length ? settlement.winnerIds : [winner.id],
+    mainPotWinnerIds: settlement.mainPotWinnerIds.length ? settlement.mainPotWinnerIds : [winner.id],
+    payouts: settlement.payouts,
+    returns: settlement.returns,
     endedUncontested: true,
     shownPlayerIds: aiShows ? [winner.id] : [],
     showChoiceMade: !winner.isHuman,
@@ -658,41 +706,41 @@ function awardUncontested(game: Game, players: Player[]): Game {
 }
 
 function settleShowdown(game: Game): Game {
-  const total = game.pot + game.players.reduce((sum, player) => sum + player.bet, 0);
-  const payouts = new Map<number, number>();
-  const levels = [...new Set(game.players.filter((player) => player.contributed > 0).map((player) => player.contributed))].sort((a, b) => a - b);
-  let previousLevel = 0;
-  let headlineWinners: { player: Player; score: number; name: string }[] = [];
-  for (const level of levels) {
-    const contributors = game.players.filter((player) => player.contributed >= level);
-    const layerAmount = (level - previousLevel) * contributors.length;
-    previousLevel = level;
-    const eligible = contributors.filter((player) => !player.folded);
-    if (!eligible.length || !layerAmount) continue;
-    const ranked = eligible.map((player) => ({ player, ...bestHand([...player.hole, ...game.community]) }));
-    const topScore = Math.max(...ranked.map((entry) => entry.score));
-    const winners = ranked.filter((entry) => entry.score === topScore);
-    if (!headlineWinners.length) headlineWinners = winners;
-    const share = Math.floor(layerAmount / winners.length);
-    let remainder = layerAmount - share * winners.length;
-    winners.forEach((winner) => {
-      const amount = share + (remainder > 0 ? 1 : 0);
-      remainder = Math.max(0, remainder - 1);
-      payouts.set(winner.player.id, (payouts.get(winner.player.id) ?? 0) + amount);
-    });
-  }
-  const paid = [...payouts.values()].reduce((sum, amount) => sum + amount, 0);
+  const ranked = new Map(game.players
+    .filter((player) => !player.folded)
+    .map((player) => [player.id, bestHand([...player.hole, ...game.community])]));
+  const settlement = settlePokerShowdown({
+    dealerId: game.dealer,
+    players: game.players.map((player) => ({
+      id: player.id,
+      contributed: player.contributed,
+      folded: player.folded,
+      score: ranked.get(player.id)?.score,
+    })),
+  });
+  const payouts = new Map(settlement.payouts.map((entry) => [entry.playerId, entry.amount]));
+  const returns = new Map(settlement.returns.map((entry) => [entry.playerId, entry.amount]));
   const finalPlayers = game.players.map((player) => ({
     ...player,
-    stack: player.stack + (payouts.get(player.id) ?? 0),
+    stack: player.stack + (payouts.get(player.id) ?? 0) + (returns.get(player.id) ?? 0),
     bet: 0,
   }));
-  const mainWinnerIds = headlineWinners.map((entry) => entry.player.id);
+  const mainWinnerIds = settlement.mainPotWinnerIds;
   const squidAward = mainWinnerIds.length === 1
     ? grantSquid(game, finalPlayers, mainWinnerIds[0])
     : { players: finalPlayers, cashInvested: game.cashInvested, squid: game.squid, message: "" };
   const squidTieMessage = game.presetKey === "squid" && mainWinnerIds.length > 1 ? " · 主池平分，本手鱿鱼不发" : "";
-  const result = `${headlineWinners.map((entry) => entry.player.name).join(" / ")} · ${headlineWinners[0]?.name ?? "胜出"} · 赢得 ${paid || total}${squidAward.message ? ` · ${squidAward.message}` : ""}${squidTieMessage}`;
+  const headlinePlayers = mainWinnerIds
+    .map((winnerId) => game.players.find((player) => player.id === winnerId))
+    .filter((player): player is Player => Boolean(player));
+  const headlineHand = headlinePlayers[0] ? ranked.get(headlinePlayers[0].id)?.name ?? "胜出" : "胜出";
+  const payoutText = settlement.payouts.length > 1
+    ? ` · 分池 ${settlement.payouts.map((entry) => `${game.players[entry.playerId].name} +${entry.amount}`).join(" / ")}`
+    : "";
+  const returnText = settlement.returns.length
+    ? ` · 未跟注退回 ${settlement.returns.map((entry) => `${game.players[entry.playerId].name} ${entry.amount}`).join(" / ")}`
+    : "";
+  const result = `${headlinePlayers.map((player) => player.name).join(" / ")} · ${headlineHand} · 争夺底池 ${settlement.totalPot}${payoutText}${returnText}${squidAward.message ? ` · ${squidAward.message}` : ""}${squidTieMessage}`;
   return {
     ...game,
     players: squidAward.players,
@@ -702,7 +750,10 @@ function settleShowdown(game: Game): Game {
     current: -1,
     status: "showdown",
     result,
-    winnerIds: [...payouts.keys()],
+    winnerIds: settlement.winnerIds,
+    mainPotWinnerIds: settlement.mainPotWinnerIds,
+    payouts: settlement.payouts,
+    returns: settlement.returns,
     endedUncontested: false,
     shownPlayerIds: game.players.filter((player) => !player.folded).map((player) => player.id),
     showChoiceMade: true,
@@ -868,11 +919,34 @@ function act(game: Game, playerId: number, kind: ActionKind, raiseTo?: number): 
 }
 
 function chooseAiAction(game: Game, player: Player, heroImage: TableImage): { kind: ActionKind; raiseTo?: number } {
-  const profile = AI_PROFILES[player.styleKey as keyof typeof AI_PROFILES];
-  const equity = currentEquity(game, player, game.street === "preflop" ? 90 : 120);
+  const styleKey = player.styleKey as keyof typeof AI_PROFILES;
+  const baseline = AI_PROFILES[styleKey];
+  const confidence = clamp(heroImage.observations / 24);
+  const tightness = 0.5 - heroImage.loose;
+  const passivity = 0.5 - heroImage.aggressive;
+  const deceptivePressure = heroImage.deceptive - 0.5;
+  const profile: PokerPolicyProfile = styleKey === "adaptive"
+    ? {
+        aggression: clamp(baseline.aggression + confidence * (tightness * 0.18 + passivity * 0.12)),
+        looseness: clamp(baseline.looseness + confidence * (tightness * 0.08 - deceptivePressure * 0.06)),
+        bluff: clamp(baseline.bluff + confidence * (tightness * 0.2 + passivity * 0.12 - deceptivePressure * 0.1)),
+      }
+    : { ...baseline };
+  const equity = currentEquity(game, player, game.street === "preflop" ? 300 : 600);
   const facingHero = game.lastAggressor === 0;
+  const readSensitivity: Record<keyof typeof AI_PROFILES, number> = {
+    gto: 0.28,
+    lag: 0.42,
+    tag: 0.34,
+    adaptive: 1,
+    nit: 0.2,
+  };
   const heroCallAdjustment = facingHero
-    ? (heroImage.deceptive - 0.5) * 0.14 + (heroImage.loose - 0.5) * 0.08 + (heroImage.aggressive - 0.5) * 0.12
+    ? confidence * readSensitivity[styleKey] * (
+        (heroImage.deceptive - 0.5) * 0.14
+        + (heroImage.loose - 0.5) * 0.08
+        + (heroImage.aggressive - 0.5) * 0.12
+      )
     : 0;
   const effectiveEquity = clamp(equity + heroCallAdjustment, 0.02, 0.98);
   return choosePokerPolicyAction(buildPokerPolicyInput(game, player, effectiveEquity, profile));
@@ -925,24 +999,20 @@ function getAdvice(game: Game, player: Player, equity: number) {
   const potOdds = callCost > 0 ? callCost / Math.max(1, decisionPot.finalPot) : 0;
   const terminalCall = callClosesPlayerAction(game, player);
   const sizingContext = pokerSizingContext(game, player);
-  const policyPlan = evaluatePokerPolicy(buildPokerPolicyInput(game, player, equity, COACH_PROFILE));
+  const policyInput = buildPokerPolicyInput(game, player, equity, COACH_PROFILE);
+  const policyPlan = evaluatePokerPolicy(policyInput);
+  const callEv = callCost > 0
+    ? equity * policyPlan.equityRealization * decisionPot.finalPot - callCost
+    : null;
   const squidCount = game.squid.counts[player.id] ?? 0;
   const frequencies: Record<ActionKind, number> = { ...policyPlan.actionFrequencies };
   const action = (Object.entries(frequencies) as [ActionKind, number][])
     .reduce((best, candidate) => candidate[1] > best[1] ? candidate : best)[0];
   let note: string;
   if (game.street === "preflop") {
-    const scenarioLabels = {
-      open: "首入池",
-      isolate: "隔离跛入者",
-      "check-option": "大盲免费过牌",
-      "vs-open": "面对开池",
-      "vs-three-bet": "面对 3-bet",
-      "vs-four-bet": "面对 4-bet 及以上",
-    } as const;
     const rangePercent = Math.round(policyPlan.preflopTargetRange * 100);
     const enterPercent = Math.round(policyPlan.preflopEnterFrequency * 100);
-    note = `${policyPlan.preflopPosition} ${scenarioLabels[policyPlan.preflopScenario]}节点：先按位置、前序行动、加注尺度和有效筹码构建约 ${rangePercent}% 的继续范围；这手牌当前进入范围的混合频率约 ${enterPercent}%。`;
+    note = `${policyPlan.preflopPosition} ${PREFLOP_SCENARIO_LABELS[policyPlan.preflopScenario]}节点：先按位置、前序行动、加注尺度和有效筹码构建约 ${rangePercent}% 的继续范围；这手牌当前进入范围的混合频率约 ${enterPercent}%。`;
     if (action === "raise") note += ` 主路线为主动加注，尺寸按当前 ${game.raiseCount === 0 ? "开池" : game.raiseCount === 1 ? "3-bet" : game.raiseCount === 2 ? "4-bet" : "再加注"}节点计算。`;
     else if (action === "call") note += ` 主路线为跟注，保留强牌和部分可实现权益的牌，避免把继续范围全部暴露为加注。`;
     else if (action === "check") note += ` 当前拥有免费过牌权，弱牌无需为了“主动”而制造不必要底池。`;
@@ -952,7 +1022,10 @@ function getAdvice(game: Game, player: Player, equity: number) {
     const realizationPrice = Math.round(policyPlan.realizationThreshold * 100);
     const estimatedEquity = Math.round(equity * 100);
     const immediateChipEv = Math.round(equity * decisionPot.finalPot - callCost);
-    const chipEvText = `，按可争夺底池计算的即时筹码 EV 约 ${immediateChipEv >= 0 ? "+" : ""}${immediateChipEv}`;
+    const realizedCallEv = Math.round(callEv ?? immediateChipEv);
+    const chipEvText = terminalCall
+      ? `，按可争夺底池计算的即时筹码 EV 约 ${immediateChipEv >= 0 ? "+" : ""}${immediateChipEv}`
+      : `，计入约 ${Math.round(policyPlan.equityRealization * 100)}% 权益实现后的跟注 EV 代理约 ${realizedCallEv >= 0 ? "+" : ""}${realizedCallEv}`;
     const terminalCallLine = terminalCall && (action === "call" || action === "fold");
     if (terminalCallLine) {
       const squidAdjustment = game.presetKey === "squid" && ((immediateChipEv >= 0) !== (action === "call"));
@@ -968,19 +1041,20 @@ function getAdvice(game: Game, player: Player, equity: number) {
         : `直接价格为 ${directPrice}%；再计入位置和后续行动风险，启发式继续参考线约 ${realizationPrice}%，当前倾向弃牌。`;
     } else if (action === "raise") {
       note = policyPlan.nutAdvantage >= 0.55
-        ? `估算摊牌权益约 ${estimatedEquity}%，坚果优势代理较高，主线用加注获取价值并保留少量慢打。`
+        ? `估算摊牌权益约 ${estimatedEquity}%，当前组合靠近价值范围顶端，主线用加注获取价值并保留少量慢打。`
         : `估算摊牌权益约 ${estimatedEquity}%；听牌、阻断牌和对手下注尺度共同支持一部分半诈唬/极化加注。`;
     } else {
       note = `直接价格为 ${directPrice}%，估算摊牌权益约 ${estimatedEquity}%；跟注保留对手诈唬，同时把部分强牌与听牌留在加注分支。`;
     }
+    if (!terminalCallLine && (action === "fold" || action === "call")) note += chipEvText;
   } else if (action === "raise") {
     note = policyPlan.rangeAdvantage > 0.06 && policyPlan.nutAdvantage < 0.55
-      ? `位置、主动权与牌面纹理形成范围优势，适合用多尺度下注施压；中等牌力仍保留过牌保护。`
+      ? `当前组合权益、位置、主动权与牌面纹理共同支持多尺度下注；中等牌力仍保留过牌保护。`
       : policyPlan.nutAdvantage >= 0.55
-        ? `坚果优势代理较高，价值下注是主线；尺度会随 SPR、牌面动态性和河牌极化程度改变。`
+        ? `当前组合靠近价值范围顶端，价值下注是主线；尺度会随 SPR、牌面动态性和河牌极化程度改变。`
         : `听牌与关键阻断牌支持低到中频进攻，剩余组合进入过牌范围。`;
   } else {
-    note = `当前范围更适合过牌：控制底池并保护过牌范围；并非所有可下注组合都使用同一固定频率。`;
+    note = `当前组合更适合进入过牌分支，并为整体过牌范围保留一定强牌；并非所有可下注组合都使用同一固定频率。`;
   }
   if (game.street !== "preflop") {
     note += terminalCall && (action === "call" || action === "fold")
@@ -1027,6 +1101,16 @@ function getAdvice(game: Game, player: Player, equity: number) {
     action,
     note,
     potOdds,
+    equityRealization: policyPlan.equityRealization,
+    realizationThreshold: policyPlan.realizationThreshold,
+    callEv,
+    effectiveStackBb: policyInput.effectiveStackBb,
+    spr: policyPlan.spr,
+    strategySource: game.street === "preflop" ? "六人桌 169 手牌基准表" : "行动加权范围启发式模型",
+    preflopPosition: policyPlan.preflopPosition,
+    preflopScenario: PREFLOP_SCENARIO_LABELS[policyPlan.preflopScenario],
+    preflopTargetRange: policyPlan.preflopTargetRange,
+    preflopEnterFrequency: policyPlan.preflopEnterFrequency,
     frequencies,
     mix,
     sizingContext,
@@ -1133,12 +1217,14 @@ function WinningHands({ game }: { game: Game }) {
           const visibleToHero = player.isHuman || publiclyShown;
           const cards = [...player.hole, ...game.community];
           const handName = !game.endedUncontested && cards.length >= 5 ? bestHand(cards).name : "未摊牌赢池";
+          const payout = game.payouts.find((entry) => entry.playerId === player.id)?.amount ?? 0;
+          const potLabel = game.mainPotWinnerIds.includes(player.id) ? "主池" : "边池";
           return (
             <article className="winning-hand" key={player.id}>
               <div className="winning-hand-player">
                 <strong>{player.name}</strong>
                 <span>{visibleToHero ? handName : "手牌未公开"}</span>
-                {player.isHuman && !publiclyShown && <em>仅你可见</em>}
+                <em>{potLabel} +{payout}{player.isHuman && !publiclyShown ? " · 仅你可见" : ""}</em>
               </div>
               {visibleToHero ? (
                 <div className="winning-hand-cards" aria-label={`${player.name} 的赢家手牌`}>
@@ -1297,7 +1383,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   const [mode, setMode] = useState<GameMode>("hand");
   const [sessionEnded, setSessionEnded] = useState(false);
   const [sessionResults, setSessionResults] = useState<SessionHandResult[]>([]);
-  const [heroImage, setHeroImage] = useState<TableImage>({ loose: 0.5, aggressive: 0.5, deceptive: 0.5 });
+  const [heroImage, setHeroImage] = useState<TableImage>({ loose: 0.5, aggressive: 0.5, deceptive: 0.5, observations: 0 });
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
   const [appInstalled, setAppInstalled] = useState(() => typeof window !== "undefined" && (
     window.matchMedia("(display-mode: standalone)").matches
@@ -1419,7 +1505,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
 
   const equity = useMemo(() => {
     if (!game || !human || !isHumanTurn) return 0;
-    return currentEquity(game, human, game.street === "preflop" ? 220 : 360);
+    return currentEquity(game, human, game.street === "preflop" ? 600 : 1_200);
   }, [game, human, isHumanTurn]);
 
   const advice = useMemo(() => (game && human && isHumanTurn ? getAdvice(game, human, equity) : null), [game, human, isHumanTurn, equity]);
@@ -1458,7 +1544,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     setShowLog(false);
     setSessionEnded(false);
     setSessionResults([]);
-    setHeroImage({ loose: 0.5, aggressive: 0.5, deceptive: 0.5 });
+    setHeroImage({ loose: 0.5, aggressive: 0.5, deceptive: 0.5, observations: 0 });
     setDealing(false);
     setRaiseTo(BIG_BLIND * 3);
     winSoundHand.current = 0;
@@ -1503,6 +1589,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       loose: clamp(image.loose * 0.82 + (show && strength < 0.45 ? 0.78 : show ? 0.38 : 0.52) * 0.18),
       aggressive: image.aggressive,
       deceptive: clamp(image.deceptive * 0.75 + (show && strength < 0.45 ? 0.92 : show ? 0.28 : 0.62) * 0.25),
+      observations: image.observations + 1,
     }));
     setGame(setHeroShowChoice(game, show));
   }, [game]);
@@ -1546,6 +1633,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     const entry: Review = {
       id: Date.now(),
       hand: game.handNo,
+      streetKey: game.street,
       street: STREET_LABELS[game.street],
       cards: human.hole.map(cardText).join(" "),
       board: game.community.length ? game.community.map(cardText).join(" ") : "—",
@@ -1553,6 +1641,16 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       toCall,
       equity,
       potOdds: advice.potOdds,
+      equityRealization: advice.equityRealization,
+      realizationThreshold: advice.realizationThreshold,
+      callEv: advice.callEv,
+      effectiveStackBb: advice.effectiveStackBb,
+      spr: advice.spr,
+      strategySource: advice.strategySource,
+      preflopPosition: advice.preflopPosition,
+      preflopScenario: advice.preflopScenario,
+      preflopTargetRange: advice.preflopTargetRange,
+      preflopEnterFrequency: advice.preflopEnterFrequency,
       action: actionLabel,
       actionKind: kind,
       actualRaiseTo,
@@ -1579,6 +1677,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
         loose: clamp(image.loose * 0.88 + looseSignal * 0.12),
         aggressive: clamp(image.aggressive * 0.88 + aggressionSignal * 0.12),
         deceptive: image.deceptive,
+        observations: image.observations + 1,
       };
     });
     setGame((current) => (current ? act(current, human.id, kind, actualRaiseTo ?? undefined) : current));
@@ -1895,10 +1994,12 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                 </div>
                 <div className="metric-grid">
                   <div><span>底池赔率</span><strong>{isHumanTurn && advice ? `${Math.round(advice.potOdds * 100)}%` : "—"}</strong></div>
-                  <div><span>有效筹码</span><strong>{Math.min(...game.players.filter((p) => !p.folded).map((p) => p.stack)) / BIG_BLIND} BB</strong></div>
-                  <div><span>SPR</span><strong>{(human.stack / Math.max(1, committedPot(game))).toFixed(1)}</strong></div>
+                  <div><span>有效筹码</span><strong>{isHumanTurn && advice ? `${advice.effectiveStackBb.toFixed(1)} BB` : "—"}</strong></div>
+                  <div><span>SPR</span><strong>{isHumanTurn && advice ? advice.spr.toFixed(1) : "—"}</strong></div>
                 </div>
-                <p className="range-note">按位置、行动顺序、下注尺度、跟注价格与多人底池动态加权；不会读取电脑暗牌。</p>
+                <p className="range-note">{isHumanTurn && advice
+                  ? `${advice.strategySource} · 按位置、完整公开行动线、下注尺度与多人底池动态加权；不会读取电脑暗牌。`
+                  : "等待你的行动点后，系统才会生成不读取电脑暗牌的范围估算。"}</p>
               </section>
 
               <section className={`coach-callout ${training && isHumanTurn ? "visible" : "muted"}`}>
@@ -1917,6 +2018,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                   <div className="decision-top"><span>上一决策</span><b className={feedback.score >= 85 ? "good" : feedback.score >= 65 ? "ok" : "bad"}>{feedback.score} 分</b></div>
                   <h3>{feedback.score >= 85 ? "线路漂亮，继续保持" : feedback.score >= 65 ? "可执行，但有更优选择" : "这里值得重点复盘"}</h3>
                   <p>你选择了{feedback.action}，属于{feedback.actionVerdict}（约 {Math.round(feedback.selectedFrequency * 100)}%）。参考混合：{feedback.mix}。{feedback.sizingMix ? `进入加注分支后的尺寸混合：${feedback.sizingMix}。` : ""}{feedback.sizeVerdict ? `${feedback.sizeVerdict}。` : ""}{feedback.note}</p>
+                  <p className="range-note">来源：{feedback.strategySource}。分数表示与当前公开策略频率的匹配程度，不是求解器计算的 EV 损失。</p>
                 </section>
               ) : (
                 <section className="last-decision empty-decision"><span>完成第一个决策后，这里会出现即时反馈。</span></section>
@@ -1959,6 +2061,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                     <div><span>净结果（含鱿鱼）</span><strong className={heroNet >= 0 ? "good" : "bad"}>{heroNet >= 0 ? "+" : ""}{heroNet}</strong></div>
                     <div><span>AI 眼中的松紧</span><strong>{imageLabel(heroImage.loose, "偏紧", "均衡", "偏松")}</strong></div>
                     <div><span>AI 眼中的风格</span><strong>{imageLabel(heroImage.aggressive, "偏被动", "均衡", "偏激进")}</strong></div>
+                    <div><span>画像样本</span><strong>{heroImage.observations} 次</strong></div>
                   </div>
                   <SquidScoreboard game={game} report />
                   <div className="session-hand-list">
@@ -1989,7 +2092,11 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                       <p>你的选择：{item.action}（{item.actionVerdict}，约 {Math.round(item.selectedFrequency * 100)}%）；最高频线路：{item.recommended}</p>
                       <p>参考混合：{item.mix}</p>
                       {item.sizingMix && <p>进入加注分支后的尺寸混合：{item.sizingMix}{item.sizeVerdict ? `；${item.sizeVerdict}` : ""}</p>}
-                      <small>估算摊牌权益 {Math.round(item.equity * 100)}% / 所需赔率 {Math.round(item.potOdds * 100)}% · {item.note}</small>
+                      {item.streetKey === "preflop" ? (
+                        <small>{item.preflopPosition} · {item.preflopScenario} · 基准继续范围约 {Math.round(item.preflopTargetRange * 100)}% · 本手进入频率约 {Math.round(item.preflopEnterFrequency * 100)}% · 来源：{item.strategySource}。{item.note}</small>
+                      ) : (
+                        <small>对行动范围估算权益 {Math.round(item.equity * 100)}% / 直接赔率 {Math.round(item.potOdds * 100)}% / 权益实现参考线 {Math.round(item.realizationThreshold * 100)}% · 权益实现估算 {Math.round(item.equityRealization * 100)}% · 有效筹码 {item.effectiveStackBb.toFixed(1)} BB / SPR {item.spr.toFixed(1)}{item.callEv === null ? "" : ` · 跟注 EV 代理 ${item.callEv >= 0 ? "+" : ""}${Math.round(item.callEv)}`} · 来源：{item.strategySource}。{item.note}</small>
+                      )}
                     </div>
                   </div>
                 )) : <p className="empty-log">这段练习没有记录到你的决策节点。</p>}
@@ -2036,7 +2143,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
             <button className="modal-close" onClick={() => setInfoOpen(false)} aria-label="关闭">×</button>
             <span className="eyebrow">ABOUT THE LAB</span>
             <h2 id="info-title">更强的混合频率对手，<br />但不冒充“完整 GTO”。</h2>
-            <p>当前本地引擎综合你这手牌对行动加权范围的估算摊牌权益、底池赔率、位置、SPR、牌面纹理、听牌、阻断牌与行动压力，连续生成动作和条件尺度混合；电脑、实时建议与复盘共用同一策略。评分是策略匹配度，不是求解器计算出的精确 EV 损失。</p>
+            <p>翻前先查询六人桌 169 手牌基准表，再按位置、前序行动、尺度与筹码深度修正；翻后综合对行动加权范围的估算权益、直接赔率、权益实现、SPR、牌面纹理、听牌与阻断牌，连续生成动作和条件尺度混合。电脑、实时建议与复盘共用同一策略；评分是频率匹配度，不是求解器计算出的精确 EV 损失。</p>
             <div className="modal-grid">
               <div><b>四种桌型</b><span>浅筹 40 BB、标准 100 BB、深筹 200 BB，以及 200 BB 的血战鱿鱼。</span></div>
               <div><b>两种训练</b><span>单手模式逐手点评；常规整局固定 20 手，鱿鱼整局以 9 条全部发完为终点，答案都在结束后统一公开。</span></div>

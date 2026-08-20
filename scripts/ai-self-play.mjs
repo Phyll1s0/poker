@@ -209,7 +209,9 @@ function decideAction(context) {
     preflopPosition: sixMaxPreflopPosition(player.id, dealer),
     preflopPositionFactor: sixMaxPreflopPositionFactor(player.id, dealer),
     preflopRaiseCount: raiseCount,
-    preflopOpenerPosition: openingRaiserId === null ? undefined : sixMaxPreflopPosition(openingRaiserId, dealer),
+    preflopOpenerPosition: (raiseCount >= 2 ? lastAggressor : openingRaiserId) === null
+      ? undefined
+      : sixMaxPreflopPosition(raiseCount >= 2 ? lastAggressor : openingRaiserId, dealer),
     preflopLimpers,
     preflopColdCallers,
     preflopPreviouslyRaised: player.pfr,
@@ -562,7 +564,7 @@ export function formatReport(report) {
     "",
     `零和校验：${signed(report.totalNetBb, 6)} BB`,
     "Agg=(bet+raise)/call；W$SD=进入摊牌后的主池胜率（平分按份额计）；CI 按每个牌桌手聚类近似。",
-    `注意：这是共享牌力/策略核的快速回归，不是 CFR/GTO 求解器；权益敏感节点为吞吐量使用 ${report.config.equityIterations} 次采样，低于界面电脑的 90/120 次和实时教练的 220/360 次。`,
+    `注意：这是共享牌力/策略核的快速回归，不是 CFR/GTO 求解器；权益敏感节点为吞吐量使用 ${report.config.equityIterations} 次采样，低于界面电脑的 300/600 次和实时教练的 600/1200 次。`,
   ].join("\n");
 }
 
@@ -592,7 +594,7 @@ function help() {
     "  --hands N       模拟手数（默认 20000）",
     "  --seed VALUE    可重复运行的随机种子",
     "  --stack-bb N    每手起始有效筹码（默认 100）",
-    "  --equity-iterations N  权益敏感节点采样数（默认 4；界面对局为 70/82）",
+    "  --equity-iterations N  权益敏感节点采样数（默认 4；界面电脑为 300/600，实时教练为 600/1200）",
     "  --json           输出机器可读 JSON",
     "  -h, --help       显示帮助",
   ].join("\n");

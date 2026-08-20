@@ -75,7 +75,7 @@ test("preflop strength and percentile preserve useful ordering", () => {
   });
 });
 
-test("reports draws and nut-suit blockers from public cards only", () => {
+test("reports player-contributed draws and board-relevant blockers", () => {
   assert.equal(
     drawPotential([c(8, "c"), c(9, "d")], [c(10, "h"), c(11, "c"), c(2, "s")]),
     0.09,
@@ -85,8 +85,40 @@ test("reports draws and nut-suit blockers from public cards only", () => {
   ) < 1e-12);
   assert.equal(
     blockerValue([c(14, "s"), c(13, "d")], [c(2, "s"), c(7, "s"), c(11, "s")]),
-    0.15,
+    0.1,
   );
+});
+
+test("does not assign board-only flush or straight draws to the player", () => {
+  assert.equal(
+    drawPotential([c(2, "h"), c(7, "d")], [c(2, "s"), c(7, "s"), c(11, "s"), c(14, "s")]),
+    0,
+  );
+  assert.equal(
+    drawPotential([c(5, "h"), c(13, "d")], [c(5, "s"), c(6, "h"), c(7, "d"), c(8, "c")]),
+    0,
+  );
+});
+
+test("orders contributed combo draws, open-enders, gutshots and backdoors", () => {
+  const combo = drawPotential([c(8, "s"), c(9, "s")], [c(6, "s"), c(7, "s"), c(2, "d")]);
+  const openEnded = drawPotential([c(8, "h"), c(9, "d")], [c(6, "s"), c(7, "c"), c(2, "d")]);
+  const gutshot = drawPotential([c(8, "h"), c(10, "d")], [c(6, "s"), c(7, "c"), c(2, "d")]);
+  const backdoor = drawPotential([c(8, "h"), c(10, "d")], [c(6, "s"), c(2, "c"), c(13, "d")]);
+
+  assert.equal(combo, 0.2);
+  assert.equal(openEnded, 0.09);
+  assert.equal(gutshot, 0.05);
+  assert.equal(backdoor, 0.035);
+  assert.ok(combo > openEnded && openEnded > gutshot && gutshot > backdoor);
+});
+
+test("keeps preflop high-card blockers but ignores unrelated postflop overcards", () => {
+  assert.equal(blockerValue([c(14, "s"), c(13, "d")], []), 0.05);
+  assert.equal(blockerValue([c(14, "s"), c(13, "d")], [c(2, "c"), c(7, "h"), c(10, "d")]), 0);
+  assert.equal(blockerValue([c(13, "s"), c(2, "d")], [c(14, "s"), c(7, "s"), c(11, "s")]), 0.1);
+  assert.equal(blockerValue([c(9, "h"), c(2, "d")], [c(5, "s"), c(6, "h"), c(7, "d"), c(8, "c")]), 0.04);
+  assert.equal(blockerValue([c(12, "h"), c(3, "d")], [c(12, "s"), c(12, "c"), c(5, "d")]), 0.03);
 });
 
 test("describes board texture continuously instead of fixed named buckets", () => {

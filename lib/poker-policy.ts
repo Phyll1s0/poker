@@ -1,4 +1,10 @@
 import { buildPokerSizingRoutes, type PokerSizingRoute } from "./poker-sizing.ts";
+import {
+  encodePreflopHandClass,
+  getPreflopStrategy,
+  summarizePreflopRange,
+  type PreflopScenario as ChartPreflopScenario,
+} from "./poker-preflop.ts";
 
 export type PokerPolicyActionKind = "fold" | "check" | "call" | "raise";
 export type PokerPolicyStreet = "preflop" | "flop" | "turn" | "river";
@@ -58,6 +64,7 @@ export type PokerPolicyInput = {
   preflopPositionFactor?: number;
   preflopRaiseCount?: number;
   preflopPosition?: PokerPreflopPosition;
+  /** Opener when facing one raise; latest aggressor when facing a 3-bet or later raise. */
   preflopOpenerPosition?: PokerPreflopPosition;
   preflopLimpers?: number;
   preflopColdCallers?: number;
@@ -108,6 +115,8 @@ export type PokerPolicyPlan = {
   preflopPosition: PokerPreflopPosition;
   rangeAdvantage: number;
   nutAdvantage: number;
+  /** Estimated share of raw showdown equity that can be realized before later action. */
+  equityRealization: number;
   realizationThreshold: number;
   /** Conditional size mix after the raise/bet branch has been selected. */
   sizingIntents: Array<{ fraction?: number; target?: number; frequency: number }>;
@@ -396,7 +405,7 @@ function normalizeActionFrequencies(
   ) as PokerPolicyActionFrequencies;
 }
 
-function buildPreflopFrequencies(input: {
+function buildFallbackPreflopFrequencies(input: {
   profile: PokerPolicyProfile;
   blockers: number;
   preflopPercentile: number;
@@ -558,6 +567,169 @@ function buildPreflopFrequencies(input: {
   };
 }
 
+const PREFLOP_RANGE_SUMMARY_CACHE = new Map<string, number>();
+
+function scalePreflopProbability(probability: number, factor: number) {
+  if (probability <= 0 || probability >= 1) return probability;
+  const odds = probability / (1 - probability) * Math.max(0.01, factor);
+  return odds / (1 + odds);
+}
+
+/**
+ * Uses the 169-class chart as the primary preflop policy whenever the caller
+ * supplies the actual hand. The older percentile model remains only as a
+ * compatibility fallback for headless callers that have not supplied cards.
+ */
+function buildPreflopFrequencies(input: Parameters<typeof buildFallbackPreflopFrequencies>[0]) {
+  const fallback = buildFallbackPreflopFrequencies(input);
+  if (!input.preflopHand) return fallback;
+
+  const hand = encodePreflopHandClass(
+    input.preflopHand.highRank,
+    input.preflopHand.lowRank,
+    input.preflopHand.suited,
+  );
+  const position = input.preflopPosition;
+  const publishedScenario: PokerPreflopScenario = input.preflopRaiseCount === 0
+    ? input.preflopLimpers > 0
+      ? "isolate"
+      : position === "BB" && input.toCall === 0
+        ? "check-option"
+        : "open"
+    : input.preflopRaiseCount === 1
+      ? "vs-open"
+      : input.preflopRaiseCount === 2
+        ? "vs-three-bet"
+        : "vs-four-bet";
+
+  // A free BB option after limpers is not an RFI node. Keep the dedicated
+  // check/raise compatibility branch until a limped-pot chart is published.
+  if (publishedScenario === "check-option") return fallback;
+
+  const chartScenario: ChartPreflopScenario = input.preflopRaiseCount === 0
+    ? "rfi"
+    : input.preflopRaiseCount === 1
+      ? "vs-open"
+      : input.preflopRaiseCount === 2
+        ? "vs-three-bet"
+        : "vs-four-bet";
+  const facingSizeBb = input.preflopRaiseCount > 0
+    ? input.highestBet / Math.max(1, input.bigBlind)
+    : undefined;
+  const query = {
+    hand,
+    scenario: chartScenario,
+    heroPosition: position,
+    aggressorPosition: input.preflopOpenerPosition,
+    effectiveStackBb: input.effectiveStackBb,
+    facingSizeBb,
+  };
+  const chart = getPreflopStrategy(query);
+
+  // Player archetypes perturb the chart in odds space. This preserves exact
+  // zero/one chart decisions and keeps all styles anchored to the same node
+  // instead of replacing the chart with a different hand-strength ranking.
+  const styleEnterFactor = Math.exp((input.profile.looseness - 0.27) * 2.05);
+  const styleRaiseFactor = Math.exp(
+    (input.profile.aggression - 0.7) * 1.15
+      + (input.profile.bluff - 0.12) * 0.75,
+  );
+  const limperFactor = publishedScenario === "isolate"
+    ? clamp(1 - input.preflopLimpers * 0.045, 0.78, 1)
+    : 1;
+  const coldCallerFactor = input.preflopColdCallers > 0
+    ? clamp(1 + input.preflopColdCallers * 0.025, 1, 1.1)
+    : 1;
+  const baseEnter = chart.frequencies.call + chart.frequencies.raise;
+  let adjustedEnter = scalePreflopProbability(
+    baseEnter,
+    styleEnterFactor * limperFactor * coldCallerFactor,
+  );
+  const chartAnchoredEnter = adjustedEnter;
+  const loosenessDelta = input.profile.looseness - 0.27;
+  const premiumProtection = preflopPremiumValue(input);
+  if (loosenessDelta < 0) {
+    const tightening = clamp(-loosenessDelta / 0.11, 0, 1);
+    adjustedEnter *= 1 - tightening * 0.3 * (1 - premiumProtection * 0.92);
+  } else if (loosenessDelta > 0) {
+    const expansion = clamp(loosenessDelta / 0.13, 0, 1) * 0.3;
+    adjustedEnter += Math.max(0, fallback.enterFrequency - adjustedEnter) * expansion;
+  }
+  let raiseShare = baseEnter > 0 ? chart.frequencies.raise / baseEnter : 0;
+  raiseShare = scalePreflopProbability(raiseShare, styleRaiseFactor);
+  const expandedShare = adjustedEnter > 0
+    ? clamp((adjustedEnter - chartAnchoredEnter) / adjustedEnter, 0, 1)
+    : 0;
+  if (expandedShare > 0 && fallback.enterFrequency > 0) {
+    const fallbackRaiseShare = fallback.actionFrequencies.raise / fallback.enterFrequency;
+    raiseShare = raiseShare * (1 - expandedShare) + fallbackRaiseShare * expandedShare;
+  }
+
+  // Keep premiums inside every style's range and avoid turning a charted pure
+  // fold into a bluff solely because the profile is aggressive.
+  if (hand === "AA") {
+    adjustedEnter = 1;
+    raiseShare = Math.max(raiseShare, 0.9);
+  }
+  const selectedRaise = input.opponentsCanRespond && !input.raiseLocked
+    ? adjustedEnter * raiseShare
+    : 0;
+  const raw: Partial<PokerPolicyActionFrequencies> = {
+    fold: 1 - adjustedEnter,
+    call: adjustedEnter - selectedRaise,
+    raise: selectedRaise,
+  };
+
+  if (input.squidPressure > 0 && input.toCall > 0) {
+    const pressureShift = Math.min(raw.fold ?? 0, 0.025 + input.squidPressure * 0.22);
+    raw.fold = Math.max(0, (raw.fold ?? 0) - pressureShift);
+    raw.call = (raw.call ?? 0) + pressureShift * 0.7;
+    raw.raise = (raw.raise ?? 0) + pressureShift * 0.3;
+  }
+
+  const actionFrequencies = normalizeActionFrequencies(raw, input);
+  const summaryDepth = Math.round(input.effectiveStackBb / 5) * 5;
+  const summarySize = facingSizeBb === undefined ? "-" : (Math.round(facingSizeBb * 4) / 4).toFixed(2);
+  const summaryKey = [chartScenario, position, input.preflopOpenerPosition ?? "-", summaryDepth, summarySize].join("|");
+  let baselineRange = PREFLOP_RANGE_SUMMARY_CACHE.get(summaryKey);
+  if (baselineRange === undefined) {
+    baselineRange = summarizePreflopRange({
+      scenario: chartScenario,
+      heroPosition: position,
+      aggressorPosition: input.preflopOpenerPosition,
+      effectiveStackBb: summaryDepth,
+      facingSizeBb: facingSizeBb === undefined ? undefined : Number(summarySize),
+    }).enterFrequency;
+    PREFLOP_RANGE_SUMMARY_CACHE.set(summaryKey, baselineRange);
+  }
+  const targetRange = scalePreflopProbability(
+    baselineRange,
+    styleEnterFactor * limperFactor * coldCallerFactor,
+  );
+  const profiledTargetRange = loosenessDelta < 0
+    ? targetRange * (1 - clamp(-loosenessDelta / 0.11, 0, 1) * 0.26)
+    : loosenessDelta > 0
+      ? targetRange + Math.max(0, fallback.targetRange - targetRange)
+        * clamp(loosenessDelta / 0.13, 0, 1) * 0.3
+      : targetRange;
+  const conditionalRaiseFrequency = actionFrequencies.raise
+    / Math.max(0.000_001, actionFrequencies.call + actionFrequencies.raise);
+
+  return {
+    scenario: publishedScenario,
+    position,
+    targetRange: clamp(profiledTargetRange, 0, 1),
+    enterFrequency: actionFrequencies.call + actionFrequencies.raise,
+    openRaiseFrequency: input.preflopRaiseCount === 0 ? conditionalRaiseFrequency : 0,
+    threeBetFrequency: input.preflopRaiseCount === 1 ? conditionalRaiseFrequency : 0,
+    raiseFrequency: conditionalRaiseFrequency,
+    // The chart selects the action branch; the existing smooth depth ramp only
+    // decides how often a selected raise branch becomes an all-in size.
+    shortStackJamFrequency: fallback.shortStackJamFrequency,
+    actionFrequencies,
+  };
+}
+
 function inferredBigBlind(input: PokerPolicyInput) {
   if (input.bigBlind !== undefined && input.bigBlind > 0) return input.bigBlind;
   if (input.effectiveStackBb > 0 && input.playerStack > 0) {
@@ -654,6 +826,9 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
   );
   const strong = valueScore >= 0.5;
   const highDryBoard = input.boardHighCard * (1 - input.boardWetness);
+  // These are intentionally hand-level board/line proxies. They help the local
+  // fallback policy stay continuous, but they are not solver-grade aggregate
+  // range or nut-density measurements and must not be described as such in UI.
   const rangeAdvantage = clamp(
     (input.equity - 0.5) * 1.08
       + (input.initiative ? 0.08 : -0.012)
@@ -860,18 +1035,27 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
     0,
     0.7,
   );
+  // Model non-terminal calls through an explicit equity-realization factor:
+  // EV(call) ~= equity * realization * finalPot - callCost.  This keeps the
+  // published threshold and the fold/call mix on the same indifference point.
+  // Terminal/all-in calls realize all equity, while position, live draws and a
+  // dry board help; multiway action and wet out-of-position boards hurt.
+  const equityRealization = input.callEndsHand
+    ? 1
+    : clamp(
+        0.94
+          + (input.inPosition ? 0.045 : -0.035)
+          - input.boardWetness * (input.inPosition ? 0.012 : 0.04)
+          - (input.activeOpponents - 1) * 0.045
+          - pressure * 0.018
+          + drawQuality * 0.028
+          + deepFactor * (input.inPosition ? 0.018 : -0.012),
+        0.68,
+        1.06,
+      );
   const realizationThreshold = input.callEndsHand
     ? input.potOdds
-    : clamp(
-        input.potOdds
-          + (input.inPosition ? -0.006 : 0.016)
-          + input.boardWetness * (input.inPosition ? 0.002 : 0.012)
-          + (input.activeOpponents - 1) * 0.017
-          + pressure * 0.018
-          - drawQuality * 0.008,
-        0,
-        0.94,
-      );
+    : clamp(input.potOdds / Math.max(0.01, equityRealization), 0, 0.94);
   const continueEdge = input.equity
     + input.squidPressure
     + (input.profile.looseness - 0.27) * 0.035
@@ -892,15 +1076,16 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
     actionFrequencies = preflopPlan.actionFrequencies;
   } else if (input.toCall > 0) {
     const futureRiskFactor = input.callEndsHand ? 0 : 1;
-    const foldLogit = -continueEdge * 11.2
+    const edgeSensitivity = input.street === "river" ? 15 : input.street === "turn" ? 12.5 : 11;
+    const foldLogit = -continueEdge * edgeSensitivity
       + pressure * 0.62 * futureRiskFactor
       + (input.activeOpponents - 1) * 0.14 * futureRiskFactor;
-    const callLogit = 0.34
-      + sigmoid(continueEdge * 10) * 0.92
-      - valueScore * 0.54
-      + drawQuality * 0.26
+    const callLogit = continueEdge * edgeSensitivity
+      - valueScore * 0.24
+      + drawQuality * 0.18
       - pressure * 0.22 * futureRiskFactor;
-    const raiseLogit = -1.02
+    const raiseLogit = -1.38
+      + continueEdge * edgeSensitivity
       + valueScore * (1.72 + input.profile.aggression * 0.82)
       + bluffFrequency * 2.15
       + nutAdvantage * 0.42
@@ -957,6 +1142,7 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
     preflopPosition: preflopPlan.position,
     rangeAdvantage,
     nutAdvantage,
+    equityRealization,
     realizationThreshold,
     sizingIntents,
     sizingRoutes,
