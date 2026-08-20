@@ -655,7 +655,10 @@ button { color: inherit; }
 .seat-5 .table-bet { left: -40px; top: -12px; }
 
 .is-folded { opacity: .4; filter: grayscale(.5); }
+.player-seat.is-private-peek { opacity: 1; filter: none; }
+.player-seat.is-private-peek .player-panel { border-color: rgba(216,183,116,.42); box-shadow: 0 0 0 2px rgba(216,183,116,.08), 0 9px 26px rgba(0,0,0,.42); }
 .fold-label { position: absolute; top: -20px; right: 2px; padding: 3px 5px; background: #232725; color: #8e918d; border-radius: 3px; font-size: 8px; }
+.private-peek-label { position: absolute; top: -20px; left: 2px; padding: 3px 5px; border: 1px solid rgba(216,183,116,.26); border-radius: 3px; background: #2a2820; color: #d1bc8d; font-size: 7px; white-space: nowrap; }
 .thinking { position: absolute; left: 50%; bottom: -19px; transform: translateX(-50%); display: flex; gap: 3px; }
 .thinking b { width: 4px; height: 4px; border-radius: 50%; background: var(--gold); animation: pulse 1s infinite ease-in-out; }
 .thinking b:nth-child(2) { animation-delay: .14s; }
@@ -743,6 +746,30 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
 .endless-hand-actions .next-hand-button { padding-inline: 12px; }
 .finish-endless-button { min-height: 44px; padding: 0 12px; border: 1px solid rgba(216,183,116,.28); border-radius: 5px; background: rgba(216,183,116,.07); color: #cdbb93; cursor: pointer; font-size: 9px; font-weight: 600; }
 .finish-endless-button:hover { border-color: rgba(216,183,116,.48); background: rgba(216,183,116,.12); }
+.private-peek {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding-top: 10px;
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid rgba(216,183,116,.12);
+}
+.private-peek-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.private-peek-copy span { color: var(--gold); font-size: 7px; letter-spacing: .14em; }
+.private-peek-copy strong { color: #ded9ce; font: 500 11px/1.2 Georgia, serif; }
+.private-peek-copy small { color: #6e736e; font-size: 7px; }
+.private-peek-targets { max-width: 500px; display: flex; justify-content: flex-end; gap: 5px; flex-wrap: wrap; }
+.private-peek-targets button { min-height: 31px; padding: 0 9px; border: 1px solid rgba(216,183,116,.2); border-radius: 4px; background: rgba(216,183,116,.055); color: #bdb39d; cursor: pointer; font-size: 8px; }
+.private-peek-targets button:hover { border-color: rgba(216,183,116,.46); color: #e2d5b8; background: rgba(216,183,116,.1); }
+.private-peek-empty { color: #707570; font-size: 8px; white-space: nowrap; }
+.private-peek-result { display: flex; align-items: center; gap: 8px; }
+.private-peek-result em { color: #777c76; font-size: 7px; font-style: normal; white-space: nowrap; }
+.private-peek-cards { display: flex; gap: 4px; }
+.private-peek-cards .card { width: 32px; border-radius: 4px; box-shadow: 0 4px 9px rgba(0,0,0,.3), inset 0 0 0 1px rgba(65,55,45,.12); }
+.private-peek-cards .card-rank { font-size: 14px; }
+.private-peek-cards .card-suit { margin-top: 0; font-size: 17px; }
 .winning-hands {
   grid-column: 1 / -1;
   min-width: 0;
@@ -1084,6 +1111,9 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
   .show-choice { flex: 0 0 auto; width: 100%; }
   .show-choice button, .next-hand-button { min-height: 44px; }
   .endless-hand-actions { min-width: 0; width: 100%; }
+  .private-peek { grid-template-columns: 1fr; text-align: center; }
+  .private-peek-targets { max-width: none; justify-content: center; }
+  .private-peek-result { justify-content: center; }
   .winning-hands { grid-column: 1; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; }
   .winning-hand { min-width: 166px; }
   .turn-summary { display: none; }

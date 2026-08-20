@@ -39,6 +39,7 @@ import {
   recordPokerRunDecision,
   upsertPokerRunHand,
 } from "../lib/poker-run";
+import { pokerPrivatePeekCandidateIds, selectPokerPrivatePeek } from "../lib/poker-peek";
 import { settlePokerShowdown } from "../lib/poker-settlement";
 import { resolveNextCashGameBankrolls, resolvePokerDecisionStacks } from "../lib/poker-stack";
 import {
@@ -128,6 +129,7 @@ type Game = {
   returns: Array<{ playerId: number; amount: number }>;
   endedUncontested: boolean;
   shownPlayerIds: number[];
+  peekedPlayerIds: number[];
   showChoiceMade: boolean;
   handNo: number;
   status: "playing" | "showdown";
@@ -690,6 +692,7 @@ function freshGame(
     returns: [],
     endedUncontested: false,
     shownPlayerIds: [],
+    peekedPlayerIds: [],
     showChoiceMade: true,
     handNo: (previous?.handNo ?? 0) + 1,
     status: "playing",
@@ -1008,6 +1011,19 @@ function setHeroShowChoice(game: Game, show: boolean): Game {
   };
 }
 
+function privatelyPeekOpponent(game: Game, playerId: number): Game {
+  if (game.status !== "showdown" || !game.showChoiceMade) return game;
+  const candidates = pokerPrivatePeekCandidateIds(game.players, game.shownPlayerIds);
+  const peekedPlayerIds = selectPokerPrivatePeek(game.peekedPlayerIds, playerId, candidates);
+  if (peekedPlayerIds.length === game.peekedPlayerIds.length) return game;
+  const player = game.players.find((candidate) => candidate.id === playerId);
+  if (!player) return game;
+  return {
+    ...game,
+    peekedPlayerIds,
+  };
+}
+
 function formatFrequencyMix(items: Array<{ label: string; frequency: number }>) {
   const visible = items.filter((item) => item.frequency >= 0.005);
   if (!visible.length) return "";
@@ -1215,12 +1231,13 @@ function PlayingCard({ card, ghost = false, dealDelay }: { card?: Card; ghost?: 
 }
 
 function PlayerSeat({ player, game, index, thinking, revealReady }: { player: Player; game: Game; index: number; thinking: boolean; revealReady: boolean }) {
-  const reveal = game.status === "showdown" && revealReady && game.shownPlayerIds.includes(player.id);
+  const privatelyPeeked = game.peekedPlayerIds.includes(player.id);
+  const reveal = game.status === "showdown" && revealReady && (game.shownPlayerIds.includes(player.id) || privatelyPeeked);
   const isCurrent = game.current === index;
   const role = index === game.dealer ? "D" : index === (game.dealer + 1) % 6 ? "SB" : index === (game.dealer + 2) % 6 ? "BB" : "";
   return (
-    <div className={`player-seat seat-${index} ${isCurrent ? "is-current" : ""} ${player.folded ? "is-folded" : ""}`}>
-      <div className={`seat-cards ${reveal || player.isHuman ? "is-revealed" : ""}`} aria-label={reveal ? `${player.name} 的手牌` : `${player.name} 的手牌未公开`}>
+    <div className={`player-seat seat-${index} ${isCurrent ? "is-current" : ""} ${player.folded ? "is-folded" : ""} ${privatelyPeeked ? "is-private-peek" : ""}`}>
+      <div className={`seat-cards ${reveal || player.isHuman ? "is-revealed" : ""}`} aria-label={privatelyPeeked ? `你私下偷看的 ${player.name} 手牌` : reveal ? `${player.name} 的手牌` : `${player.name} 的手牌未公开`}>
         {player.hole.map((card) => (
           <PlayingCard key={cardKey(card)} card={reveal || player.isHuman ? card : undefined} />
         ))}
@@ -1244,6 +1261,7 @@ function PlayerSeat({ player, game, index, thinking, revealReady }: { player: Pl
       {player.bet > 0 && <div className="table-bet"><i />{player.bet}</div>}
       {thinking && isCurrent && <div className="thinking"><b /><b /><b /></div>}
       {player.folded && <div className="fold-label">已弃牌</div>}
+      {privatelyPeeked && <div className="private-peek-label">偷看 · 仅你可见</div>}
     </div>
   );
 }
@@ -1266,7 +1284,8 @@ function WinningHands({ game }: { game: Game }) {
       <div className="winning-hand-list">
         {winners.map((player) => {
           const publiclyShown = game.shownPlayerIds.includes(player.id);
-          const visibleToHero = player.isHuman || publiclyShown;
+          const privatelyPeeked = game.peekedPlayerIds.includes(player.id);
+          const visibleToHero = player.isHuman || publiclyShown || privatelyPeeked;
           const cards = [...player.hole, ...game.community];
           const handName = !game.endedUncontested && cards.length >= 5 ? bestHand(cards).name : "未摊牌赢池";
           const payout = game.payouts.find((entry) => entry.playerId === player.id)?.amount ?? 0;
@@ -1276,7 +1295,7 @@ function WinningHands({ game }: { game: Game }) {
               <div className="winning-hand-player">
                 <strong>{player.name}</strong>
                 <span>{visibleToHero ? handName : "手牌未公开"}</span>
-                <em>{potLabel} +{payout}{player.isHuman && !publiclyShown ? " · 仅你可见" : ""}</em>
+                <em>{potLabel} +{payout}{privatelyPeeked ? " · 偷看，仅你可见" : player.isHuman && !publiclyShown ? " · 仅你可见" : ""}</em>
               </div>
               {visibleToHero ? (
                 <div className="winning-hand-cards" aria-label={`${player.name} 的赢家手牌`}>
@@ -1291,6 +1310,41 @@ function WinningHands({ game }: { game: Game }) {
           );
         })}
       </div>
+    </section>
+  );
+}
+
+function PrivatePeekOpportunity({ game, onPeek }: { game: Game; onPeek: (playerId: number) => void }) {
+  if (game.status !== "showdown" || !game.showChoiceMade) return null;
+  const peekedPlayer = game.peekedPlayerIds.length
+    ? game.players.find((player) => player.id === game.peekedPlayerIds[0])
+    : undefined;
+  const candidates = pokerPrivatePeekCandidateIds(game.players, game.shownPlayerIds);
+
+  return (
+    <section className={`private-peek ${peekedPlayer ? "is-used" : ""}`} aria-label="牌后私密偷看机会">
+      <div className="private-peek-copy">
+        <span>PRIVATE PEEK · 每手一次</span>
+        <strong>{peekedPlayer ? `偷看到 ${peekedPlayer.name}` : candidates.length ? "选择一位未公开手牌的电脑" : "本手其余手牌均已公开"}</strong>
+        <small>只对你可见，不算公开亮牌，也不会改变 AI 对你的画像。</small>
+      </div>
+      {peekedPlayer ? (
+        <div className="private-peek-result">
+          <div className="private-peek-cards">
+            {peekedPlayer.hole.map((card) => <PlayingCard key={cardKey(card)} card={card} />)}
+          </div>
+          <em>机会已使用</em>
+        </div>
+      ) : candidates.length ? (
+        <div className="private-peek-targets">
+          {candidates.map((playerId) => {
+            const player = game.players.find((candidate) => candidate.id === playerId)!;
+            return <button key={player.id} type="button" onClick={() => onPeek(player.id)}>偷看 {player.name}</button>;
+          })}
+        </div>
+      ) : (
+        <div className="private-peek-empty">无需偷看</div>
+      )}
     </section>
   );
 }
@@ -1670,6 +1724,10 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     setGame(setHeroShowChoice(game, show));
   }, [game]);
 
+  const choosePrivatePeek = useCallback((playerId: number) => {
+    setGame((current) => current ? privatelyPeekOpponent(current, playerId) : current);
+  }, []);
+
   const handleAction = useCallback((kind: ActionKind) => {
     if (!game || !human || !isHumanTurn || !advice) return;
     if (soundOn) void unlockPokerAudio().then((ready) => { if (ready) playPokerSound(kind); });
@@ -1991,6 +2049,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                 ) : (
                   <button className="next-hand-button" onClick={startNextHand}>下一手 · 筹码延续 <kbd>N</kbd></button>
                 )}
+                <PrivatePeekOpportunity game={game} onPeek={choosePrivatePeek} />
                 <WinningHands game={game} />
               </div>
             ) : (

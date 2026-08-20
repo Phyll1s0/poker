@@ -95,6 +95,13 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /function setHeroShowChoice/);
   assert.match(page, /function WinningHands/);
   assert.match(page, /赢家手牌/);
+  assert.match(page, /function PrivatePeekOpportunity/);
+  assert.match(page, /PRIVATE PEEK · 每手一次/);
+  assert.match(page, /只对你可见，不算公开亮牌，也不会改变 AI 对你的画像/);
+  assert.match(page, /peekedPlayerIds: \[\]/);
+  assert.match(page, /game\.status !== "showdown" \|\| !game\.showChoiceMade/);
+  assert.match(page, /pokerPrivatePeekCandidateIds\(game\.players, game\.shownPlayerIds\)/);
+  assert.match(page, /PrivatePeekOpportunity game=\{game\} onPeek=\{choosePrivatePeek\}/);
   assert.match(page, /setInstallHelpOpen\(true\)/);
   assert.match(page, /ChatGPT \/ 微信等内置浏览器/);
   assert.doesNotMatch(page, /if \(!installPrompt\) \{\s*setInfoOpen\(true\)/);
