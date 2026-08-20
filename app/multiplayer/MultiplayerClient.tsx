@@ -192,16 +192,17 @@ const legacyRequest: MultiplayerRequest = async <T,>(
 
 function CardView({ card, mini = false }: { card: Card; mini?: boolean }) {
   const red = card.suit === "♥" || card.suit === "♦";
+  const toneClass = red ? styles.redCard : styles.blackCard;
   if (mini) {
     return (
-      <span className={`${styles.miniCard} ${red ? styles.redCard : ""}`}>
+      <span className={`${styles.miniCard} ${toneClass}`} data-suit-tone={red ? "red" : "black"}>
         {card.rank}
         <span>{card.suit}</span>
       </span>
     );
   }
   return (
-    <span className={`${styles.card} ${red ? styles.redCard : ""}`}>
+    <span className={`${styles.card} ${toneClass}`} data-suit-tone={red ? "red" : "black"}>
       {card.rank}
       <span className={styles.cardSuit}>{card.suit}</span>
     </span>
@@ -224,6 +225,44 @@ const STREET_LABELS: Record<PublicGame["street"], string> = {
   showdown: "摊牌",
   complete: "本手结束",
 };
+
+const ONLINE_BIG_BLIND = 10;
+
+const TABLE_MODE_OPTIONS = [
+  {
+    key: "cash" as const,
+    label: "现金练习",
+    description: "出局后下一手自动补码，适合持续练习",
+  },
+  {
+    key: "tournament" as const,
+    label: "单桌淘汰",
+    description: "筹码归零后观战，直到决出最后赢家",
+  },
+];
+
+const STACK_DEPTH_OPTIONS = [
+  { key: "short", label: "浅筹", bigBlinds: 40, stack: 400 },
+  { key: "standard", label: "标准", bigBlinds: 100, stack: 1_000 },
+  { key: "deep", label: "深筹", bigBlinds: 200, stack: 2_000 },
+] as const;
+
+const VISUAL_SEATS_BY_PLAYER_COUNT: Record<number, number[]> = {
+  1: [0],
+  2: [0, 3],
+  3: [0, 2, 4],
+  4: [0, 1, 3, 5],
+  5: [0, 1, 2, 4, 5],
+  6: [0, 1, 2, 3, 4, 5],
+};
+
+function tableModeLabel(mode: RoomSnapshot["table"]["tableMode"]) {
+  return mode === "cash" ? "现金练习" : "单桌淘汰";
+}
+
+function stackInBigBlinds(stack: number, bigBlind = ONLINE_BIG_BLIND) {
+  return Math.round(stack / Math.max(1, bigBlind));
+}
 
 function PlayerSeat({
   player,
@@ -288,6 +327,12 @@ function TableSurface({
   actionSecondsLeft: number | null;
 }) {
   const selfSeat = players.find((player) => player.accountId === selfAccountId)?.seat ?? 0;
+  const orderedPlayers = useMemo(() => [...players].sort((left, right) => {
+    const leftOffset = (left.seat - selfSeat + 6) % 6;
+    const rightOffset = (right.seat - selfSeat + 6) % 6;
+    return leftOffset - rightOffset;
+  }), [players, selfSeat]);
+  const visualSeats = VISUAL_SEATS_BY_PLAYER_COUNT[Math.min(6, Math.max(1, orderedPlayers.length))] ?? VISUAL_SEATS_BY_PLAYER_COUNT[6];
 
   return (
     <div className={`${styles.pokerTable} ${game ? "" : styles.waitingPokerTable}`}>
@@ -306,13 +351,13 @@ function TableSurface({
         </div>
         <div className={styles.tableSignature}>RANGECRAFT <span>◆</span> FRIENDS CLUB</div>
       </div>
-      {players.map((player) => (
+      {orderedPlayers.map((player, index) => (
         <PlayerSeat
           key={player.accountId}
           player={player}
           selfAccountId={selfAccountId}
           actorAccountId={game?.actorAccountId ?? null}
-          visualSeat={(player.seat - selfSeat + 6) % 6}
+          visualSeat={visualSeats[index] ?? index}
           actionSecondsLeft={actionSecondsLeft}
         />
       ))}
@@ -673,8 +718,10 @@ export default function MultiplayerClient({
       minRaiseTo: legal.minRaiseTo,
       maxRaiseTo: legal.maxRaiseTo,
       allInOnly: legal.raiseAllInOnly,
+      street: game.street,
+      bigBlind: snapshot?.table.bigBlind,
     });
-  }, [game, legal]);
+  }, [game, legal, snapshot?.table.bigBlind]);
   const raiseIsValid = Boolean(
     legal?.minRaiseTo != null
     && legal.maxRaiseTo != null
@@ -685,6 +732,10 @@ export default function MultiplayerClient({
   const raiseAdditional = selfPlayer ? Math.max(0, raiseTo - selfPlayer.streetCommitted) : 0;
   const raiseIsAllIn = Boolean(selfPlayer && raiseAdditional === selfPlayer.stack);
   const raiseVerb = game?.currentBet === 0 ? "下注" : "加注";
+  const canRaise = Boolean(legal?.minRaiseTo != null && legal.maxRaiseTo != null);
+  const passiveAction = legal?.check ? "check" : legal?.callAmount != null ? "call" : null;
+  const passiveActionLabel = legal?.check ? "过牌" : legal?.callAmount != null ? `跟注 ${legal.callAmount}` : "过牌 / 跟注";
+  const actingPlayer = game?.players.find((player) => player.accountId === game.actorAccountId) ?? null;
   const selfPlayerAccountId = selfPlayer?.accountId ?? null;
   const selfPlayerReady = selfPlayer?.ready ?? false;
   const canRejoinNextHand = Boolean(
@@ -697,6 +748,10 @@ export default function MultiplayerClient({
   const actionSecondsLeft = actionMillisecondsLeft == null
     ? null
     : Math.ceil(actionMillisecondsLeft / 1_000);
+  const selectedDepthBb = stackInBigBlinds(startingStack);
+  const tableDepthBb = snapshot
+    ? stackInBigBlinds(snapshot.table.startingStack, snapshot.table.bigBlind)
+    : selectedDepthBb;
 
   useEffect(() => {
     if (phase !== "playing" || game?.actionDeadlineAt == null || !game.actorAccountId) return;
@@ -771,6 +826,27 @@ export default function MultiplayerClient({
     };
   }, [canRejoinNextHand, game?.handId, leaving, phase, selfPlayerAccountId, selfPlayerReady, sendCommand]);
 
+  useEffect(() => {
+    if (!isMyTurn || !game || busy) return;
+    const handleTableShortcut = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (event.repeat || target?.closest("input, select, textarea, button, [contenteditable='true']")) return;
+      const key = event.key.toLowerCase();
+      if (key === "f" && legal?.fold) {
+        event.preventDefault();
+        void sendCommand({ type: "act", handId: game.handId, action: "fold" });
+      } else if (key === "c" && passiveAction) {
+        event.preventDefault();
+        void sendCommand({ type: "act", handId: game.handId, action: passiveAction });
+      } else if (key === "r" && canRaise && raiseIsValid) {
+        event.preventDefault();
+        void sendCommand({ type: "act", handId: game.handId, action: "raise", raiseTo });
+      }
+    };
+    window.addEventListener("keydown", handleTableShortcut);
+    return () => window.removeEventListener("keydown", handleTableShortcut);
+  }, [busy, canRaise, game, isMyTurn, legal?.fold, passiveAction, raiseIsValid, raiseTo, sendCommand]);
+
   const mustChooseShow = Boolean(
     snapshot
       && phase === "showdown"
@@ -790,21 +866,31 @@ export default function MultiplayerClient({
   return (
     <div className={styles.multiplayerPage}>
       <nav className={styles.lobbyNav}>
-        <a className={styles.brand} href={homeHref}>
-          <span className={styles.brandMark}>P</span>
-          <span className={styles.brandCopy}><strong>RANGECRAFT</strong><small>朋友牌桌</small></span>
-        </a>
+        <div className={styles.tableBrandGroup}>
+          {snapshot && (
+            <button className={styles.tableHomeButton} type="button" onClick={temporarilyLeaveTable} aria-label="暂离牌桌并返回房间列表" title="暂离牌桌（保留座位）">←</button>
+          )}
+          <a className={styles.brand} href={homeHref}>
+            <span className={styles.brandMark}>P</span>
+            <span className={styles.brandCopy}><strong>RANGECRAFT</strong><small>朋友牌桌</small></span>
+          </a>
+        </div>
         {snapshot && (
           <div className={styles.sessionMeta}>
             <span className={styles.onlineDot} />
             <span>在线朋友局</span>
             <i />
-            <span>{snapshot.table.tableMode === "cash" ? "现金练习" : "单桌赛"} · {snapshot.table.startingStack} 筹码</span>
+            <span>{tableModeLabel(snapshot.table.tableMode)} · {tableDepthBb}BB · 盲注 {snapshot.table.smallBlind}/{snapshot.table.bigBlind}</span>
             <i />
             <span>{snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s · {snapshot.players.length}/{snapshot.room.maxPlayers} 人 · {game ? `第 ${game.handNo} 手` : "等待开局"}</span>
           </div>
         )}
         <div className={styles.navRight}>
+          {snapshot && (
+            <button className={styles.navCodeButton} type="button" onClick={() => void copyJoinCode(snapshot.room.joinCode)} aria-label={`复制邀请码 ${snapshot.room.joinCode}`}>
+              {snapshot.room.joinCode}<small>复制</small>
+            </button>
+          )}
           <span>牌桌身份</span>
           <strong>{account?.handle ?? displayName}</strong>
           <a className={styles.signOut} href={signOutHref} onClick={onSignOut}>{signOutLabel}</a>
@@ -853,7 +939,7 @@ export default function MultiplayerClient({
                 <p className={styles.eyebrow}>MULTIPLAYER LOBBY</p>
                 <h1>私人牌桌</h1>
               </div>
-              <p>创建房间，把邀请码发给朋友。第一版支持 2–6 人、100BB 无限注德州。</p>
+              <p>创建房间，把邀请码发给朋友。支持 2–6 人、40/100/200BB 与自定义深度的无限注德州。</p>
             </header>
 
             <div className={styles.lobbyGrid}>
@@ -871,16 +957,47 @@ export default function MultiplayerClient({
                       {[2, 3, 4, 5, 6].map((value) => <option key={value} value={value}>{value} 人</option>)}
                     </select>
                   </div>
-                  <div className={styles.field}>
-                    <label htmlFor="table-mode">模式</label>
-                    <select id="table-mode" value={tableMode} onChange={(event) => setTableMode(event.target.value as "cash" | "tournament")}>
-                      <option value="cash">现金练习 · 出局自动补码</option>
-                      <option value="tournament">单桌淘汰赛</option>
-                    </select>
+                  <div className={`${styles.field} ${styles.createWideField}`}>
+                    <span className={styles.fieldLabel}>牌局类型</span>
+                    <div className={styles.modeOptions} role="radiogroup" aria-label="牌局类型">
+                      {TABLE_MODE_OPTIONS.map((option) => (
+                        <button
+                          className={tableMode === option.key ? styles.modeOptionActive : ""}
+                          type="button"
+                          role="radio"
+                          aria-checked={tableMode === option.key}
+                          key={option.key}
+                          onClick={() => setTableMode(option.key)}
+                        >
+                          <strong>{option.label}</strong>
+                          <span>{option.description}</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                  <div className={styles.field}>
-                    <label htmlFor="starting-stack">每人起始筹码</label>
-                    <input id="starting-stack" type="number" min={200} max={10_000} step={10} value={startingStack} onChange={(event) => setStartingStack(Number(event.target.value))} required />
+                  <div className={`${styles.field} ${styles.createWideField}`}>
+                    <span className={styles.fieldLabel}>筹码深度</span>
+                    <div className={styles.depthOptions} role="radiogroup" aria-label="筹码深度">
+                      {STACK_DEPTH_OPTIONS.map((option) => (
+                        <button
+                          className={startingStack === option.stack ? styles.depthOptionActive : ""}
+                          type="button"
+                          role="radio"
+                          aria-checked={startingStack === option.stack}
+                          key={option.key}
+                          onClick={() => setStartingStack(option.stack)}
+                        >
+                          <span>{option.label}</span>
+                          <strong>{option.bigBlinds} BB</strong>
+                          <small>{option.stack} 筹码</small>
+                        </button>
+                      ))}
+                    </div>
+                    <label className={styles.customStackField} htmlFor="starting-stack">
+                      <span>自定义筹码</span>
+                      <input id="starting-stack" type="number" min={200} max={10_000} step={10} value={startingStack} onChange={(event) => setStartingStack(Number(event.target.value))} required />
+                      <small>盲注固定 5/10 · 当前约 {selectedDepthBb} BB</small>
+                    </label>
                   </div>
                   <div className={styles.field}>
                     <label htmlFor="action-seconds">每次行动</label>
@@ -893,8 +1010,8 @@ export default function MultiplayerClient({
                     <input id="time-bank-seconds" type="number" min={0} max={600} step={10} value={timeBankSeconds} onChange={(event) => setTimeBankSeconds(Number(event.target.value))} required />
                   </div>
                   <div className={styles.roomRulePreview}>
-                    <strong>{actionSeconds}/{timeBankSeconds}</strong>
-                    <span>每次 {actionSeconds}s；每人全局额外 {timeBankSeconds}s，每张时间牌增加最多 {actionSeconds}s。</span>
+                    <strong>{tableMode === "cash" ? "现金练习" : "单桌淘汰"} · {selectedDepthBb}BB · {actionSeconds}/{timeBankSeconds}</strong>
+                    <span>盲注 5/10；每次 {actionSeconds}s；每人整局额外 {timeBankSeconds}s，主动使用时间牌继续思考。</span>
                   </div>
                   <button className={`${styles.primaryButton} ${styles.createRoomButton}`} type="submit" disabled={busy}>创建牌桌</button>
                 </form>
@@ -943,21 +1060,20 @@ export default function MultiplayerClient({
 
         {account && snapshot && (
           <section className={styles.tableShell}>
-            <header className={styles.tableTopbar}>
-              <div>
-                <button className={styles.textButton} type="button" onClick={temporarilyLeaveTable}>← 暂离牌桌（保留座位）</button>
-                <h1>{snapshot.room.name}</h1>
-              </div>
-              <div className={styles.roomMeta}>
-                <button className={styles.codePill} type="button" onClick={() => void copyJoinCode(snapshot.room.joinCode)} aria-label={`复制邀请码 ${snapshot.room.joinCode}`}>复制邀请码 · {snapshot.room.joinCode}</button>
-                <span className={styles.statusPill}>{snapshot.table.tableMode === "cash" ? "现金练习" : "单桌赛"} · {snapshot.table.startingStack}</span>
-                <span className={styles.statusPill}>读秒 {snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s</span>
-                <span className={styles.statusPill}>{snapshot.players.length}/{snapshot.room.maxPlayers} 人</span>
-                <button className={styles.dangerButton} type="button" onClick={() => void leaveRoom()} disabled={busy || leaving} title="永久离开房间；牌局中未全下的手牌将自动弃牌">{leaving ? "正在离开…" : "永久离开"}</button>
-              </div>
-            </header>
-
             <div className={styles.tableStage}>
+              <header className={styles.tableToolbar}>
+                <div className={styles.tableToolbarCopy}>
+                  <span>FRIENDS TABLE · {game ? `HAND ${game.handNo}` : "LOBBY"}</span>
+                  <strong>{snapshot.room.name}</strong>
+                </div>
+                <div className={styles.roomMeta}>
+                  <span className={styles.statusPill}>{tableModeLabel(snapshot.table.tableMode)} · {tableDepthBb} BB</span>
+                  <span className={styles.statusPill}>盲注 {snapshot.table.smallBlind}/{snapshot.table.bigBlind}</span>
+                  <span className={styles.statusPill}>读秒 {snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s</span>
+                  <span className={styles.statusPill}>{snapshot.players.length}/{snapshot.room.maxPlayers} 人</span>
+                  <button className={styles.dangerButton} type="button" onClick={() => void leaveRoom()} disabled={busy || leaving} title="永久离开房间；牌局中未全下的手牌将自动弃牌">{leaving ? "正在离开…" : "永久离开"}</button>
+                </div>
+              </header>
               <div className={`${styles.tableAmbient} ${styles.tableAmbientOne}`} />
               <div className={`${styles.tableAmbient} ${styles.tableAmbientTwo}`} />
               <TableSurface
@@ -972,7 +1088,7 @@ export default function MultiplayerClient({
                 <div>
                   <p className={styles.panelKicker}>WAITING ROOM</p>
                   <h2 className={styles.panelTitle}>人齐后确认准备</h2>
-                  <p className={styles.tableRuleLine}>{snapshot.table.tableMode === "cash" ? "现金练习" : "单桌淘汰赛"} · 起始 {snapshot.table.startingStack} · 行动/时间库 {snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s</p>
+                  <p className={styles.tableRuleLine}>{tableModeLabel(snapshot.table.tableMode)} · {tableDepthBb}BB · 盲注 {snapshot.table.smallBlind}/{snapshot.table.bigBlind} · 行动/时间库 {snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s</p>
                 </div>
                 <div className={styles.lobbyPlayers}>
                   {snapshot.players.map((player) => (
@@ -999,139 +1115,162 @@ export default function MultiplayerClient({
             )}
 
             {game && (
-              <>
-                <div className={styles.tableControls}>
-                  {game.result && <div className={styles.resultBanner}>{game.result.summary}</div>}
-                  <WinningHands game={game} />
-                  <div className={styles.controlSummary}>
-                    <span className={styles.turnLabel}>{isMyTurn ? "轮到你行动" : phase === "showdown" ? "正在摊牌" : "牌桌进行中"}</span>
-                    <strong>{STREET_LABELS[game.street]}</strong>
-                    {phase === "playing" && game.actorAccountId && (
-                      <div className={`${styles.actionClockSummary} ${(actionSecondsLeft ?? 99) <= 3 ? styles.actionClockUrgent : ""}`}>
-                        <b>{actionSecondsLeft ?? "—"}s</b>
-                        <small>基础 {snapshot.table.actionTimeMs / 1_000}s</small>
-                      </div>
-                    )}
-                    <span>
-                      {isMyTurn
-                        ? "轮到你决定"
-                        : mustChooseShow
-                          ? "请选择亮出或盖掉赢家手牌"
-                          : phase === "showdown"
-                            ? "等待赢家决定是否亮牌"
-                            : phase === "between_hands"
-                              ? "倒计时结束后自动开始下一手"
-                              : game.actorAccountId
-                                ? "等待对手行动"
-                                : "本手已结束"}
-                    </span>
+              <div className={`${styles.tableControls} ${canRaise ? styles.tableControlsWithRaise : ""}`}>
+                {game.result && <div className={styles.resultBanner}>{game.result.summary}</div>}
+                <WinningHands game={game} />
+                <div className={styles.controlSummary}>
+                  <span className={styles.turnLabel}>{isMyTurn ? "轮到你行动" : phase === "showdown" ? "正在摊牌" : "牌桌进行中"}</span>
+                  <strong>{STREET_LABELS[game.street]}</strong>
+                  {phase === "playing" && game.actorAccountId && (
+                    <div className={`${styles.actionClockSummary} ${(actionSecondsLeft ?? 99) <= 3 ? styles.actionClockUrgent : ""}`}>
+                      <b>{actionSecondsLeft ?? "—"}s</b>
+                      <small>{actingPlayer?.handle ?? "当前玩家"} · 基础 {snapshot.table.actionTimeMs / 1_000}s</small>
+                    </div>
+                  )}
+                  <span>
+                    {isMyTurn
+                      ? "选择路线与准确下注尺寸"
+                      : mustChooseShow
+                        ? "请选择亮出或盖掉赢家手牌"
+                        : phase === "showdown"
+                          ? "等待赢家决定是否亮牌"
+                          : phase === "between_hands"
+                            ? "倒计时结束后自动开始下一手"
+                            : game.actorAccountId
+                              ? `等待 ${actingPlayer?.handle ?? "对手"} 行动`
+                              : "本手已结束"}
+                  </span>
+                  {isMyTurn && selfPlayer && selfPlayer.timeBankMs > 0 && (
+                    <button
+                      className={styles.timeBankButton}
+                      type="button"
+                      disabled={busy || actionMillisecondsLeft === 0}
+                      onClick={() => void sendCommand({ type: "use-time-bank", handId: game.handId })}
+                    >
+                      <strong>使用时间牌 +{Math.ceil(Math.min(snapshot.table.timeBankUnitMs, selfPlayer.timeBankMs) / 1_000)}s</strong>
+                      <small>剩余 {Math.ceil(selfPlayer.timeBankMs / 1_000)}s</small>
+                    </button>
+                  )}
+                </div>
+
+                <div className={styles.primaryActions} aria-label="牌桌行动">
+                  <button
+                    className={`${styles.actionButton} ${styles.foldAction}`}
+                    type="button"
+                    disabled={busy || !isMyTurn || !legal?.fold}
+                    onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "fold" })}
+                  >
+                    <span>弃牌</span><kbd>F</kbd>
+                  </button>
+                  <button
+                    className={styles.actionButton}
+                    type="button"
+                    disabled={busy || !isMyTurn || passiveAction === null}
+                    onClick={() => passiveAction && void sendCommand({ type: "act", handId: game.handId, action: passiveAction })}
+                  >
+                    <span>{passiveActionLabel}</span><kbd>C</kbd>
+                  </button>
+                  <button
+                    className={`${styles.actionButton} ${styles.raiseAction}`}
+                    type="button"
+                    disabled={busy || !isMyTurn || !canRaise || !raiseIsValid}
+                    onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "raise", raiseTo })}
+                  >
+                    <span>{canRaise ? (raiseIsAllIn ? `全下 ${raiseTo}` : `${raiseVerb}到 ${raiseTo}`) : "下注 / 加注"}</span><kbd>R</kbd>
+                  </button>
+                </div>
+
+                {isMyTurn && legal?.minRaiseTo != null && legal.maxRaiseTo != null ? (
+                  <div className={styles.raiseControl}>
+                    <div className={styles.raiseHeading}>
+                      <span>{legal.raiseAllInOnly ? "仅可不足额全下" : `${raiseVerb}范围 ${legal.minRaiseTo}–${legal.maxRaiseTo}`}</span>
+                      <strong>{raiseIsAllIn ? `全下到 ${raiseTo}` : `${raiseVerb}到 ${raiseTo}`}</strong>
+                    </div>
+                    <div className={styles.raiseInputs}>
+                      <input
+                        className={styles.raiseInput}
+                        type="range"
+                        min={legal.minRaiseTo}
+                        max={legal.maxRaiseTo}
+                        step={1}
+                        value={clampMultiplayerRaiseTarget(raiseTo, legal.minRaiseTo, legal.maxRaiseTo)}
+                        onChange={(event) => setRaiseDraft({ turnKey: raiseTurnKey!, value: Number(event.target.value) })}
+                        aria-label={`${raiseVerb}金额滑杆`}
+                      />
+                      <label className={styles.raiseNumberField}>
+                        <span>到</span>
+                        <input
+                          type="number"
+                          min={legal.minRaiseTo}
+                          max={legal.maxRaiseTo}
+                          step={1}
+                          inputMode="numeric"
+                          value={raiseTo}
+                          onChange={(event) => {
+                            const value = event.target.valueAsNumber;
+                            if (Number.isFinite(value)) setRaiseDraft({ turnKey: raiseTurnKey!, value });
+                          }}
+                          aria-label={`${raiseVerb}到的筹码总额`}
+                        />
+                      </label>
+                    </div>
+                    <div className={styles.raisePresets} aria-label="快捷下注尺寸">
+                      {raisePresets.map((preset) => (
+                        <button
+                          className={preset.target === raiseTo ? styles.raisePresetActive : ""}
+                          type="button"
+                          key={`${preset.key}-${preset.target}`}
+                          onClick={() => setRaiseDraft({ turnKey: raiseTurnKey!, value: preset.target })}
+                        >
+                          {preset.label}<small>{preset.target}</small>
+                        </button>
+                      ))}
+                    </div>
+                    <small className={styles.raiseExplanation}>
+                      本次投入 {raiseAdditional}{selfPlayer ? ` · 操作后剩余 ${Math.max(0, selfPlayer.stack - raiseAdditional)}` : ""}
+                    </small>
                   </div>
-                  <div className={styles.actionRow}>
-                    {isMyTurn && selfPlayer && selfPlayer.timeBankMs > 0 && (
-                      <button
-                        className={styles.timeBankButton}
-                        type="button"
-                        disabled={busy || actionMillisecondsLeft === 0}
-                        onClick={() => void sendCommand({ type: "use-time-bank", handId: game.handId })}
-                      >
-                        <strong>时间牌 +{Math.ceil(Math.min(snapshot.table.timeBankUnitMs, selfPlayer.timeBankMs) / 1_000)}s</strong>
-                        <small>剩余 {Math.ceil(selfPlayer.timeBankMs / 1_000)}s</small>
+                ) : (
+                  <div className={styles.actionIdle}>
+                    <span>{phase === "playing" ? "桌上行动进行中" : "本手结算中"}</span>
+                    <strong>{isMyTurn ? "当前没有可用的加注路线" : `等待 ${actingPlayer?.handle ?? "牌桌"}`}</strong>
+                  </div>
+                )}
+
+                {mustChooseShow && (
+                  <div className={styles.phaseActions}>
+                    <span>你可以通过亮牌或盖牌影响朋友对你打法的判断。</span>
+                    <button className={styles.secondaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "show", handId: game.handId, show: false })}>盖牌</button>
+                    <button className={styles.primaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "show", handId: game.handId, show: true })}>亮出赢家手牌</button>
+                  </div>
+                )}
+                {phase === "between_hands" && (
+                  <div className={styles.phaseActions}>
+                    <div className={styles.autoNextHand} role="status" aria-live="polite">
+                      <span className={styles.autoNextPulse} />
+                      <span>
+                        <strong>
+                          {selfPlayer?.stack === 0 && snapshot.table.tableMode === "tournament"
+                            ? "等待其余玩家进入下一手"
+                            : selfPlayer?.stack === 0
+                              ? `将自动补至 ${snapshot.table.startingStack} 筹码`
+                              : selfPlayer?.ready
+                                ? "已准备，等待其他玩家"
+                                : nextHandCountdown === 0
+                                  ? "正在进入下一手…"
+                                  : `${nextHandCountdown ?? "—"} 秒后进入下一手`}
+                        </strong>
+                        <small>全桌倒计时完成后自动发牌</small>
+                      </span>
+                    </div>
+                    {!selfPlayer?.ready && canRejoinNextHand && (
+                      <button className={styles.primaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "ready", ready: true })}>
+                        立即准备
                       </button>
                     )}
-                    {isMyTurn && legal?.fold && <button className={`${styles.actionButton} ${styles.foldAction}`} type="button" disabled={busy} onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "fold" })}>弃牌</button>}
-                    {isMyTurn && legal?.check && <button className={styles.actionButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "check" })}>过牌</button>}
-                    {isMyTurn && legal?.callAmount != null && <button className={styles.actionButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "call" })}>跟注 {legal.callAmount}</button>}
-                    {isMyTurn && legal?.minRaiseTo != null && legal.maxRaiseTo != null && (
-                      <div className={styles.raiseGroup}>
-                        <div className={styles.raiseEditor}>
-                          <div className={styles.raiseHeading}>
-                            <span>{legal.raiseAllInOnly ? "仅可不足额全下" : `${raiseVerb}范围 ${legal.minRaiseTo}–${legal.maxRaiseTo}`}</span>
-                            <strong>{raiseIsAllIn ? `全下到 ${raiseTo}` : `${raiseVerb}到 ${raiseTo}`}</strong>
-                          </div>
-                          <div className={styles.raiseInputs}>
-                            <input
-                              className={styles.raiseInput}
-                              type="range"
-                              min={legal.minRaiseTo}
-                              max={legal.maxRaiseTo}
-                              step={1}
-                              value={clampMultiplayerRaiseTarget(raiseTo, legal.minRaiseTo, legal.maxRaiseTo)}
-                              onChange={(event) => setRaiseDraft({ turnKey: raiseTurnKey!, value: Number(event.target.value) })}
-                              aria-label={`${raiseVerb}金额滑杆`}
-                            />
-                            <label className={styles.raiseNumberField}>
-                              <span>到</span>
-                              <input
-                                type="number"
-                                min={legal.minRaiseTo}
-                                max={legal.maxRaiseTo}
-                                step={1}
-                                inputMode="numeric"
-                                value={raiseTo}
-                                onChange={(event) => {
-                                  const value = event.target.valueAsNumber;
-                                  if (Number.isFinite(value)) setRaiseDraft({ turnKey: raiseTurnKey!, value });
-                                }}
-                                aria-label={`${raiseVerb}到的筹码总额`}
-                              />
-                            </label>
-                          </div>
-                          <div className={styles.raisePresets} aria-label="快捷下注尺寸">
-                            {raisePresets.map((preset) => (
-                              <button
-                                className={preset.target === raiseTo ? styles.raisePresetActive : ""}
-                                type="button"
-                                key={`${preset.key}-${preset.target}`}
-                                onClick={() => setRaiseDraft({ turnKey: raiseTurnKey!, value: preset.target })}
-                              >
-                                {preset.label}<small>{preset.target}</small>
-                              </button>
-                            ))}
-                          </div>
-                          <small className={styles.raiseExplanation}>
-                            本次投入 {raiseAdditional}{selfPlayer ? ` · 操作后剩余 ${Math.max(0, selfPlayer.stack - raiseAdditional)}` : ""}
-                          </small>
-                        </div>
-                        <button className={`${styles.actionButton} ${styles.raiseAction}`} type="button" disabled={busy || !raiseIsValid} onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "raise", raiseTo })}>
-                          {raiseIsAllIn ? `全下 ${raiseTo}` : `${raiseVerb}到 ${raiseTo}`}
-                        </button>
-                      </div>
-                    )}
-                    {mustChooseShow && (
-                      <>
-                        <button className={styles.secondaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "show", handId: game.handId, show: false })}>盖牌</button>
-                        <button className={styles.primaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "show", handId: game.handId, show: true })}>亮出赢家手牌</button>
-                      </>
-                    )}
-                    {phase === "between_hands" && (
-                      <>
-                        <div className={styles.autoNextHand} role="status" aria-live="polite">
-                          <span className={styles.autoNextPulse} />
-                          <span>
-                            <strong>
-                              {selfPlayer?.stack === 0 && snapshot.table.tableMode === "tournament"
-                                ? "等待其余玩家进入下一手"
-                                : selfPlayer?.stack === 0
-                                  ? `将自动补至 ${snapshot.table.startingStack} 筹码`
-                                : selfPlayer?.ready
-                                  ? "已准备，等待其他玩家"
-                                  : nextHandCountdown === 0
-                                    ? "正在进入下一手…"
-                                    : `${nextHandCountdown ?? "—"} 秒后进入下一手`}
-                            </strong>
-                            <small>全桌倒计时完成后自动发牌</small>
-                          </span>
-                        </div>
-                        {!selfPlayer?.ready && canRejoinNextHand && (
-                          <button className={styles.primaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "ready", ready: true })}>
-                            立即准备
-                          </button>
-                        )}
-                      </>
-                    )}
                   </div>
-                </div>
-              </>
+                )}
+              </div>
             )}
             </div>
           </section>

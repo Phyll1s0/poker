@@ -1,5 +1,15 @@
 export type MultiplayerRaisePreset = {
-  key: "minimum" | "half-pot" | "two-thirds-pot" | "pot" | "all-in";
+  key:
+    | "minimum"
+    | "two-and-half-bb"
+    | "three-bb"
+    | "four-bb"
+    | "five-bb"
+    | "one-third-pot"
+    | "half-pot"
+    | "three-quarters-pot"
+    | "pot"
+    | "all-in";
   label: string;
   target: number;
 };
@@ -11,6 +21,8 @@ type MultiplayerRaisePresetInput = {
   minRaiseTo: number;
   maxRaiseTo: number;
   allInOnly?: boolean;
+  street?: "preflop" | "flop" | "turn" | "river" | "showdown" | "complete";
+  bigBlind?: number;
 };
 
 export function clampMultiplayerRaiseTarget(value: number, minimum: number, maximum: number): number {
@@ -30,16 +42,43 @@ export function multiplayerRaisePresets(input: MultiplayerRaisePresetInput): Mul
     return [{ key: "all-in", label: "全下", target: maximum }];
   }
 
-  const callAmount = Math.max(0, Math.round(input.callAmount ?? 0));
-  const potAfterCall = Math.max(0, Math.round(input.pot)) + callAmount;
   const matchedBet = Math.max(0, Math.round(input.currentBet));
-  const candidates: MultiplayerRaisePreset[] = [
-    { key: "minimum", label: "最小", target: minimum },
-    { key: "half-pot", label: "½ 池", target: matchedBet + Math.round(potAfterCall * 0.5) },
-    { key: "two-thirds-pot", label: "⅔ 池", target: matchedBet + Math.round(potAfterCall * (2 / 3)) },
-    { key: "pot", label: "1 池", target: matchedBet + potAfterCall },
-    { key: "all-in", label: "全下", target: maximum },
-  ];
+  let candidates: MultiplayerRaisePreset[];
+  if (input.street === "preflop" && Number.isFinite(input.bigBlind) && Number(input.bigBlind) > 0) {
+    const bigBlind = Math.max(1, Math.round(Number(input.bigBlind)));
+    const unopened = matchedBet <= bigBlind;
+    const sizingBase = unopened ? bigBlind : matchedBet;
+    const preflopSizes = [
+      { key: "two-and-half-bb" as const, multiple: 2.5 },
+      { key: "three-bb" as const, multiple: 3 },
+      { key: "four-bb" as const, multiple: 4 },
+      { key: "five-bb" as const, multiple: 5 },
+    ];
+    candidates = [
+      ...preflopSizes.map(({ key, multiple }) => ({
+        key,
+        label: unopened ? `${multiple}BB` : `${multiple}×`,
+        target: Math.round(sizingBase * multiple),
+      })),
+      { key: "all-in", label: "全下", target: maximum },
+    ];
+  } else {
+    const callAmount = Math.max(0, Math.round(input.callAmount ?? 0));
+    const potAfterCall = Math.max(0, Math.round(input.pot)) + callAmount;
+    const sizingUnit = Number.isFinite(input.bigBlind) && Number(input.bigBlind) > 0
+      ? Math.max(1, Number(input.bigBlind) / 2)
+      : 1;
+    const postflopTarget = (fraction: number) => Math.round(
+      Math.round((matchedBet + potAfterCall * fraction) / sizingUnit) * sizingUnit,
+    );
+    candidates = [
+      { key: "one-third-pot", label: "33%", target: postflopTarget(0.33) },
+      { key: "half-pot", label: "50%", target: postflopTarget(0.5) },
+      { key: "three-quarters-pot", label: "75%", target: postflopTarget(0.75) },
+      { key: "pot", label: "底池", target: postflopTarget(1) },
+      { key: "all-in", label: "全下", target: maximum },
+    ];
+  }
 
   const byTarget = new Map<number, MultiplayerRaisePreset>();
   for (const candidate of candidates) {
@@ -47,5 +86,10 @@ export function multiplayerRaisePresets(input: MultiplayerRaisePresetInput): Mul
     const previous = byTarget.get(candidate.target);
     if (!previous || candidate.key === "all-in") byTarget.set(candidate.target, candidate);
   }
-  return [...byTarget.values()].sort((left, right) => left.target - right.target);
+  const presets = [...byTarget.values()].sort((left, right) => left.target - right.target);
+  if (presets.some((preset) => preset.key !== "all-in")) return presets;
+  return [
+    { key: "minimum" as const, label: "最小", target: minimum },
+    ...presets,
+  ].filter((preset, index, list) => list.findIndex((item) => item.target === preset.target) === index);
 }

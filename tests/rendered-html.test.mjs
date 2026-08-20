@@ -42,10 +42,11 @@ test("server-renders the RangeCraft landing page before mounting a poker table",
 });
 
 test("keeps the multiplayer and strategy boundaries with product metadata", async () => {
-  const [page, globalsCss, multiplayerClient, staticMultiplayer, edgeFunction, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, packageJson] = await Promise.all([
+  const [page, globalsCss, multiplayerClient, multiplayerCss, staticMultiplayer, edgeFunction, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/multiplayer/MultiplayerClient.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/multiplayer/multiplayer.module.css", import.meta.url), "utf8"),
     readFile(new URL("../github-pages/MultiplayerApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../supabase/functions/poker-api/index.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
@@ -85,6 +86,22 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /复制邀请码/);
   assert.match(multiplayerClient, /FRIENDS CLUB/);
   assert.match(multiplayerClient, /visualSeat/);
+  assert.match(multiplayerClient, /data-suit-tone=\{red \? "red" : "black"\}/);
+  assert.match(multiplayerClient, /const VISUAL_SEATS_BY_PLAYER_COUNT/);
+  assert.match(multiplayerClient, /2: \[0, 3\]/);
+  assert.match(multiplayerClient, /3: \[0, 2, 4\]/);
+  assert.match(multiplayerClient, /浅筹/);
+  assert.match(multiplayerClient, /bigBlinds: 40/);
+  assert.match(multiplayerClient, /标准/);
+  assert.match(multiplayerClient, /bigBlinds: 100/);
+  assert.match(multiplayerClient, /深筹/);
+  assert.match(multiplayerClient, /bigBlinds: 200/);
+  assert.match(multiplayerClient, /role="radiogroup" aria-label="筹码深度"/);
+  assert.match(multiplayerClient, /className=\{styles\.primaryActions\}/);
+  assert.match(multiplayerClient, /className=\{styles\.raiseControl\}/);
+  assert.match(multiplayerClient, /addEventListener\("keydown", handleTableShortcut\)/);
+  assert.match(multiplayerClient, /street: game\.street/);
+  assert.match(multiplayerClient, /bigBlind: snapshot\?\.table\.bigBlind/);
   assert.match(multiplayerClient, /3_000 \+ Math\.floor\(Math\.random\(\) \* 2_001\)/);
   assert.match(multiplayerClient, /秒后进入下一手/);
   assert.match(multiplayerClient, /全桌倒计时完成后自动发牌/);
@@ -111,6 +128,10 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.doesNotMatch(multiplayerClient, /const canLeave =/);
   assert.doesNotMatch(multiplayerClient, /!canLeave/);
   assert.doesNotMatch(multiplayerClient, /这是其他玩家唯一能看到的信息/);
+  assert.match(multiplayerCss, /\.multiplayerPage \.card\.redCard,[\s\S]*?\.multiplayerPage \.miniCard\.redCard\s*\{\s*color:/);
+  assert.match(multiplayerCss, /\.multiplayerPage \.card\.blackCard,[\s\S]*?\.multiplayerPage \.miniCard\.blackCard\s*\{\s*color:/);
+  assert.match(multiplayerCss, /width: min\(800px, 78%, calc\(82dvh - 59px\)\)/);
+  assert.match(multiplayerCss, /grid-template-columns: 150px minmax\(330px, 1fr\) 270px/);
   assert.match(staticMultiplayer, /supabase\.co\/functions\/v1\/poker-api/);
   assert.match(staticMultiplayer, /rangecraft\.multiplayer\.guest-token/);
   assert.match(staticMultiplayer, /signOutLabel="返回首页"/);
