@@ -460,6 +460,79 @@ test("D1 room state executes commands and never projects another player's hole c
   }
 });
 
+test("D1 winner snapshots expose authoritative best five only for publicly shown winners", async () => {
+  const { sqlite, store } = await testStore();
+  try {
+    const owner = (await store.registerAccount("five-owner", "五张房主")).account;
+    const guest = (await store.registerAccount("five-guest", "五张来宾")).account;
+    const room = await store.createRoom(owner.id, "最佳五张测试桌", 2);
+    await store.joinRoom(guest.id, room.joinCode);
+    const service = new MultiplayerGameService(new SqliteD1Database(sqlite));
+
+    let view = await service.getSnapshot(room.id, owner.id);
+    view = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
+      type: "ready",
+      ready: true,
+      requestId: "five-ready-owner",
+      expectedRevision: view.room.revision,
+    }));
+    view = await service.applyCommand(room.id, guest.id, parseMultiplayerCommand({
+      type: "ready",
+      ready: true,
+      requestId: "five-ready-guest",
+      expectedRevision: view.room.revision,
+    }));
+    view = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
+      type: "start",
+      requestId: "five-start-owner",
+      expectedRevision: view.room.revision,
+    }));
+    view = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
+      type: "act",
+      handId: view.game.handId,
+      action: "raise",
+      raiseTo: 1000,
+      requestId: "five-owner-all-in",
+      expectedRevision: view.room.revision,
+    }));
+    view = await service.applyCommand(room.id, guest.id, parseMultiplayerCommand({
+      type: "act",
+      handId: view.game.handId,
+      action: "call",
+      requestId: "five-guest-calls",
+      expectedRevision: view.room.revision,
+    }));
+
+    assert.equal(view.table.phase, "between_hands");
+    assert.ok(view.game.result.winningHands.length >= 1);
+    assert.equal(view.game.result.winningHands.length, view.game.result.winners.length);
+    assert.ok(view.game.result.winningHands.every((entry) => entry.cards.length === 5));
+
+    const stored = sqlite.prepare("SELECT state_json FROM rooms WHERE id = ?").get(room.id);
+    const privateState = JSON.parse(stored.state_json);
+    const winnerSeats = new Set(privateState.hand.result.winnerSeats);
+    privateState.hand.players.forEach((player) => {
+      if (winnerSeats.has(player.seat)) player.shown = false;
+    });
+    sqlite.prepare("UPDATE rooms SET state_json = ? WHERE id = ?").run(JSON.stringify(privateState), room.id);
+
+    const firstWinnerSeat = privateState.hand.result.winnerSeats[0];
+    const winnerAccountId = firstWinnerSeat === 0 ? owner.id : guest.id;
+    const privateWinnerView = await service.getSnapshot(room.id, winnerAccountId);
+    assert.ok(
+      privateWinnerView.game.players.find((player) => player.seat === firstWinnerSeat)?.holeCards,
+      "a viewer still sees their own hole cards",
+    );
+    assert.deepEqual(
+      privateWinnerView.game.result.winningHands,
+      [],
+      "own-card visibility must not bypass a mucked winner's public projection",
+    );
+  } finally {
+    sqlite.close();
+  }
+});
+
 test("D1 persists one shared finished report and keeps the same room restartable", async () => {
   const { sqlite, store } = await testStore();
   try {

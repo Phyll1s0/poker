@@ -826,23 +826,40 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
 .winning-hand-list { min-width: 0; display: flex; gap: 8px; overflow-x: auto; scrollbar-width: thin; }
 .winning-hand {
   flex: 0 0 auto;
-  min-width: 176px;
-  min-height: 57px;
+  min-width: 222px;
+  min-height: 104px;
   padding: 7px 9px;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 11px;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 7px;
   border: 1px solid rgba(216,183,116,.14);
   border-radius: 6px;
   background: rgba(216,183,116,.045);
 }
-.winning-hand-player { min-width: 58px; display: flex; flex-direction: column; gap: 3px; }
+.winning-hand-player { min-width: 0; display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 3px 8px; }
 .winning-hand-player strong { color: #e8e2d5; font: 600 10px/1 Georgia, serif; }
-.winning-hand-player span { color: var(--gold); font-size: 8px; }
-.winning-hand-player em { color: #6f7570; font-size: 7px; font-style: normal; }
-.winning-hand-cards { display: flex; gap: 4px; }
+.winning-hand-player span { min-width: 0; color: var(--gold); font-size: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.winning-hand-player em { grid-column: 1 / -1; color: #6f7570; font-size: 7px; font-style: normal; }
+.winning-hand-card-group {
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid rgba(216,183,116,.18);
+  border-radius: 6px;
+  background: rgba(4,11,8,.32);
+}
+.winning-hand-card-group > span { padding-inline: 2px; color: #8e927e; font-size: 6px; letter-spacing: .1em; }
+.winning-hand-cards { display: flex; align-items: flex-start; gap: 3px; }
+.winning-card-source { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.winning-card-source small { color: #70766f; font-size: 6px; line-height: 1; }
+.winning-card-source[data-source="hole"] small { color: var(--gold); }
 .winning-hand-cards .card { width: 34px; border-radius: 4px; box-shadow: 0 4px 9px rgba(0,0,0,.3), inset 0 0 0 1px rgba(65,55,45,.12); }
+.winning-card-source[data-source="hole"] .card { box-shadow: 0 0 0 1px rgba(216,183,116,.56), 0 4px 9px rgba(0,0,0,.3), inset 0 0 0 1px rgba(65,55,45,.12); }
 .winning-hand-cards .card-rank { font-size: 15px; }
 .winning-hand-cards .card-suit { margin-top: 0; font-size: 18px; }
 .winning-hand-hidden { display: flex; align-items: center; gap: 4px; }
@@ -1289,7 +1306,7 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
   .private-peek-targets { max-width: none; justify-content: center; }
   .private-peek-result { justify-content: center; }
   .winning-hands { grid-column: 1; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; }
-  .winning-hand { min-width: 166px; }
+  .winning-hand { min-width: 212px; }
   .turn-summary { display: none; }
   .raise-control { grid-column: auto; display: block; }
   .range-row { margin-bottom: 6px; }

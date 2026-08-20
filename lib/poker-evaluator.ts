@@ -13,6 +13,11 @@ export type PokerHandEvaluation = {
   name: string;
 };
 
+export type PokerBestHand<TCard extends PokerCard = PokerCard> = PokerHandEvaluation & {
+  /** The exact five source cards used by this evaluation, kept in input order. */
+  cards: readonly [TCard, TCard, TCard, TCard, TCard];
+};
+
 export type PreflopHandFeatures = {
   highRank: number;
   lowRank: number;
@@ -177,6 +182,30 @@ export function bestHand(cards: readonly PokerCard[]): PokerHandEvaluation {
   if (cards.length < 5 || cards.length > 7) throw new RangeError("bestHand 必须接收 5 到 7 张牌");
   assertUniqueCards(cards);
   return bestHandUnchecked(cards);
+}
+
+/**
+ * Returns both the best evaluation and the exact five cards that make it.
+ * Equal-scoring choices keep the first combination, so callers can place
+ * community cards first when they want a playing-the-board result to stay visible.
+ */
+export function bestHandWithCards<TCard extends PokerCard>(cards: readonly TCard[]): PokerBestHand<TCard> {
+  if (cards.length < 5 || cards.length > 7) throw new RangeError("bestHandWithCards 必须接收 5 到 7 张牌");
+  assertUniqueCards(cards);
+
+  let best: PokerBestHand<TCard> | undefined;
+  for (const indices of combinations(cards.length)) {
+    const selected: [TCard, TCard, TCard, TCard, TCard] = [
+      cards[indices[0]],
+      cards[indices[1]],
+      cards[indices[2]],
+      cards[indices[3]],
+      cards[indices[4]],
+    ];
+    const candidate = scoreFiveUnchecked(selected);
+    if (!best || candidate.score > best.score) best = { ...candidate, cards: selected };
+  }
+  return best!;
 }
 
 /** Convenience alias that scores either a five-card hand or a 5–7 card holding. */

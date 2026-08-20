@@ -864,13 +864,14 @@
 
 .winningHand {
   flex: 0 0 auto;
-  min-width: 196px;
-  min-height: 70px;
+  min-width: 244px;
+  min-height: 88px;
   padding: 8px 10px;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 13px;
+  align-items: stretch;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
   border: 1px solid rgba(255, 255, 255, 0.075);
   border-radius: 7px;
   background: rgba(8, 12, 10, 0.34);
@@ -887,11 +888,27 @@
   font-size: 8px;
 }
 
+.winningHandPlayer {
+  align-items: baseline;
+  flex-direction: row;
+  justify-content: space-between;
+}
+
 .winningHandCards,
 .winningHandHidden {
   display: flex;
   align-items: center;
   gap: 5px;
+}
+
+.winningBestFive {
+  width: fit-content;
+  max-width: 100%;
+  padding: 5px;
+  gap: 3px;
+  border: 1px solid rgba(216, 183, 116, 0.2);
+  border-radius: 7px;
+  background: rgba(216, 183, 116, 0.045);
 }
 
 .winningHandCards .card {
@@ -3644,5 +3661,35 @@
   .multiplayerPage .boardDealtCard {
     opacity: 1;
     animation: none;
+  }
+}
+
+/* The final shared card rules are more specific than the original winner
+   panel, so keep this override at the end to preserve a compact five-card row. */
+.multiplayerPage .winningHandCards .card {
+  width: 37px;
+  flex: 0 0 37px;
+  padding: 4px;
+  font-size: 15px;
+}
+
+.multiplayerPage .winningHandCards .cardSuit {
+  margin-top: 2px;
+  font-size: 18px;
+}
+
+@media (max-width: 600px) {
+  .winningHand {
+    min-width: 218px;
+  }
+
+  .multiplayerPage .winningHandCards .card {
+    width: 34px;
+    flex-basis: 34px;
+    font-size: 14px;
+  }
+
+  .multiplayerPage .winningHandCards .cardSuit {
+    font-size: 17px;
   }
 }

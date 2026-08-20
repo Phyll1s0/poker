@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   analyzeBoardTexture,
   bestHand,
+  bestHandWithCards,
   blockerValue,
   drawPotential,
   estimateEquity,
@@ -53,6 +54,38 @@ test("handles the wheel and selects the best five cards from seven", () => {
   const seven = [c(14, 0), c(14, 1), c(14, 2), c(13, 0), c(13, 1), c(2, 2), c(3, 3)];
   assert.deepEqual(bestHand(seven), score(seven));
   assert.equal(bestHand(seven).name, "葫芦");
+});
+
+test("returns the exact five source cards used by the best hand", () => {
+  const seven = [c(14, "♠"), c(14, "♥"), c(14, "♦"), c(13, "♠"), c(13, "♥"), c(3, "♣"), c(2, "♦")];
+  const result = bestHandWithCards(seven);
+
+  assert.equal(result.name, "葫芦");
+  assert.equal(result.cards.length, 5);
+  assert.deepEqual(result.cards, seven.slice(0, 5));
+  assert.equal(result.score, bestHand(seven).score);
+});
+
+test("keeps community cards when an equal best hand plays the board", () => {
+  const board = [c(14, "♠"), c(13, "♥"), c(12, "♦"), c(11, "♣"), c(10, "♠")];
+  const hole = [c(10, "♥"), c(2, "♦")];
+  const result = bestHandWithCards([...board, ...hole]);
+
+  assert.equal(result.name, "顺子");
+  assert.deepEqual(result.cards, board);
+});
+
+test("bestHandWithCards preserves wheel cards and validates its input", () => {
+  const wheelCards = [c(14, 0), c(5, 1), c(4, 2), c(3, 3), c(2, 0), c(13, 1), c(12, 2)];
+  const result = bestHandWithCards(wheelCards);
+
+  assert.equal(result.name, "顺子");
+  assert.deepEqual(result.cards, wheelCards.slice(0, 5));
+  assert.throws(() => bestHandWithCards(wheelCards.slice(0, 4)), /5 到 7 张牌/);
+  assert.throws(
+    () => bestHandWithCards([c(14, 0), c(14, 0), c(4, 1), c(3, 2), c(2, 3)]),
+    /重复牌/,
+  );
 });
 
 test("preflop strength and percentile preserve useful ordering", () => {

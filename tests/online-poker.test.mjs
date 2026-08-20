@@ -7,6 +7,7 @@ import {
   ONLINE_NEXT_HAND_DELAY_MS,
   ONLINE_STARTING_STACK,
   applyOnlinePokerCommand,
+  bestOnlineHand,
   createOnlineRoom,
   cryptoRandomIndex,
   makeOnlineDeck,
@@ -88,6 +89,35 @@ function act(room, actor, action, options, raiseTo) {
 function card(rank, suit) {
   return { rank, suit };
 }
+
+test("bestOnlineHand returns exactly five cards and keeps a board-playing tie on the board", () => {
+  const board = [
+    card(14, "♠"),
+    card(13, "♥"),
+    card(12, "♦"),
+    card(11, "♣"),
+    card(10, "♠"),
+  ];
+  const boardHand = bestOnlineHand([...board, card(3, "♥"), card(2, "♦")]);
+  assert.equal(boardHand.name, "顺子");
+  assert.equal(boardHand.cards.length, 5);
+  assert.deepEqual(boardHand.cards, board, "an equal hole-card substitution must not obscure that the board plays");
+
+  const fullHouse = bestOnlineHand([
+    card(14, "♠"),
+    card(14, "♥"),
+    card(13, "♠"),
+    card(13, "♥"),
+    card(2, "♣"),
+    card(14, "♦"),
+    card(12, "♣"),
+  ]);
+  assert.equal(fullHouse.name, "葫芦");
+  assert.deepEqual(
+    fullHouse.cards.map(({ rank }) => rank).sort((left, right) => right - left),
+    [14, 14, 14, 13, 13],
+  );
+});
 
 test("room enforces a 2-6 seat capacity and lobby readiness", () => {
   assert.throws(() => createOnlineRoom({ roomId: "bad", owner: actors[0], maxPlayers: 1 }), /2 到 6/);

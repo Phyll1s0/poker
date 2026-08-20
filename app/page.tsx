@@ -12,6 +12,7 @@ import { isPokerAudioEnabled, playPokerSound, setPokerAudioEnabled, unlockPokerA
 import {
   analyzeBoardTexture,
   bestHand,
+  bestHandWithCards,
   blockerValue,
   drawPotential,
   estimateEquity,
@@ -1372,8 +1373,13 @@ function WinningHands({ game }: { game: Game }) {
           const publiclyShown = game.shownPlayerIds.includes(player.id);
           const privatelyPeeked = game.peekedPlayerIds.includes(player.id);
           const visibleToHero = player.isHuman || publiclyShown || privatelyPeeked;
-          const cards = [...player.hole, ...game.community];
-          const handName = !game.endedUncontested && cards.length >= 5 ? bestHand(cards).name : "未摊牌赢池";
+          const cards = [...game.community, ...player.hole];
+          const bestFive = visibleToHero && cards.length >= 5 ? bestHandWithCards(cards) : null;
+          const displayedCards = bestFive?.cards ?? player.hole;
+          const holeCardKeys = new Set(player.hole.map(cardKey));
+          const handName = bestFive
+            ? `${game.endedUncontested ? "未摊牌赢池 · " : ""}${bestFive.name}`
+            : game.endedUncontested ? "未摊牌赢池" : "公开底牌";
           const payout = game.payouts.find((entry) => entry.playerId === player.id)?.amount ?? 0;
           const potLabel = game.mainPotWinnerIds.includes(player.id) ? "主池" : "边池";
           return (
@@ -1384,8 +1390,24 @@ function WinningHands({ game }: { game: Game }) {
                 <em>{potLabel} +{payout}{privatelyPeeked ? " · 偷看，仅你可见" : player.isHuman && !publiclyShown ? " · 仅你可见" : ""}</em>
               </div>
               {visibleToHero ? (
-                <div className="winning-hand-cards" aria-label={`${player.name} 的赢家手牌`}>
-                  {player.hole.map((card) => <PlayingCard key={cardKey(card)} card={card} />)}
+                <div className="winning-hand-card-group">
+                  <span>{bestFive ? "BEST FIVE · 最佳五张" : "公开底牌 · 未形成五张牌"}</span>
+                  <div
+                    className={`winning-hand-cards ${bestFive ? "is-best-five" : "is-hole-only"}`}
+                    aria-label={bestFive
+                      ? `${player.name} 的最佳五张：${displayedCards.map((card) => `${cardText(card)}（${holeCardKeys.has(cardKey(card)) ? "底牌" : "公共牌"}）`).join("、")}`
+                      : `${player.name} 的公开底牌`}
+                  >
+                    {displayedCards.map((card) => {
+                      const source = holeCardKeys.has(cardKey(card)) ? "hole" : "board";
+                      return (
+                        <div className="winning-card-source" data-source={source} key={cardKey(card)}>
+                          <PlayingCard card={card} />
+                          <small>{source === "hole" ? "底牌" : "公共"}</small>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               ) : (
                 <div className="winning-hand-hidden" aria-label={`${player.name} 选择盖牌`}>

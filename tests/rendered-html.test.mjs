@@ -108,6 +108,11 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /function setHeroShowChoice/);
   assert.match(page, /function WinningHands/);
   assert.match(page, /赢家手牌/);
+  assert.match(page, /bestHandWithCards\(cards\)/);
+  assert.match(page, /BEST FIVE · 最佳五张/);
+  assert.match(page, /data-source=\{source\}/);
+  assert.match(evaluator, /export function bestHandWithCards/);
+  assert.match(globalsCss, /\.winning-card-source\[data-source="hole"\]/);
   assert.match(page, /function PrivatePeekOpportunity/);
   assert.match(page, /PRIVATE PEEK · 每手一次/);
   assert.match(page, /只对你可见，不算公开亮牌，也不会改变 AI 对你的画像/);
@@ -149,6 +154,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(globalsCss, /\.seat-3 \{ left: 50%; top: -84px/);
   assert.match(multiplayerClient, /function WinningHands/);
   assert.match(multiplayerClient, /手牌未公开/);
+  assert.match(multiplayerClient, /最佳五张/);
+  assert.match(multiplayerClient, /winningHands\?\.find/);
   assert.match(multiplayerClient, /粘贴邀请码/);
   assert.match(multiplayerClient, /复制邀请码/);
   assert.match(multiplayerClient, /FRIENDS CLUB/);
@@ -225,6 +232,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerCss, /\.multiplayerPage \.card\.redCard,[\s\S]*?\.multiplayerPage \.miniCard\.redCard\s*\{\s*color:/);
   assert.match(multiplayerCss, /\.multiplayerPage \.card\.blackCard,[\s\S]*?\.multiplayerPage \.miniCard\.blackCard\s*\{\s*color:/);
   assert.match(multiplayerCss, /\.multiplayerPage \.boardDealtCard\s*\{[\s\S]*?animation:\s*multiplayerDealCommunityCard 0\.48s/);
+  assert.match(multiplayerCss, /\.winningBestFive\s*\{/);
+  assert.match(multiplayerCss, /\.multiplayerPage \.winningHandCards \.card\s*\{/);
   assert.match(multiplayerCss, /@keyframes multiplayerDealCommunityCard/);
   assert.match(multiplayerCss, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.multiplayerPage \.boardDealtCard/);
   assert.match(multiplayerCss, /\[data-suit-tone="red"\][\s\S]*?-webkit-text-fill-color:\s*#c92f35/);
@@ -245,6 +254,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(edgeFunction, /result\?\.totalPot \?\? hand\.committedPot/);
   assert.match(edgeFunction, /raiseAllInOnly: table\.legalActions\.raise\?\.allInOnly \?\? false/);
   assert.match(edgeFunction, /result\.winnerDetails/);
+  assert.match(edgeFunction, /bestOnlineHand\(\[\.\.\.hand\.community, \.\.\.detail\.holeCards\]\)/);
+  assert.match(edgeFunction, /if \(!detail\?\.holeCards/);
   assert.match(edgeFunction, /type === "use-time-bank" \|\| type === "timeout"/);
   assert.match(edgeFunction, /type === "finish"/);
   assert.match(edgeFunction, /type === "restart"/);

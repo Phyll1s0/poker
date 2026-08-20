@@ -101,7 +101,15 @@ type PublicGame = {
   }[];
   players: PublicPlayer[];
   legalActions: LegalActions | null;
-  result: { summary: string; winners: string[] } | null;
+  result: {
+    summary: string;
+    winners: string[];
+    winningHands?: {
+      accountId: string;
+      handName: string;
+      cards: Card[];
+    }[];
+  } | null;
 };
 
 type SessionReportPlayer = {
@@ -684,15 +692,26 @@ function WinningHands({ game }: { game: PublicGame }) {
       </div>
       <div className={styles.winningHandList}>
         {winners.map((player) => {
-          const cards = player.holeCards ?? [];
+          const winningHand = game.result?.winningHands?.find((entry) => entry.accountId === player.accountId);
+          const cards = winningHand?.cards ?? player.holeCards ?? [];
+          const isBestFive = Boolean(winningHand && winningHand.cards.length === 5);
           return (
             <article className={styles.winningHand} key={player.accountId}>
               <div className={styles.winningHandPlayer}>
                 <strong>{player.handle}</strong>
-                <span>{cards.length ? "获胜底牌" : "手牌未公开"}</span>
+                <span>
+                  {isBestFive
+                    ? `${winningHand?.handName ?? "成牌"} · 最佳五张`
+                    : cards.length
+                      ? "获胜底牌"
+                      : "手牌未公开"}
+                </span>
               </div>
               {cards.length ? (
-                <div className={styles.winningHandCards} aria-label={`${player.handle} 的赢家手牌`}>
+                <div
+                  className={`${styles.winningHandCards} ${isBestFive ? styles.winningBestFive : ""}`}
+                  aria-label={`${player.handle} 的${isBestFive ? "最佳五张牌" : "赢家手牌"}`}
+                >
                   {cards.map((card, index) => <CardView key={`${card.rank}-${card.suit}-${index}`} card={card} />)}
                 </div>
               ) : (

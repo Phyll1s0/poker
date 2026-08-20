@@ -9,6 +9,7 @@ import {
   ONLINE_MIN_ACTION_TIME_MS,
   ONLINE_MIN_STARTING_STACK,
   applyOnlinePokerCommand,
+  bestOnlineHand,
   createOnlineRoom,
   projectRoomState,
   type OnlineActor,
@@ -456,6 +457,21 @@ function makeSnapshot(row: RoomRow, state: OnlineRoomState, guestId: string) {
           }),
         ].join("；")
       : null;
+    const winningHands = result
+      ? result.winnerSeats.flatMap((seat) => {
+          const detail = result.winnerDetails.find((candidate) => candidate.seat === seat);
+          const winner = gamePlayers.find((candidate) => candidate.seat === seat);
+          // winnerDetails is already the public-safe projection. Never derive
+          // this payload from private engine state or the viewer's own cards.
+          if (!detail?.holeCards || !winner || hand.community.length + detail.holeCards.length < 5) return [];
+          const best = bestOnlineHand([...hand.community, ...detail.holeCards]);
+          return [{
+            accountId: winner.accountId,
+            handName: best.name,
+            cards: best.cards.map(clientCard),
+          }];
+        })
+      : [];
     return {
       handId: hand.id,
       handNo: hand.number,
@@ -492,6 +508,7 @@ function makeSnapshot(row: RoomRow, state: OnlineRoomState, guestId: string) {
           const winner = gamePlayers.find((candidate) => candidate.seat === seat);
           return winner ? [winner.accountId] : [];
         }),
+        winningHands,
       } : null,
     };
   })() : null;

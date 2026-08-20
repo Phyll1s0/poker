@@ -82,6 +82,12 @@ export type OnlinePayout = {
   amount: number;
 };
 
+export type OnlineBestHand = {
+  score: number;
+  name: string;
+  cards: [OnlineCard, OnlineCard, OnlineCard, OnlineCard, OnlineCard];
+};
+
 export type OnlineHandResult = {
   kind: "uncontested" | "showdown";
   totalPot: number;
@@ -468,13 +474,24 @@ function scoreFiveCards(cards: readonly OnlineCard[]) {
   return { score: packedHandScore(category, values), name: HAND_NAMES[category] };
 }
 
-function bestOnlineHand(cards: readonly OnlineCard[]) {
+/**
+ * Selects the authoritative best five-card hand from a Hold'em showdown set.
+ * Equal-scoring combinations keep the first combination, so callers can put
+ * community cards first when they want a board-playing hand shown as the five
+ * board cards rather than an equivalent hole-card substitution.
+ */
+export function bestOnlineHand(cards: readonly OnlineCard[]): OnlineBestHand {
   if (cards.length < 5 || cards.length > 7) throw new RangeError("摊牌必须包含 5 到 7 张牌");
-  let best = { score: -1, name: HAND_NAMES[0] as string };
+  let best: OnlineBestHand | null = null;
   const choose = (start: number, picked: OnlineCard[]) => {
     if (picked.length === 5) {
       const evaluation = scoreFiveCards(picked);
-      if (evaluation.score > best.score) best = evaluation;
+      if (!best || evaluation.score > best.score) {
+        best = {
+          ...evaluation,
+          cards: picked.map(cloneCard) as OnlineBestHand["cards"],
+        };
+      }
       return;
     }
     for (let index = start; index <= cards.length - (5 - picked.length); index += 1) {
@@ -482,6 +499,7 @@ function bestOnlineHand(cards: readonly OnlineCard[]) {
     }
   };
   choose(0, []);
+  if (!best) throw new Error("无法选出最佳五张牌");
   return best;
 }
 

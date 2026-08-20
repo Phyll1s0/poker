@@ -1,5 +1,6 @@
 import {
   applyOnlinePokerCommand,
+  bestOnlineHand,
   createOnlineRoom,
   projectRoomState,
   type OnlineActor,
@@ -90,7 +91,16 @@ export type ClientPublicGame = {
     maxRaiseTo: number | null;
     raiseAllInOnly: boolean;
   } | null;
-  result: { summary: string; winners: string[] } | null;
+  result: {
+    summary: string;
+    winners: string[];
+    /** Additive and optional so snapshots from an older server remain readable. */
+    winningHands?: {
+      accountId: string;
+      handName: string;
+      cards: ClientCard[];
+    }[];
+  } | null;
 };
 
 export class MultiplayerGameError extends Error {
@@ -414,6 +424,22 @@ function clientGame(table: OnlinePublicRoomState, players: ClientPublicPlayer[])
         }),
       ].join("；")
     : null;
+  const winningHands = result
+    ? result.winnerSeats.flatMap((seat) => {
+        const detail = result.winnerDetails.find((candidate) => candidate.seat === seat);
+        const winner = gamePlayers.find((candidate) => candidate.seat === seat);
+        // Only public showdown cards may enter the best-five payload. In
+        // particular, the viewer's own otherwise-visible hole cards do not
+        // bypass a winner's decision to muck.
+        if (!detail?.holeCards || !winner || hand.community.length + detail.holeCards.length < 5) return [];
+        const best = bestOnlineHand([...hand.community, ...detail.holeCards]);
+        return [{
+          accountId: winner.accountId,
+          handName: best.name,
+          cards: best.cards.map(clientCard),
+        }];
+      })
+    : [];
   return {
     handId: hand.id,
     handNo: hand.number,
@@ -459,6 +485,7 @@ function clientGame(table: OnlinePublicRoomState, players: ClientPublicPlayer[])
             const winner = gamePlayers.find((candidate) => candidate.seat === seat);
             return winner ? [winner.accountId] : [];
           }),
+          winningHands,
         }
       : null,
   };
