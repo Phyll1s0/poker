@@ -13,7 +13,14 @@ import {
   preflopPercentile,
   preflopStrength,
 } from "../lib/poker-evaluator.ts";
-import { choosePokerPolicyAction, sixMaxPreflopPosition, sixMaxPreflopPositionFactor } from "../lib/poker-policy.ts";
+import {
+  choosePokerPolicyAction,
+  pokerCallClosesContestableLayers,
+  pokerContestablePotAtDecision,
+  pokerEffectiveStackAtDecision,
+  sixMaxPreflopPosition,
+  sixMaxPreflopPositionFactor,
+} from "../lib/poker-policy.ts";
 
 const PLAYER_COUNT = 6;
 const SMALL_BLIND = 0.5;
@@ -106,27 +113,72 @@ function decideAction(context) {
   } = context;
   const profile = AI_PROFILES[player.styleKey];
   const toCall = Math.max(0, currentBet - player.bet);
-  const potOdds = toCall > 0 ? toCall / (pot + toCall) : 0;
   const draw = drawPotential(player.hole, board);
   const blockers = blockerValue(player.hole, board);
   const boardTexture = analyzeBoardTexture(board);
   const handStrength = street === "preflop" ? preflopStrength(player.hole) : visibleHandStrength(player, board);
-  const opponentStacks = players
-    .filter((candidate) => candidate.id !== player.id && !candidate.folded)
-    .map((candidate) => candidate.stack);
-  const effectiveStack = Math.min(player.stack, Math.max(0, ...opponentStacks));
+  const liveOpponents = players
+    .filter((candidate) => candidate.id !== player.id && !candidate.folded);
+  const effectiveStack = pokerEffectiveStackAtDecision(
+    player.stack,
+    player.bet,
+    liveOpponents.map((candidate) => ({ stack: candidate.stack, bet: candidate.bet })),
+  );
   const effectiveStackBb = effectiveStack / BIG_BLIND;
+  const opponentsCanRespond = liveOpponents.some((candidate) => candidate.stack > 0);
+  const callEndsHand = toCall > 0 && (
+    pokerCallClosesContestableLayers(
+      player.id,
+      player.contributed,
+      player.stack,
+      toCall,
+      players,
+    )
+    || !opponentsCanRespond
+    || (street === "river" && liveOpponents
+      .filter((candidate) => candidate.stack > 0)
+      .every((candidate) => candidate.hasActed && candidate.bet === currentBet))
+  );
+  const decisionPot = pokerContestablePotAtDecision(
+    player.id,
+    player.contributed,
+    player.stack,
+    toCall,
+    players,
+  );
+  const policyPot = toCall > 0 ? decisionPot.currentPot : pot;
+  const potOdds = decisionPot.callCost > 0
+    ? decisionPot.callCost / Math.max(1, decisionPot.finalPot)
+    : 0;
   const equityMattersPreflop = effectiveStackBb <= 18 || (raiseCount >= 2 && effectiveStackBb <= 45);
-  const shouldSampleEquity = street !== "preflop" || equityMattersPreflop;
-  const equityKey = `${player.id}|${opponents}|${board.map((card) => `${card.rank}-${card.suit}`).join(",")}`;
+  const shouldSampleEquity = callEndsHand || street !== "preflop" || equityMattersPreflop;
+  const layerKey = callEndsHand
+    ? decisionPot.layers.map((layer) => `${layer.amount}:${layer.opponentIds.join(",")}`).join(";")
+    : "open";
+  const equityKey = `${player.id}|${opponents}|${board.map((card) => `${card.rank}-${card.suit}`).join(",")}|${layerKey}`;
   let equity = shouldSampleEquity ? equityCache.get(equityKey) : handStrength;
   if (equity === undefined) {
-    equity = estimateEquity(player.hole, board, {
-      opponents,
-      iterations: equityIterations,
-      random: equityRandom,
-      suits: [0, 1, 2, 3],
-    });
+    if (callEndsHand && decisionPot.finalPot > 0 && decisionPot.layers.length > 0) {
+      const layerIterations = Math.max(24, Math.floor(equityIterations / decisionPot.layers.length));
+      const expectedPayout = decisionPot.layers.reduce((sum, layer) => {
+        if (!layer.opponentIds.length) return sum + layer.amount;
+        const layerEquity = estimateEquity(player.hole, board, {
+          opponents: layer.opponentIds.length,
+          iterations: layerIterations,
+          random: equityRandom,
+          suits: [0, 1, 2, 3],
+        });
+        return sum + layer.amount * layerEquity;
+      }, 0);
+      equity = expectedPayout / decisionPot.finalPot;
+    } else {
+      equity = estimateEquity(player.hole, board, {
+        opponents,
+        iterations: equityIterations,
+        random: equityRandom,
+        suits: [0, 1, 2, 3],
+      });
+    }
     equityCache.set(equityKey, equity);
   }
   const action = choosePokerPolicyAction({
@@ -136,11 +188,13 @@ function decideAction(context) {
     handStrength,
     draw,
     blockers,
-    pot,
+    pot: policyPot,
     toCall,
     potOdds,
     inPosition: isInPosition(players, player.id, dealer, street, lastAggressor),
     activeOpponents: opponents,
+    opponentsCanRespond,
+    callEndsHand,
     effectiveStackBb,
     startingDepthBb: stackBb,
     highestBet: currentBet,

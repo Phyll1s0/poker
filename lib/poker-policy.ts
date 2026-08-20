@@ -41,6 +41,10 @@ export type PokerPolicyInput = {
   potOdds: number;
   inPosition: boolean;
   activeOpponents: number;
+  /** Whether at least one live opponent still has chips to respond to a raise. */
+  opponentsCanRespond?: boolean;
+  /** Whether calling leaves this player with no later decision (closed action or all-in). */
+  callEndsHand?: boolean;
   effectiveStackBb: number;
   startingDepthBb: number;
   highestBet: number;
@@ -138,6 +142,119 @@ function nonNegative(value: number) {
   return Math.max(0, Number.isFinite(value) ? value : 0);
 }
 
+/**
+ * Chips that can still be contested from the acting player's point of view.
+ * An opponent's outstanding bet is part of the effective stack even when that
+ * bet left them with zero chips behind (the common all-in decision case).
+ */
+export function pokerEffectiveStackAtDecision(
+  playerStack: number,
+  playerBet: number,
+  opponents: readonly { stack: number; bet: number }[],
+) {
+  const available = nonNegative(playerStack);
+  const alreadyMatched = nonNegative(playerBet);
+  const deepestOpponentReach = Math.max(0, ...opponents.map((opponent) => (
+    nonNegative(opponent.stack) + Math.max(0, nonNegative(opponent.bet) - alreadyMatched)
+  )));
+  return Math.min(available, deepestOpponentReach);
+}
+
+export type PokerDecisionPotLayer = {
+  amount: number;
+  opponentIds: number[];
+};
+
+export type PokerDecisionPot = {
+  callCost: number;
+  currentPot: number;
+  finalPot: number;
+  layers: PokerDecisionPotLayer[];
+};
+
+/**
+ * Returns only the chips the acting player can win after calling. Contributions
+ * above that player's post-call total belong to an unmatched wager or a higher
+ * side pot and therefore must not improve their displayed price.
+ */
+export function pokerContestablePotAtDecision(
+  playerId: number,
+  playerContribution: number,
+  playerStack: number,
+  toCall: number,
+  players: readonly { id: number; contributed: number; folded: boolean }[],
+): PokerDecisionPot {
+  const callCost = Math.min(nonNegative(toCall), nonNegative(playerStack));
+  const finalContribution = nonNegative(playerContribution) + callCost;
+  const contributions = players.map((player) => ({
+    ...player,
+    contributed: player.id === playerId
+      ? finalContribution
+      : nonNegative(player.contributed),
+  }));
+  const levels = [...new Set(
+    contributions
+      .map((player) => Math.min(player.contributed, finalContribution))
+      .filter((level) => level > 0),
+  )].sort((left, right) => left - right);
+  const layers: PokerDecisionPotLayer[] = [];
+  let previousLevel = 0;
+  for (const level of levels) {
+    const contributors = contributions.filter((player) => player.contributed >= level);
+    const amount = (level - previousLevel) * contributors.length;
+    previousLevel = level;
+    if (amount <= 0) continue;
+    layers.push({
+      amount,
+      opponentIds: contributors
+        .filter((player) => player.id !== playerId && !player.folded)
+        .map((player) => player.id),
+    });
+  }
+  const finalPot = layers.reduce((sum, layer) => sum + layer.amount, 0);
+  return {
+    callCost,
+    currentPot: Math.max(0, finalPot - callCost),
+    finalPot,
+    layers,
+  };
+}
+
+/**
+ * An all-in call can use terminal chip EV only when every funded live opponent
+ * has already contributed through the caller's final eligible level. A player
+ * still below that level may later call or fold, changing both the pot layer
+ * and the opponent range, so that decision is not terminal yet.
+ */
+export function pokerCallClosesContestableLayers(
+  playerId: number,
+  playerContribution: number,
+  playerStack: number,
+  toCall: number,
+  players: readonly { id: number; contributed: number; folded: boolean; stack: number }[],
+) {
+  const available = nonNegative(playerStack);
+  const callCost = Math.min(nonNegative(toCall), available);
+  if (available <= 0 || callCost < available) return false;
+  const finalContribution = nonNegative(playerContribution) + callCost;
+  return players.every((player) => (
+    player.id === playerId
+    || player.folded
+    || nonNegative(player.stack) <= 0
+    || nonNegative(player.contributed) >= finalContribution
+  ));
+}
+
+function decisionPressure(toCall: number, playerStack: number, effectiveStackChips: number) {
+  const available = nonNegative(playerStack);
+  const callCost = Math.min(nonNegative(toCall), available);
+  const contestableStack = Math.max(
+    callCost,
+    Math.min(available, nonNegative(effectiveStackChips)),
+  );
+  return callCost / Math.max(1, contestableStack);
+}
+
 function unitRandom(random: PokerPolicyRng) {
   return clamp(random(), 0, 1 - Number.EPSILON);
 }
@@ -157,10 +274,19 @@ function softmax(values: readonly number[], temperature = 1) {
 
 function softmaxLegalActions(
   logits: Partial<PokerPolicyActionFrequencies>,
-  input: { toCall: number; raiseLocked: boolean; highestBet: number; playerBet: number; playerStack: number },
+  input: {
+    toCall: number;
+    raiseLocked: boolean;
+    highestBet: number;
+    playerBet: number;
+    playerStack: number;
+    opponentsCanRespond?: boolean;
+  },
   temperature = 1,
 ) {
-  const canRaise = !input.raiseLocked && input.playerBet + input.playerStack > input.highestBet;
+  const canRaise = input.opponentsCanRespond !== false
+    && !input.raiseLocked
+    && input.playerBet + input.playerStack > input.highestBet;
   const legal: PokerPolicyActionKind[] = input.toCall > 0
     ? canRaise ? ["fold", "call", "raise"] : ["fold", "call"]
     : canRaise ? ["check", "raise"] : ["check"];
@@ -230,7 +356,14 @@ function preflopPremiumValue(input: { preflopPercentile: number; preflopHand: Po
 
 function normalizeActionFrequencies(
   raw: Partial<PokerPolicyActionFrequencies>,
-  input: { toCall: number; raiseLocked: boolean; highestBet: number; playerBet: number; playerStack: number },
+  input: {
+    toCall: number;
+    raiseLocked: boolean;
+    highestBet: number;
+    playerBet: number;
+    playerStack: number;
+    opponentsCanRespond?: boolean;
+  },
 ) {
   const frequencies: PokerPolicyActionFrequencies = {
     fold: nonNegative(raw.fold ?? 0),
@@ -238,7 +371,9 @@ function normalizeActionFrequencies(
     call: nonNegative(raw.call ?? 0),
     raise: nonNegative(raw.raise ?? 0),
   };
-  const canRaise = !input.raiseLocked && input.playerBet + input.playerStack > input.highestBet;
+  const canRaise = input.opponentsCanRespond !== false
+    && !input.raiseLocked
+    && input.playerBet + input.playerStack > input.highestBet;
   if (input.toCall > 0) {
     frequencies.fold += frequencies.check;
     frequencies.check = 0;
@@ -280,6 +415,7 @@ function buildPreflopFrequencies(input: {
   toCall: number;
   effectiveStackBb: number;
   raiseLocked: boolean;
+  opponentsCanRespond: boolean;
   squidPressure: number;
 }) {
   const position = input.preflopPosition;
@@ -289,8 +425,12 @@ function buildPreflopFrequencies(input: {
   const bluffShape = preflopBluffShape(input);
   const premiumValue = preflopPremiumValue(input);
   const maxTarget = input.playerBet + input.playerStack;
-  const canRaise = !input.raiseLocked && maxTarget > input.highestBet;
-  const pressure = input.toCall / Math.max(1, Math.min(input.playerStack, input.effectiveStackBb * input.bigBlind));
+  const canRaise = input.opponentsCanRespond && !input.raiseLocked && maxTarget > input.highestBet;
+  const pressure = decisionPressure(
+    input.toCall,
+    input.playerStack,
+    input.effectiveStackBb * input.bigBlind,
+  );
   let scenario: PokerPreflopScenario;
   let targetRange: number;
   let enterFrequency: number;
@@ -445,6 +585,8 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
     toCall: normalizedToCall,
     potOdds: normalizedToCall > 0 ? normalizedToCall / Math.max(1, normalizedPot + normalizedToCall) : 0,
     activeOpponents: Math.max(1, Math.floor(nonNegative(rawInput.activeOpponents))),
+    opponentsCanRespond: rawInput.opponentsCanRespond !== false,
+    callEndsHand: Boolean(rawInput.callEndsHand),
     effectiveStackBb: nonNegative(rawInput.effectiveStackBb),
     startingDepthBb: Math.max(1, nonNegative(rawInput.startingDepthBb)),
     highestBet: nonNegative(rawInput.highestBet),
@@ -476,7 +618,12 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
   const bigBlind = inferredBigBlind(input);
   const effectiveStackChips = input.effectiveStackBb * bigBlind;
   const spr = effectiveStackChips / Math.max(1, input.pot);
-  const pressure = input.toCall / Math.max(1, Math.min(input.playerStack, effectiveStackChips));
+  // Pressure is a share of chips that can still be contested, so it can never
+  // exceed 100%. In particular, a bettor who has just moved all-in has zero
+  // chips *behind* but the outstanding call is still part of the effective
+  // stack. Without this floor, a 225 call divided by zero became a pressure of
+  // 225 and forced the realization threshold to its 94% safety clamp.
+  const pressure = decisionPressure(input.toCall, input.playerStack, effectiveStackChips);
   const preflopPlan = buildPreflopFrequencies({ ...input, bigBlind });
   const positionBonus = input.inPosition ? 0.016 : -0.004;
   const baseStrength = input.street === "preflop"
@@ -662,7 +809,7 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
         0,
         0.76,
       );
-  const canRaise = !input.raiseLocked && maxTarget > input.highestBet;
+  const canRaise = input.opponentsCanRespond && !input.raiseLocked && maxTarget > input.highestBet;
   const sizingRoutes = canRaise
     ? buildPokerSizingRoutes({
         street: input.street,
@@ -713,32 +860,46 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
     0,
     0.7,
   );
-  const realizationThreshold = clamp(
-    input.potOdds
-      + (input.inPosition ? -0.006 : 0.016)
-      + input.boardWetness * (input.inPosition ? 0.002 : 0.012)
-      + (input.activeOpponents - 1) * 0.017
-      + pressure * 0.018
-      - drawQuality * 0.008,
-    0,
-    0.94,
-  );
+  const realizationThreshold = input.callEndsHand
+    ? input.potOdds
+    : clamp(
+        input.potOdds
+          + (input.inPosition ? -0.006 : 0.016)
+          + input.boardWetness * (input.inPosition ? 0.002 : 0.012)
+          + (input.activeOpponents - 1) * 0.017
+          + pressure * 0.018
+          - drawQuality * 0.008,
+        0,
+        0.94,
+      );
   const continueEdge = input.equity
     + input.squidPressure
     + (input.profile.looseness - 0.27) * 0.035
     - realizationThreshold;
   let actionFrequencies: PokerPolicyActionFrequencies;
-  if (input.street === "preflop") {
+  if (input.toCall > 0 && input.callEndsHand && !canRaise) {
+    // Once calling leaves the player no later decision and raising is illegal,
+    // fold/call is centered on chip-EV indifference on every street, including
+    // preflop. Only explicit Squid utility may shift that boundary; player-style
+    // looseness must not rewrite pot odds.
+    const terminalEdgeLogit = (input.equity + input.squidPressure - input.potOdds) * 14;
+    actionFrequencies = softmaxLegalActions(
+      { fold: -terminalEdgeLogit, call: terminalEdgeLogit },
+      input,
+      0.62,
+    );
+  } else if (input.street === "preflop") {
     actionFrequencies = preflopPlan.actionFrequencies;
   } else if (input.toCall > 0) {
+    const futureRiskFactor = input.callEndsHand ? 0 : 1;
     const foldLogit = -continueEdge * 11.2
-      + pressure * 0.62
-      + (input.activeOpponents - 1) * 0.14;
+      + pressure * 0.62 * futureRiskFactor
+      + (input.activeOpponents - 1) * 0.14 * futureRiskFactor;
     const callLogit = 0.34
       + sigmoid(continueEdge * 10) * 0.92
       - valueScore * 0.54
       + drawQuality * 0.26
-      - pressure * 0.22;
+      - pressure * 0.22 * futureRiskFactor;
     const raiseLogit = -1.02
       + valueScore * (1.72 + input.profile.aggression * 0.82)
       + bluffFrequency * 2.15

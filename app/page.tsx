@@ -16,6 +16,9 @@ import {
 import {
   choosePokerPolicyAction,
   evaluatePokerPolicy,
+  pokerCallClosesContestableLayers,
+  pokerContestablePotAtDecision,
+  pokerEffectiveStackAtDecision,
   sixMaxPreflopPosition,
   sixMaxPreflopPositionFactor,
   type PokerPolicyInput,
@@ -253,9 +256,37 @@ function currentEquity(game: Game, player: Player, iterations = 80): number {
     player.id,
     player.hole.map(cardKey).join(","),
     community.map(cardKey).join(","),
-    game.players.map((candidate) => `${candidate.id}:${Number(candidate.folded)}:${candidate.stack}:${candidate.bet}`).join("|"),
+    game.players.map((candidate) => `${candidate.id}:${Number(candidate.folded)}:${candidate.stack}:${candidate.bet}:${candidate.contributed}`).join("|"),
     game.actionHistory.map((action) => `${action.playerId}:${action.street}:${action.kind}:${action.amount}`).join("|"),
   ].join(";");
+  if (callClosesPlayerAction(game, player)) {
+    const toCall = Math.max(0, game.highestBet - player.bet);
+    const decisionPot = pokerContestablePotAtDecision(
+      player.id,
+      player.contributed,
+      player.stack,
+      toCall,
+      game.players,
+    );
+    if (decisionPot.finalPot > 0 && decisionPot.layers.length > 0) {
+      const rangeByPlayer = new Map(opponents.map((opponent) => [opponent.playerId, opponent.weight]));
+      const layerIterations = Math.max(48, Math.floor(iterations / decisionPot.layers.length));
+      const expectedPayout = decisionPot.layers.reduce((sum, layer, index) => {
+        const layerRanges = layer.opponentIds
+          .map((playerId) => rangeByPlayer.get(playerId))
+          .filter((weight): weight is NonNullable<typeof weight> => Boolean(weight));
+        if (!layerRanges.length) return sum + layer.amount;
+        const layerEquity = estimateEquity(player.hole, community, {
+          opponents: layerRanges.length,
+          iterations: layerIterations,
+          opponentRanges: layerRanges,
+          random: seededSpotRandom(`${publicSeed};layer:${index}:${layer.opponentIds.join(",")}`),
+        });
+        return sum + layer.amount * layerEquity;
+      }, 0);
+      return expectedPayout / decisionPot.finalPot;
+    }
+  }
   return estimateEquity(player.hole, community, {
     opponents: opponents.length,
     iterations: game.street === "preflop" ? Math.max(48, iterations) : iterations,
@@ -298,6 +329,32 @@ function pokerSizingContext(game: Game, player: Player): PokerSizingContext {
     bigBlind: BIG_BLIND,
     preflopRaiseCount: game.raiseCount,
   };
+}
+
+function canAnyOpponentRespond(game: Game, player: Player) {
+  return game.players.some((candidate) => (
+    candidate.id !== player.id && !candidate.folded && candidate.stack > 0
+  ));
+}
+
+function callClosesPlayerAction(game: Game, player: Player) {
+  const toCall = Math.max(0, game.highestBet - player.bet);
+  if (toCall <= 0) return false;
+  if (pokerCallClosesContestableLayers(
+    player.id,
+    player.contributed,
+    player.stack,
+    toCall,
+    game.players,
+  )) return true;
+  const fundedOpponents = game.players.filter((candidate) => (
+    candidate.id !== player.id && !candidate.folded && candidate.stack > 0
+  ));
+  if (!fundedOpponents.length) return true;
+  if (game.street !== "river") return false;
+  return fundedOpponents.every((candidate) => (
+    candidate.hasActed && candidate.bet === game.highestBet
+  ));
 }
 
 function isPlayerInPosition(game: Game, player: Player) {
@@ -346,10 +403,18 @@ function buildPokerPolicyInput(
   const openingRaise = preflopActions.find((action) => action.kind === "raise");
   const latestAggressiveAction = [...game.actionHistory].reverse().find((action) => action.kind === "raise");
   const boardTexture = analyzeBoardTexture(game.community);
-  const opponentStacks = game.players
+  const opponents = game.players
     .filter((candidate) => !candidate.folded && candidate.id !== player.id)
-    .map((candidate) => candidate.stack);
-  const effectiveStack = Math.min(player.stack, Math.max(0, ...opponentStacks));
+    .map((candidate) => ({ stack: candidate.stack, bet: candidate.bet }));
+  const effectiveStack = pokerEffectiveStackAtDecision(player.stack, player.bet, opponents);
+  const decisionPot = pokerContestablePotAtDecision(
+    player.id,
+    player.contributed,
+    player.stack,
+    context.toCall,
+    game.players,
+  );
+  const policyPot = context.toCall > 0 ? decisionPot.currentPot : context.pot;
   return {
     profile,
     street: game.street,
@@ -357,11 +422,15 @@ function buildPokerPolicyInput(
     handStrength: game.street === "preflop" ? preflopStrength(player.hole) : visibleHandStrength(player, game.community),
     draw: drawPotential(player.hole, game.community),
     blockers: blockerValue(player.hole, game.community),
-    pot: context.pot,
+    pot: policyPot,
     toCall: context.toCall,
-    potOdds: context.toCall > 0 ? context.toCall / (context.pot + context.toCall) : 0,
+    potOdds: decisionPot.callCost > 0
+      ? decisionPot.callCost / Math.max(1, decisionPot.finalPot)
+      : 0,
     inPosition: isPlayerInPosition(game, player),
     activeOpponents: game.players.filter((candidate) => !candidate.folded && candidate.id !== player.id).length,
+    opponentsCanRespond: canAnyOpponentRespond(game, player),
+    callEndsHand: callClosesPlayerAction(game, player),
     effectiveStackBb: effectiveStack / BIG_BLIND,
     startingDepthBb: game.startingStack / BIG_BLIND,
     highestBet: game.highestBet,
@@ -728,7 +797,7 @@ function act(game: Game, playerId: number, kind: ActionKind, raiseTo?: number): 
     resolvedKind = "call";
     amount = paid;
   } else if (kind === "raise") {
-    if (player.raiseLocked) return game;
+    if (player.raiseLocked || !canAnyOpponentRespond(game, player)) return game;
     const target = legalPokerRaiseTarget(
       pokerSizingContext(game, player),
       raiseTo ?? game.highestBet + game.minRaise,
@@ -845,8 +914,16 @@ function formatFrequencyMix(items: Array<{ label: string; frequency: number }>) 
 
 function getAdvice(game: Game, player: Player, equity: number) {
   const toCall = Math.max(0, game.highestBet - player.bet);
-  const pot = committedPot(game);
-  const potOdds = toCall > 0 ? toCall / (pot + toCall) : 0;
+  const decisionPot = pokerContestablePotAtDecision(
+    player.id,
+    player.contributed,
+    player.stack,
+    toCall,
+    game.players,
+  );
+  const callCost = decisionPot.callCost;
+  const potOdds = callCost > 0 ? callCost / Math.max(1, decisionPot.finalPot) : 0;
+  const terminalCall = callClosesPlayerAction(game, player);
   const sizingContext = pokerSizingContext(game, player);
   const policyPlan = evaluatePokerPolicy(buildPokerPolicyInput(game, player, equity, COACH_PROFILE));
   const squidCount = game.squid.counts[player.id] ?? 0;
@@ -873,18 +950,28 @@ function getAdvice(game: Game, player: Player, equity: number) {
   } else if (toCall > 0) {
     const directPrice = Math.round(potOdds * 100);
     const realizationPrice = Math.round(policyPlan.realizationThreshold * 100);
-    if (player.raiseLocked) {
-      note = `不足额全下没有重新开放加注权；模型只在弃牌和跟注之间重算。范围胜率约 ${Math.round(equity * 100)}%，综合权益实现门槛约 ${realizationPrice}%。`;
+    const estimatedEquity = Math.round(equity * 100);
+    const immediateChipEv = Math.round(equity * decisionPot.finalPot - callCost);
+    const chipEvText = `，按可争夺底池计算的即时筹码 EV 约 ${immediateChipEv >= 0 ? "+" : ""}${immediateChipEv}`;
+    const terminalCallLine = terminalCall && (action === "call" || action === "fold");
+    if (terminalCallLine) {
+      const squidAdjustment = game.presetKey === "squid" && ((immediateChipEv >= 0) !== (action === "call"));
+      const closingLead = callCost === player.stack && canAnyOpponentRespond(game, player)
+        ? "这次跟注会让你全下，之后不再有决策；按当前已形成的可争夺底池直接比较"
+        : "跟注后将直接进入摊牌";
+      note = `${closingLead}：当前价格需要 ${directPrice}% 权益，估算摊牌权益约 ${estimatedEquity}%${chipEvText}；${squidAdjustment ? "纯筹码 EV 与鱿鱼附加价值方向不同，当前主线已计入鱿鱼规则" : `因此${action === "call" ? "跟注是主线" : "当前权益不足，应当弃牌"}`}。`;
+    } else if (player.raiseLocked) {
+      note = `不足额全下没有重新开放加注权；模型只在弃牌和跟注之间重算。估算摊牌权益约 ${estimatedEquity}%，启发式继续参考线约 ${realizationPrice}%。`;
     } else if (action === "fold") {
       note = game.street === "river"
-        ? `范围胜率约 ${Math.round(equity * 100)}%，直接价格为 ${directPrice}%；结合对手下注范围后，弃牌是主线。`
-        : `直接价格为 ${directPrice}%；再计入位置、多人底池和后续权益实现，综合继续门槛约 ${realizationPrice}%，当前倾向弃牌。`;
+        ? `估算摊牌权益约 ${estimatedEquity}%，直接价格为 ${directPrice}%；当前倾向弃牌。`
+        : `直接价格为 ${directPrice}%；再计入位置和后续行动风险，启发式继续参考线约 ${realizationPrice}%，当前倾向弃牌。`;
     } else if (action === "raise") {
       note = policyPlan.nutAdvantage >= 0.55
-        ? `范围胜率约 ${Math.round(equity * 100)}%，坚果优势代理较高，主线用加注获取价值并保留少量慢打。`
-        : `范围胜率约 ${Math.round(equity * 100)}%；听牌、阻断牌和对手下注尺度共同支持一部分半诈唬/极化加注。`;
+        ? `估算摊牌权益约 ${estimatedEquity}%，坚果优势代理较高，主线用加注获取价值并保留少量慢打。`
+        : `估算摊牌权益约 ${estimatedEquity}%；听牌、阻断牌和对手下注尺度共同支持一部分半诈唬/极化加注。`;
     } else {
-      note = `直接价格为 ${directPrice}%，范围胜率约 ${Math.round(equity * 100)}%；跟注保留对手诈唬，同时把部分强牌与听牌留在加注分支。`;
+      note = `直接价格为 ${directPrice}%，估算摊牌权益约 ${estimatedEquity}%；跟注保留对手诈唬，同时把部分强牌与听牌留在加注分支。`;
     }
   } else if (action === "raise") {
     note = policyPlan.rangeAdvantage > 0.06 && policyPlan.nutAdvantage < 0.55
@@ -895,7 +982,15 @@ function getAdvice(game: Game, player: Player, equity: number) {
   } else {
     note = `当前范围更适合过牌：控制底池并保护过牌范围；并非所有可下注组合都使用同一固定频率。`;
   }
-  if (game.street !== "preflop") note += ` 动作混合由范围胜率、价格、位置、SPR、牌面纹理、阻断牌和行动压力连续计算。`;
+  if (game.street !== "preflop") {
+    note += terminalCall && (action === "call" || action === "fold")
+      ? ` 该跟注线路没有后续下注，不再叠加位置或权益实现惩罚。`
+      : ` 动作混合由估算摊牌权益、价格、位置、SPR、牌面纹理、阻断牌和行动压力连续计算。`;
+  }
+  const excludedPot = Math.max(0, committedPot(game) - decisionPot.currentPot);
+  if (toCall > 0 && excludedPot > 0) {
+    note += ` 另有 ${excludedPot} 筹码属于你无资格争夺的高层边池或未匹配下注，未计入你的底池赔率。`;
+  }
   if (game.presetKey === "squid") {
     note += squidCount === 0
       ? ` 你还没有鱿鱼，越接近发完，争夺主池的附加价值越高。`
@@ -1148,7 +1243,7 @@ function LandingHome({ onEnterSolo }: { onEnterSolo: () => void }) {
             </div>
           </div>
           <div className="landing-card-footer">
-            <div><span>范围胜率</span><strong>48%</strong></div>
+            <div><span>估算摊牌权益</span><strong>48%</strong></div>
             <div><span>参考线路</span><strong>跟注 63% · 加注 24%</strong></div>
           </div>
         </div>
@@ -1261,7 +1356,12 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
           target: pokerRaiseTargetForFraction(humanSizingContext, ratio),
         }))
     : [];
-  const raiseDisabled = !game || maxTarget <= game.highestBet || !isHumanTurn || Boolean(human?.raiseLocked);
+  const opponentCanRespond = Boolean(game && human && canAnyOpponentRespond(game, human));
+  const raiseDisabled = !game
+    || maxTarget <= game.highestBet
+    || !isHumanTurn
+    || !opponentCanRespond
+    || Boolean(human?.raiseLocked);
   const communityLength = game?.community.length ?? 0;
   const dealCount = game?.dealCount ?? 0;
   const currentHandNo = game?.handNo ?? 0;
@@ -1695,7 +1795,14 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                   ) : (
                     <button className="action-button neutral" onClick={() => handleAction("call")} disabled={!isHumanTurn}>跟注 {toCall} <kbd>C</kbd></button>
                   )}
-                  <button className="action-button raise" onClick={() => handleAction("raise")} disabled={raiseDisabled} title={human.raiseLocked ? "不足额全下未重新开放加注权" : undefined}>加注至 {raiseTo} <kbd>R</kbd></button>
+                  <button
+                    className="action-button raise"
+                    onClick={() => handleAction("raise")}
+                    disabled={raiseDisabled}
+                    title={human.raiseLocked
+                      ? "不足额全下未重新开放加注权"
+                      : !opponentCanRespond ? "所有对手都已全下，不能继续加注" : undefined}
+                  >加注至 {raiseTo} <kbd>R</kbd></button>
                 </div>
                 <div className="raise-control">
                   <div className="range-row">
@@ -1780,7 +1887,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
               <section className="equity-card">
                 <div className="section-label"><span>牌面与行动范围</span><b>{isHumanTurn ? "RANGE" : "WAIT"}</b></div>
                 <div className="equity-main">
-                  <div className="equity-number"><strong>{isHumanTurn ? Math.round(equity * 100) : "—"}</strong><span>%<br />范围胜率</span></div>
+                  <div className="equity-number"><strong>{isHumanTurn ? Math.round(equity * 100) : "—"}</strong><span>%<br />估算权益</span></div>
                   <div className="equity-bars">
                     <span><i style={{ width: `${isHumanTurn ? equity * 100 : 0}%` }} /></span>
                     <div><b>你的手牌</b><em>{human.hole.map(cardText).join("  ")}</em></div>
@@ -1882,7 +1989,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                       <p>你的选择：{item.action}（{item.actionVerdict}，约 {Math.round(item.selectedFrequency * 100)}%）；最高频线路：{item.recommended}</p>
                       <p>参考混合：{item.mix}</p>
                       {item.sizingMix && <p>进入加注分支后的尺寸混合：{item.sizingMix}{item.sizeVerdict ? `；${item.sizeVerdict}` : ""}</p>}
-                      <small>范围胜率 {Math.round(item.equity * 100)}% / 所需赔率 {Math.round(item.potOdds * 100)}% · {item.note}</small>
+                      <small>估算摊牌权益 {Math.round(item.equity * 100)}% / 所需赔率 {Math.round(item.potOdds * 100)}% · {item.note}</small>
                     </div>
                   </div>
                 )) : <p className="empty-log">这段练习没有记录到你的决策节点。</p>}
@@ -1929,7 +2036,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
             <button className="modal-close" onClick={() => setInfoOpen(false)} aria-label="关闭">×</button>
             <span className="eyebrow">ABOUT THE LAB</span>
             <h2 id="info-title">更强的混合频率对手，<br />但不冒充“完整 GTO”。</h2>
-            <p>当前本地引擎综合稳定抽样的范围胜率、底池赔率、位置、SPR、牌面纹理、听牌、阻断牌与行动压力，连续生成动作和条件尺度混合；电脑、实时建议与复盘共用同一策略。评分是策略匹配度，不是求解器计算出的精确 EV 损失。</p>
+            <p>当前本地引擎综合你这手牌对行动加权范围的估算摊牌权益、底池赔率、位置、SPR、牌面纹理、听牌、阻断牌与行动压力，连续生成动作和条件尺度混合；电脑、实时建议与复盘共用同一策略。评分是策略匹配度，不是求解器计算出的精确 EV 损失。</p>
             <div className="modal-grid">
               <div><b>四种桌型</b><span>浅筹 40 BB、标准 100 BB、深筹 200 BB，以及 200 BB 的血战鱿鱼。</span></div>
               <div><b>两种训练</b><span>单手模式逐手点评；常规整局固定 20 手，鱿鱼整局以 9 条全部发完为终点，答案都在结束后统一公开。</span></div>

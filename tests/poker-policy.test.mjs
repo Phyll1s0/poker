@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { choosePokerPolicyAction, evaluatePokerPolicy } from "../lib/poker-policy.ts";
+import {
+  choosePokerPolicyAction,
+  evaluatePokerPolicy,
+  pokerCallClosesContestableLayers,
+  pokerContestablePotAtDecision,
+  pokerEffectiveStackAtDecision,
+} from "../lib/poker-policy.ts";
 
 const baseSpot = {
   profile: { aggression: 0.7, looseness: 0.3, bluff: 0.16 },
@@ -432,6 +438,202 @@ test("responds continuously to price, board texture, initiative and number of op
   assert.ok(dryHeadsUp.actionFrequencies.raise > wetHeadsUp.actionFrequencies.raise);
   assert.ok(dryHeadsUp.sizingIntents[0].frequency > wetHeadsUp.sizingIntents[0].frequency);
   assert.ok(dryMultiway.actionFrequencies.raise < dryHeadsUp.actionFrequencies.raise * 0.6);
+});
+
+test("does not turn a profitable all-in call into a 94% threshold when the bettor has no chips behind", () => {
+  const plan = evaluatePokerPolicy({
+    ...baseSpot,
+    street: "turn",
+    equity: 0.44,
+    handStrength: 0.5,
+    draw: 0.1,
+    blockers: 0.05,
+    pot: 840,
+    toCall: 225,
+    highestBet: 225,
+    playerBet: 0,
+    playerStack: 700,
+    effectiveStackBb: 0,
+    raiseLocked: true,
+    opponentsCanRespond: false,
+    callEndsHand: true,
+    boardWetness: 0.75,
+    boardPairing: 0,
+    boardHighCard: 1,
+    initiative: false,
+    streetRaiseCount: 1,
+  });
+
+  assert.equal(plan.pressure, 1);
+  assert.ok(Math.abs(plan.realizationThreshold - 225 / 1_065) < 1e-12);
+  assert.ok(plan.actionFrequencies.call > 0.99);
+  assert.ok(plan.actionFrequencies.fold < 0.01);
+  assert.equal(plan.actionFrequencies.raise, 0);
+});
+
+test("counts an all-in bettor's unmatched wager in the decision effective stack", () => {
+  assert.equal(pokerEffectiveStackAtDecision(700, 0, [{ stack: 0, bet: 225 }]), 225);
+  assert.equal(pokerEffectiveStackAtDecision(700, 100, [{ stack: 0, bet: 225 }]), 125);
+  assert.equal(pokerEffectiveStackAtDecision(700, 0, [
+    { stack: 0, bet: 225 },
+    { stack: 500, bet: 225 },
+  ]), 700);
+});
+
+test("excludes an oversized all-in wager the short caller cannot win", () => {
+  const decisionPot = pokerContestablePotAtDecision(
+    0,
+    50,
+    100,
+    1_000,
+    [
+      { id: 0, contributed: 50, folded: false },
+      { id: 1, contributed: 1_050, folded: false },
+    ],
+  );
+
+  assert.deepEqual(decisionPot, {
+    callCost: 100,
+    currentPot: 200,
+    finalPot: 300,
+    layers: [{ amount: 300, opponentIds: [1] }],
+  });
+
+  const plan = evaluatePokerPolicy({
+    ...baseSpot,
+    equity: 0.2,
+    pot: decisionPot.currentPot,
+    toCall: 1_000,
+    playerStack: 100,
+    effectiveStackBb: 10,
+    opponentsCanRespond: false,
+    callEndsHand: true,
+  });
+  assert.ok(Math.abs(plan.realizationThreshold - 1 / 3) < 1e-12);
+  assert.ok(plan.actionFrequencies.fold > 0.99);
+  assert.ok(plan.actionFrequencies.call < 0.01);
+});
+
+test("splits a terminal decision into the opponent sets eligible for each side-pot layer", () => {
+  const decisionPot = pokerContestablePotAtDecision(
+    0,
+    50,
+    200,
+    150,
+    [
+      { id: 0, contributed: 50, folded: false },
+      { id: 1, contributed: 200, folded: false },
+      { id: 2, contributed: 80, folded: false },
+      { id: 3, contributed: 300, folded: true },
+    ],
+  );
+
+  assert.equal(decisionPot.callCost, 150);
+  assert.equal(decisionPot.currentPot, 530);
+  assert.equal(decisionPot.finalPot, 680);
+  assert.deepEqual(decisionPot.layers, [
+    { amount: 320, opponentIds: [1, 2] },
+    { amount: 360, opponentIds: [1] },
+  ]);
+});
+
+test("uses direct chip EV when calling puts the player all-in even if opponents retain chips", () => {
+  const plan = evaluatePokerPolicy({
+    ...baseSpot,
+    equity: 0.36,
+    handStrength: 0.28,
+    draw: 0.08,
+    pot: 200,
+    toCall: 1_000,
+    playerStack: 100,
+    highestBet: 1_000,
+    effectiveStackBb: 10,
+    opponentsCanRespond: true,
+    callEndsHand: true,
+    raiseLocked: false,
+    boardWetness: 0.9,
+  });
+
+  assert.ok(Math.abs(plan.realizationThreshold - 1 / 3) < 1e-12);
+  assert.ok(plan.actionFrequencies.call > plan.actionFrequencies.fold);
+  assert.equal(plan.actionFrequencies.raise, 0);
+});
+
+test("closes an all-in caller's layers only after every funded opponent reaches them", () => {
+  const hero = { id: 0, contributed: 100, folded: false, stack: 100 };
+  const bettor = { id: 1, contributed: 1_000, folded: false, stack: 500 };
+  const trailingPlayer = { id: 2, contributed: 100, folded: false, stack: 900 };
+
+  assert.equal(pokerCallClosesContestableLayers(
+    hero.id,
+    hero.contributed,
+    hero.stack,
+    900,
+    [hero, bettor],
+  ), true);
+  assert.equal(pokerCallClosesContestableLayers(
+    hero.id,
+    hero.contributed,
+    hero.stack,
+    900,
+    [hero, bettor, trailingPlayer],
+  ), false);
+  assert.equal(pokerCallClosesContestableLayers(
+    hero.id,
+    hero.contributed,
+    hero.stack,
+    900,
+    [hero, bettor, { ...trailingPlayer, contributed: 200 }],
+  ), true);
+  assert.equal(pokerCallClosesContestableLayers(
+    hero.id,
+    hero.contributed,
+    hero.stack,
+    900,
+    [hero, bettor, { ...trailingPlayer, stack: 0 }],
+  ), true);
+});
+
+test("uses chip-EV rather than opening ranges when a preflop call closes the hand", () => {
+  const plan = evaluatePokerPolicy({
+    ...baseSpot,
+    street: "preflop",
+    equity: 0.44,
+    handStrength: 0.2,
+    preflopPercentile: 0.15,
+    pot: 840,
+    toCall: 225,
+    highestBet: 225,
+    playerStack: 700,
+    effectiveStackBb: 22.5,
+    opponentsCanRespond: false,
+    callEndsHand: true,
+  });
+
+  assert.ok(Math.abs(plan.realizationThreshold - 225 / 1_065) < 1e-12);
+  assert.ok(plan.actionFrequencies.call > 0.99);
+  assert.equal(plan.actionFrequencies.raise, 0);
+});
+
+test("uses direct showdown price but keeps a legal river value-raise branch", () => {
+  const plan = evaluatePokerPolicy({
+    ...baseSpot,
+    street: "river",
+    equity: 0.86,
+    handStrength: 0.9,
+    draw: 0,
+    pot: 840,
+    toCall: 225,
+    highestBet: 225,
+    playerStack: 700,
+    effectiveStackBb: 70,
+    opponentsCanRespond: true,
+    callEndsHand: true,
+  });
+
+  assert.ok(Math.abs(plan.realizationThreshold - 225 / 1_065) < 1e-12);
+  assert.ok(plan.actionFrequencies.raise > 0);
+  assert.ok(plan.actionFrequencies.call + plan.actionFrequencies.raise > 0.99);
 });
 
 test("categorical sampling matches the published postflop frequencies", () => {
