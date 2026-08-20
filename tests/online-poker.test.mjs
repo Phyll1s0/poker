@@ -1052,6 +1052,110 @@ test("a completed heads-up tournament clears its phase clock instead of retrying
   assert.equal(projectRoomState(completed, actors[0].accountId).hand.nextHandAt, null);
 });
 
+test("only the owner can end a session and a queued finish waits for show or muck", () => {
+  const { room: started, options } = startRoom(2, {
+    roomOptions: { tableMode: "cash" },
+  });
+  rejected(command(started, actors[1], { type: "finish" }, options), "NOT_ROOM_OWNER");
+
+  const finishPayload = {
+    type: "finish",
+    commandId: "finish-current-hand-once",
+    expectedRevision: started.revision,
+  };
+  let room = accepted(applyOnlinePokerCommand(started, actors[0], finishPayload, options));
+  assert.equal(room.phase, "playing");
+  assert.equal(projectRoomState(room, actors[1].accountId).finishRequested, true);
+
+  const duplicate = applyOnlinePokerCommand(room, actors[0], finishPayload, options);
+  assert.equal(duplicate.ok, true);
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(duplicate.state.revision, room.revision);
+
+  room = accepted(act(room, actors[0], "fold", options));
+  assert.equal(room.phase, "showdown", "uncontested winner still gets the normal show or muck choice");
+  assert.equal(projectRoomState(room, actors[0].accountId).sessionReport, null);
+
+  room = accepted(command(room, actors[1], {
+    type: "show",
+    handId: room.hand.id,
+    show: false,
+  }, options));
+  assert.equal(room.phase, "finished");
+  assert.equal(room.hand.nextHandAt, null);
+
+  const ownerView = projectRoomState(room, actors[0].accountId);
+  const guestView = projectRoomState(room, actors[1].accountId);
+  assert.deepEqual(ownerView.sessionReport, guestView.sessionReport, "every member receives the same frozen public report");
+  assert.equal(ownerView.sessionReport.handsCompleted, 1);
+  assert.equal(ownerView.sessionReport.players.reduce((sum, player) => sum + player.netChips, 0), 0);
+  assert.deepEqual(ownerView.sessionReport.players.map((player) => player.netChips).sort((a, b) => a - b), [-5, 5]);
+  assert.doesNotMatch(JSON.stringify(ownerView.sessionReport), /user-[0-9]/, "authentication identities remain private");
+  rejected(command(room, actors[0], { type: "ready", ready: true }, options), "WRONG_PHASE");
+});
+
+test("session report counts voluntary preflop money and postflop aggression from real actions", () => {
+  const { room: started, options } = startRoom(2, {
+    roomOptions: { tableMode: "cash" },
+  });
+  let room = accepted(act(started, actors[0], "call", options));
+  room = accepted(act(room, actors[1], "check", options));
+  assert.equal(room.hand.street, "flop");
+  room = accepted(act(room, actors[1], "check", options));
+  room = accepted(act(room, actors[0], "raise", options, 20));
+  room = accepted(act(room, actors[1], "fold", options));
+  room = accepted(command(room, actors[0], {
+    type: "show",
+    handId: room.hand.id,
+    show: true,
+  }, options));
+  room = accepted(command(room, actors[0], { type: "finish" }, options));
+
+  const report = projectRoomState(room, actors[0].accountId).sessionReport;
+  const button = report.players.find((player) => player.seat === 0);
+  const bigBlind = report.players.find((player) => player.seat === 1);
+  assert.equal(button.handsDealt, 1);
+  assert.equal(button.vpipPercent, 100, "calling beyond the small blind counts as VPIP");
+  assert.equal(button.pfrPercent, 0);
+  assert.equal(button.aggressionFrequencyPercent, 100, "the flop bet is a postflop aggressive action");
+  assert.equal(button.voluntaryShows, 1);
+  assert.equal(bigBlind.vpipPercent, 0, "posting and checking the big blind is not VPIP");
+  assert.equal(bigBlind.checkActions, 2);
+  assert.equal(bigBlind.foldActions, 1);
+  assert.equal(bigBlind.aggressionFrequencyPercent, 0);
+  assert.ok(report.players.every((player) => player.sampleSize === "insufficient"));
+  assert.ok(report.players.every((player) => player.insights.some((insight) => insight.includes("样本不足"))));
+});
+
+test("owner can restart a finished room without changing its members or invitation state", () => {
+  const { room: started, options } = startRoom(2, {
+    roomOptions: {
+      tableMode: "cash",
+      startingStack: 2_000,
+      initialTimeBankMs: 100_000,
+    },
+  });
+  let room = accepted(command(started, actors[0], { type: "finish" }, options));
+  assert.equal(room.phase, "playing", "finishing during a live hand is queued");
+  room = accepted(act(room, actors[0], "fold", options));
+  room = accepted(command(room, actors[1], { type: "show", handId: room.hand.id, show: false }, options));
+  assert.equal(room.phase, "finished");
+
+  rejected(command(room, actors[1], { type: "restart" }, options), "NOT_ROOM_OWNER");
+  const roomId = room.roomId;
+  const members = room.seats.map((seat) => seat.accountId);
+  room = accepted(command(room, actors[0], { type: "restart" }, options));
+  assert.equal(room.phase, "lobby");
+  assert.equal(room.roomId, roomId);
+  assert.equal(room.hand, null);
+  assert.deepEqual(room.seats.map((seat) => seat.accountId), members);
+  assert.deepEqual(room.seats.map((seat) => seat.stack), [2_000, 2_000]);
+  assert.deepEqual(room.seats.map((seat) => seat.timeBankMs), [100_000, 100_000]);
+  assert.ok(room.seats.every((seat) => seat.ready === false));
+  assert.equal(room.session.handsCompleted, 0);
+  assert.equal(projectRoomState(room, actors[0].accountId).sessionReport, null);
+});
+
 test("viewer projection exposes only their own or explicitly shown hole cards", () => {
   const { room } = startRoom(3);
   assert.ok(room.hand);

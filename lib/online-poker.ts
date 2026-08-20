@@ -23,7 +23,7 @@ export type OnlineCard = {
 };
 export type OnlineStreet = "preflop" | "flop" | "turn" | "river";
 export type OnlineActionKind = "fold" | "check" | "call" | "raise";
-export type OnlineRoomPhase = "lobby" | "playing" | "showdown" | "between_hands" | "closed";
+export type OnlineRoomPhase = "lobby" | "playing" | "showdown" | "between_hands" | "finished" | "closed";
 export type OnlineTableMode = "cash" | "tournament";
 
 export type OnlineActor = {
@@ -59,6 +59,13 @@ export type OnlineHandPlayerState = {
   actedAtBet: number;
   raiseLocked: boolean;
   shown: boolean;
+  /** Stack immediately before this hand posts blinds; authoritative for per-hand net. */
+  stackAtHandStart: number;
+  /** Per-hand flags keep frequency denominators idempotent across repeated actions. */
+  voluntaryPutMoney: boolean;
+  preflopRaised: boolean;
+  sawFlop: boolean;
+  wentAllIn: boolean;
 };
 
 type OnlineFullRaiseRecord = {
@@ -121,6 +128,50 @@ export type OnlineCommandReceipt = {
   resultRevision: number;
 };
 
+export type OnlineSessionPlayerStats = {
+  accountId: string;
+  displayName: string;
+  seat: number;
+  buyInTotal: number;
+  rebuyCount: number;
+  finalStack: number;
+  left: boolean;
+  handsDealt: number;
+  handsWon: number;
+  netChips: number;
+  vpipHands: number;
+  pfrHands: number;
+  sawFlopHands: number;
+  showdownHands: number;
+  showdownWins: number;
+  uncontestedWins: number;
+  decisions: number;
+  timeoutActions: number;
+  foldActions: number;
+  checkActions: number;
+  callActions: number;
+  raiseActions: number;
+  postflopBetActions: number;
+  postflopRaiseActions: number;
+  postflopCallActions: number;
+  postflopCheckActions: number;
+  allInHands: number;
+  voluntaryShows: number;
+  biggestWin: number;
+  /** Positive magnitude of the largest single-hand loss. */
+  biggestLoss: number;
+};
+
+export type OnlineSessionState = {
+  startedAt: number | null;
+  finishedAt: number | null;
+  finishRequestedByAccountId: string | null;
+  handsCompleted: number;
+  totalPotAwarded: number;
+  lastCompletedHandId: string | null;
+  players: OnlineSessionPlayerStats[];
+};
+
 export type OnlineRoomState = {
   roomId: string;
   ownerAccountId: string;
@@ -136,6 +187,7 @@ export type OnlineRoomState = {
   seats: OnlineSeatState[];
   hand: OnlineHandState | null;
   lastDealerSeat: number | null;
+  session: OnlineSessionState;
   processedCommands: OnlineCommandReceipt[];
 };
 
@@ -148,6 +200,8 @@ export type OnlinePokerCommand =
   | (CommandBase & { type: "join" })
   | (CommandBase & { type: "ready"; ready: boolean })
   | (CommandBase & { type: "start" })
+  | (CommandBase & { type: "finish" })
+  | (CommandBase & { type: "restart" })
   | (CommandBase & { type: "use-time-bank"; handId: string })
   | (CommandBase & { type: "timeout"; handId: string })
   | (CommandBase & {
@@ -266,6 +320,53 @@ export type OnlinePublicHand = {
   nextHandAt: number | null;
 };
 
+export type OnlineSessionSampleSize = "insufficient" | "developing" | "meaningful";
+
+export type OnlinePublicSessionPlayerReport = {
+  rank: number;
+  seat: number;
+  displayName: string;
+  finalStack: number;
+  buyInTotal: number;
+  rebuyCount: number;
+  left: boolean;
+  handsDealt: number;
+  handsWon: number;
+  netChips: number;
+  netBigBlinds: number;
+  bbPer100: number;
+  vpipPercent: number;
+  pfrPercent: number;
+  sawFlopPercent: number;
+  aggressionFrequencyPercent: number;
+  aggressionFactor: number | null;
+  wentToShowdownPercent: number;
+  wonAtShowdownPercent: number | null;
+  allInHands: number;
+  timeoutPercent: number;
+  voluntaryShows: number;
+  biggestWin: number;
+  biggestLoss: number;
+  decisions: number;
+  foldActions: number;
+  checkActions: number;
+  callActions: number;
+  raiseActions: number;
+  sampleSize: OnlineSessionSampleSize;
+  styleTags: string[];
+  insights: string[];
+};
+
+export type OnlinePublicSessionReport = {
+  startedAt: number | null;
+  finishedAt: number;
+  durationMs: number;
+  handsCompleted: number;
+  totalPotAwarded: number;
+  bigBlind: number;
+  players: OnlinePublicSessionPlayerReport[];
+};
+
 export type OnlinePublicRoomState = {
   roomId: string;
   ownerSeat: number | null;
@@ -283,6 +384,8 @@ export type OnlinePublicRoomState = {
   seats: OnlinePublicSeat[];
   hand: OnlinePublicHand | null;
   legalActions: OnlineLegalActions | null;
+  finishRequested: boolean;
+  sessionReport: OnlinePublicSessionReport | null;
 };
 
 const SUITS = ["♠", "♥", "♦", "♣"] as const;
@@ -369,6 +472,78 @@ function cloneCard(card: OnlineCard): OnlineCard {
   return { rank: card.rank, suit: card.suit };
 }
 
+function emptyOnlineSession(): OnlineSessionState {
+  return {
+    startedAt: null,
+    finishedAt: null,
+    finishRequestedByAccountId: null,
+    handsCompleted: 0,
+    totalPotAwarded: 0,
+    lastCompletedHandId: null,
+    players: [],
+  };
+}
+
+function makeSessionPlayer(seat: OnlineSeatState, buyInTotal: number): OnlineSessionPlayerStats {
+  return {
+    accountId: seat.accountId,
+    displayName: seat.displayName,
+    seat: seat.seat,
+    buyInTotal,
+    rebuyCount: 0,
+    finalStack: seat.stack,
+    left: false,
+    handsDealt: 0,
+    handsWon: 0,
+    netChips: 0,
+    vpipHands: 0,
+    pfrHands: 0,
+    sawFlopHands: 0,
+    showdownHands: 0,
+    showdownWins: 0,
+    uncontestedWins: 0,
+    decisions: 0,
+    timeoutActions: 0,
+    foldActions: 0,
+    checkActions: 0,
+    callActions: 0,
+    raiseActions: 0,
+    postflopBetActions: 0,
+    postflopRaiseActions: 0,
+    postflopCallActions: 0,
+    postflopCheckActions: 0,
+    allInHands: 0,
+    voluntaryShows: 0,
+    biggestWin: 0,
+    biggestLoss: 0,
+  };
+}
+
+function ensureSessionPlayer(
+  room: OnlineRoomState,
+  seat: OnlineSeatState,
+  initialBuyIn = room.startingStack,
+): OnlineSessionPlayerStats {
+  let stats = room.session.players.find((player) => player.accountId === seat.accountId);
+  if (!stats) {
+    stats = makeSessionPlayer(seat, Math.max(0, initialBuyIn));
+    room.session.players.push(stats);
+  }
+  stats.displayName = seat.displayName;
+  stats.seat = seat.seat;
+  stats.finalStack = seat.stack;
+  stats.left = seat.pendingLeave;
+  return stats;
+}
+
+function nonNegativeInteger(value: unknown, fallback = 0): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : fallback;
+}
+
+function finiteTimestamp(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+}
+
 function cloneRoom(room: OnlineRoomState): OnlineRoomState {
   return {
     ...room,
@@ -396,6 +571,14 @@ function cloneRoom(room: OnlineRoomState): OnlineRoomState {
             : null,
         }
       : null,
+    session: room.session
+      ? {
+          ...room.session,
+          players: Array.isArray(room.session.players)
+            ? room.session.players.map((player) => ({ ...player }))
+            : [],
+        }
+      : emptyOnlineSession(),
     processedCommands: room.processedCommands.map((receipt) => ({ ...receipt })),
   };
 }
@@ -426,6 +609,9 @@ function integerInRange(value: number, minimum: number, maximum: number, label: 
 }
 
 function normalizeStoredRoom(room: OnlineRoomState): void {
+  const bootstrapActiveLegacyHand = !room.session
+    || !Array.isArray(room.session.players)
+    || room.session.players.length === 0;
   room.tableMode = room.tableMode === "cash" ? "cash" : "tournament";
   if (!Number.isInteger(room.actionTimeMs) || room.actionTimeMs < ONLINE_MIN_ACTION_TIME_MS || room.actionTimeMs > ONLINE_MAX_ACTION_TIME_MS) {
     room.actionTimeMs = ONLINE_DEFAULT_ACTION_TIME_MS;
@@ -439,6 +625,59 @@ function normalizeStoredRoom(room: OnlineRoomState): void {
     }
     seat.pendingLeave = seat.pendingLeave === true;
   });
+  if (!room.session || !Array.isArray(room.session.players)) {
+    room.session = emptyOnlineSession();
+  }
+  room.session.startedAt = finiteTimestamp(room.session.startedAt);
+  room.session.finishedAt = finiteTimestamp(room.session.finishedAt);
+  room.session.finishRequestedByAccountId = typeof room.session.finishRequestedByAccountId === "string"
+    && room.session.finishRequestedByAccountId.trim()
+    ? room.session.finishRequestedByAccountId
+    : null;
+  room.session.handsCompleted = nonNegativeInteger(room.session.handsCompleted);
+  room.session.totalPotAwarded = nonNegativeInteger(room.session.totalPotAwarded);
+  room.session.lastCompletedHandId = typeof room.session.lastCompletedHandId === "string"
+    && room.session.lastCompletedHandId.trim()
+    ? room.session.lastCompletedHandId
+    : null;
+  room.session.players = room.session.players.filter((stats) => (
+    stats
+    && typeof stats.accountId === "string"
+    && stats.accountId.trim()
+    && Number.isInteger(stats.seat)
+  )).map((stats) => {
+    const liveSeat = room.seats.find((seat) => seat.accountId === stats.accountId);
+    const normalized = makeSessionPlayer(liveSeat ?? {
+      seat: stats.seat,
+      accountId: stats.accountId,
+      displayName: typeof stats.displayName === "string" && stats.displayName.trim()
+        ? stats.displayName
+        : `座位 ${stats.seat + 1}`,
+      stack: nonNegativeInteger(stats.finalStack),
+      ready: false,
+      timeBankMs: room.initialTimeBankMs,
+      connected: false,
+      disconnectedAt: null,
+      pendingLeave: true,
+    }, nonNegativeInteger(stats.buyInTotal, room.startingStack));
+    const counterKeys: (keyof OnlineSessionPlayerStats)[] = [
+      "buyInTotal", "rebuyCount", "finalStack", "handsDealt", "handsWon", "vpipHands", "pfrHands",
+      "sawFlopHands", "showdownHands", "showdownWins", "uncontestedWins", "decisions", "timeoutActions",
+      "foldActions", "checkActions", "callActions", "raiseActions", "postflopBetActions",
+      "postflopRaiseActions", "postflopCallActions", "postflopCheckActions", "allInHands",
+      "voluntaryShows", "biggestWin", "biggestLoss",
+    ];
+    counterKeys.forEach((key) => {
+      const value = stats[key];
+      if (typeof value === "number") (normalized[key] as number) = nonNegativeInteger(value);
+    });
+    normalized.netChips = typeof stats.netChips === "number" && Number.isInteger(stats.netChips)
+      ? stats.netChips
+      : 0;
+    normalized.left = liveSeat ? liveSeat.pendingLeave : stats.left === true;
+    return normalized;
+  });
+  room.seats.forEach((seat) => ensureSessionPlayer(room, seat));
   room.hand?.players.forEach((player) => {
     if (typeof player.displayName !== "string" || !player.displayName.trim()) {
       player.displayName = room.seats.find((seat) => seat.seat === player.seat)?.displayName ?? `座位 ${player.seat + 1}`;
@@ -446,7 +685,31 @@ function normalizeStoredRoom(room: OnlineRoomState): void {
     if (typeof player.hasTakenAction !== "boolean") {
       player.hasTakenAction = player.hasActed || player.actedAtBet > 0;
     }
+    const liveSeat = room.seats.find((seat) => seat.seat === player.seat);
+    if (!Number.isInteger(player.stackAtHandStart) || player.stackAtHandStart < 0) {
+      // Active legacy hands can recover their starting stack exactly because
+      // contributed excludes chips already returned. Completed legacy hands
+      // deliberately start at the final stack so no historical result is invented.
+      player.stackAtHandStart = room.hand?.result
+        ? (liveSeat?.stack ?? 0)
+        : (liveSeat?.stack ?? 0) + nonNegativeInteger(player.contributed);
+    }
+    player.voluntaryPutMoney = player.voluntaryPutMoney === true;
+    player.preflopRaised = player.preflopRaised === true;
+    player.sawFlop = player.sawFlop === true;
+    player.wentAllIn = player.wentAllIn === true;
   });
+  if (bootstrapActiveLegacyHand && room.hand && !room.hand.result) {
+    room.hand.players.forEach((player) => {
+      const stats = sessionStatsForHandPlayer(room, player);
+      if (!stats) return;
+      stats.handsDealt = Math.max(1, stats.handsDealt);
+      if (room.hand && room.hand.community.length >= 3 && !player.folded) {
+        player.sawFlop = true;
+        stats.sawFlopHands = Math.max(1, stats.sawFlopHands);
+      }
+    });
+  }
   if (room.hand) {
     room.hand.fullRaiseHistory = Array.isArray(room.hand.fullRaiseHistory)
       ? room.hand.fullRaiseHistory.filter((record) => (
@@ -575,6 +838,7 @@ export function createOnlineRoom(options: {
     }],
     hand: null,
     lastDealerSeat: null,
+    session: emptyOnlineSession(),
     processedCommands: [],
   };
 }
@@ -618,10 +882,110 @@ function takeCard(deck: OnlineCard[]): OnlineCard {
   return card;
 }
 
+function sessionStatsForHandPlayer(
+  room: OnlineRoomState,
+  player: OnlineHandPlayerState,
+): OnlineSessionPlayerStats | null {
+  const seat = seatByNumber(room, player.seat);
+  if (seat) return ensureSessionPlayer(room, seat, player.stackAtHandStart);
+  return room.session.players.find((stats) => stats.accountId === player.accountId) ?? null;
+}
+
+function markPlayerAllIn(room: OnlineRoomState, player: OnlineHandPlayerState): void {
+  if (player.wentAllIn || (seatByNumber(room, player.seat)?.stack ?? 0) > 0) return;
+  player.wentAllIn = true;
+  const stats = sessionStatsForHandPlayer(room, player);
+  if (stats) stats.allInHands += 1;
+}
+
+function markPlayersSawFlop(room: OnlineRoomState, hand: OnlineHandState): void {
+  hand.players.forEach((player) => {
+    if (player.folded || player.sawFlop) return;
+    player.sawFlop = true;
+    const stats = sessionStatsForHandPlayer(room, player);
+    if (stats) stats.sawFlopHands += 1;
+  });
+}
+
+function recordAcceptedAction(
+  room: OnlineRoomState,
+  hand: OnlineHandState,
+  player: OnlineHandPlayerState,
+  action: OnlineActionKind,
+  highestBetBefore: number,
+  timedOut: boolean,
+): void {
+  const stats = sessionStatsForHandPlayer(room, player);
+  if (!stats) return;
+  stats.decisions += 1;
+  if (timedOut) {
+    stats.timeoutActions += 1;
+  } else {
+    if (action === "fold") stats.foldActions += 1;
+    else if (action === "check") stats.checkActions += 1;
+    else if (action === "call") stats.callActions += 1;
+    else stats.raiseActions += 1;
+
+    if (hand.street !== "preflop") {
+      if (action === "check") stats.postflopCheckActions += 1;
+      else if (action === "call") stats.postflopCallActions += 1;
+      else if (action === "raise") {
+        if (highestBetBefore === 0) stats.postflopBetActions += 1;
+        else stats.postflopRaiseActions += 1;
+      }
+    }
+  }
+
+  if (hand.street === "preflop" && (action === "call" || action === "raise") && !player.voluntaryPutMoney) {
+    player.voluntaryPutMoney = true;
+    stats.vpipHands += 1;
+  }
+  if (hand.street === "preflop" && action === "raise" && !player.preflopRaised) {
+    player.preflopRaised = true;
+    stats.pfrHands += 1;
+  }
+  markPlayerAllIn(room, player);
+}
+
+function recordCompletedHand(room: OnlineRoomState, hand: OnlineHandState): void {
+  if (!hand.result || room.session.lastCompletedHandId === hand.id) return;
+  const payoutBySeat = new Map(hand.result.payouts.map((entry) => [entry.seat, entry.amount]));
+  hand.players.forEach((player) => {
+    const stats = sessionStatsForHandPlayer(room, player);
+    if (!stats) return;
+    const finalStack = seatByNumber(room, player.seat)?.stack ?? stats.finalStack;
+    const net = finalStack - player.stackAtHandStart;
+    const wonPot = (payoutBySeat.get(player.seat) ?? 0) > 0;
+    stats.finalStack = finalStack;
+    stats.netChips += net;
+    stats.biggestWin = Math.max(stats.biggestWin, net);
+    stats.biggestLoss = Math.max(stats.biggestLoss, -net);
+    if (wonPot) stats.handsWon += 1;
+    if (hand.result?.kind === "showdown" && !player.folded) {
+      stats.showdownHands += 1;
+      if (wonPot) stats.showdownWins += 1;
+    } else if (hand.result?.kind === "uncontested" && wonPot) {
+      stats.uncontestedWins += 1;
+    }
+  });
+  room.session.handsCompleted += 1;
+  room.session.totalPotAwarded += hand.result.totalPot;
+  room.session.lastCompletedHandId = hand.id;
+}
+
 function beginHand(room: OnlineRoomState, options: OnlineEngineOptions): void {
+  const handStartedAt = engineNow(options);
+  if (room.session.startedAt === null) room.session.startedAt = handStartedAt;
+  room.seats.forEach((seat) => ensureSessionPlayer(room, seat));
   if (room.tableMode === "cash" && room.hand) {
     room.seats.forEach((seat) => {
-      if (seat.stack <= 0) seat.stack = room.startingStack;
+      if (seat.stack <= 0) {
+        seat.stack = room.startingStack;
+        const stats = ensureSessionPlayer(room, seat);
+        stats.buyInTotal += room.startingStack;
+        stats.rebuyCount += 1;
+        stats.finalStack = seat.stack;
+      }
     });
   }
   const occupied = room.seats
@@ -661,6 +1025,9 @@ function beginHand(room: OnlineRoomState, options: OnlineEngineOptions): void {
   const players: OnlineHandPlayerState[] = occupied.map((seat) => {
     const cards = holes.get(seat.seat);
     if (!cards || cards.length !== 2) throw new Error("发牌失败");
+    const stats = ensureSessionPlayer(room, seat);
+    stats.handsDealt += 1;
+    stats.finalStack = seat.stack;
     return {
       seat: seat.seat,
       accountId: seat.accountId,
@@ -674,6 +1041,11 @@ function beginHand(room: OnlineRoomState, options: OnlineEngineOptions): void {
       actedAtBet: 0,
       raiseLocked: false,
       shown: false,
+      stackAtHandStart: seat.stack,
+      voluntaryPutMoney: false,
+      preflopRaised: false,
+      sawFlop: false,
+      wentAllIn: false,
     };
   });
 
@@ -688,6 +1060,7 @@ function beginHand(room: OnlineRoomState, options: OnlineEngineOptions): void {
   };
   postBlind(smallBlindSeat, room.smallBlind);
   postBlind(bigBlindSeat, room.bigBlind);
+  players.forEach((player) => markPlayerAllIn(room, player));
 
   const actorsAfterBlinds = players
     .filter((player) => (seatByNumber(room, player.seat)?.stack ?? 0) > 0)
@@ -699,7 +1072,7 @@ function beginHand(room: OnlineRoomState, options: OnlineEngineOptions): void {
   const openingHighestBet = actorsAfterBlinds.length >= 2
     ? Math.max(postedHighestBet, room.bigBlind)
     : postedHighestBet;
-  const actionStartedAt = currentSeat === null ? null : engineNow(options);
+  const actionStartedAt = currentSeat === null ? null : handStartedAt;
   room.hand = {
     id: (options.makeHandId ?? defaultHandId)(),
     number: (room.hand?.number ?? 0) + 1,
@@ -736,6 +1109,7 @@ function beginHand(room: OnlineRoomState, options: OnlineEngineOptions): void {
   )) {
     while (room.hand.community.length < 5) room.hand.community.push(takeCard(room.hand.deck));
     room.hand.street = "river";
+    markPlayersSawFlop(room, room.hand);
     settleShowdown(room, room.hand);
   }
 }
@@ -901,6 +1275,7 @@ function settleShowdown(room: OnlineRoomState, hand: OnlineHandState) {
     returns: payoutEntries(returns),
     handNames: [...handNames].map(([seat, name]) => ({ seat, name })),
   };
+  recordCompletedHand(room, hand);
   hand.pendingShowSeat = null;
   room.seats.forEach((seat) => { seat.ready = false; });
   room.phase = "between_hands";
@@ -959,6 +1334,7 @@ function awardUncontested(room: OnlineRoomState, hand: OnlineHandState, winnerSe
     returns: payoutEntries(returns),
     handNames: [],
   };
+  recordCompletedHand(room, hand);
   hand.pendingShowSeat = winnerSeat;
   room.seats.forEach((seat) => { seat.ready = false; });
   room.phase = "showdown";
@@ -973,6 +1349,7 @@ function dealNextStreet(room: OnlineRoomState, hand: OnlineHandState) {
   if (hand.street === "preflop") {
     hand.community.push(takeCard(hand.deck), takeCard(hand.deck), takeCard(hand.deck));
     hand.street = "flop";
+    markPlayersSawFlop(room, hand);
   } else if (hand.street === "flop") {
     hand.community.push(takeCard(hand.deck));
     hand.street = "turn";
@@ -1094,6 +1471,7 @@ function applyAction(
   room: OnlineRoomState,
   accountId: string,
   command: Extract<OnlinePokerCommand, { type: "act" }>,
+  timedOut = false,
 ): OnlinePokerError | null {
   const hand = room.hand;
   if (room.phase !== "playing" || !hand) {
@@ -1113,6 +1491,7 @@ function applyAction(
   }
   const betToMatch = betToMatchForActor(room, hand, seat.seat);
   const toCall = Math.max(0, betToMatch - player.bet);
+  const highestBetBefore = hand.highestBet;
 
   if (command.action === "fold") {
     markPlayerFolded(hand, player, betToMatch);
@@ -1183,6 +1562,7 @@ function applyAction(
     });
   }
 
+  recordAcceptedAction(room, hand, player, command.action, highestBetBefore, timedOut);
   finishAction(room, hand, seat.seat);
   return null;
 }
@@ -1217,6 +1597,47 @@ function resolveDepartingShowChoice(room: OnlineRoomState): void {
   room.phase = "between_hands";
 }
 
+function finishOnlineSession(room: OnlineRoomState, now: number): void {
+  if (room.phase === "finished") return;
+  if (room.session.startedAt === null) room.session.startedAt = now;
+  room.session.finishedAt = now;
+  room.session.finishRequestedByAccountId = null;
+  room.seats.forEach((seat) => {
+    const stats = ensureSessionPlayer(room, seat);
+    stats.finalStack = seat.stack;
+    stats.left = seat.pendingLeave;
+    seat.ready = false;
+  });
+  if (room.hand) {
+    room.hand.currentSeat = null;
+    room.hand.actionStartedAt = null;
+    room.hand.actionDeadlineAt = null;
+    room.hand.showDecisionDeadlineAt = null;
+    room.hand.nextHandAt = null;
+  }
+  room.phase = "finished";
+}
+
+function resolveFinishRequest(room: OnlineRoomState, now: number): void {
+  if (!room.session.finishRequestedByAccountId || room.phase === "finished" || room.phase === "closed") return;
+  if (room.phase === "playing") return;
+  if (room.phase === "showdown" && room.hand?.pendingShowSeat !== null) return;
+  finishOnlineSession(room, now);
+}
+
+function restartOnlineSession(room: OnlineRoomState): void {
+  room.phase = "lobby";
+  room.hand = null;
+  room.lastDealerSeat = null;
+  room.session = emptyOnlineSession();
+  room.seats.forEach((seat) => {
+    seat.stack = room.startingStack;
+    seat.ready = false;
+    seat.timeBankMs = room.initialTimeBankMs;
+    seat.pendingLeave = false;
+  });
+}
+
 function transferOwnerOrCloseAbandonedRoom(room: OnlineRoomState): void {
   const remaining = room.seats
     .filter((seat) => !seat.pendingLeave)
@@ -1248,7 +1669,7 @@ function finalizePendingLeaves(room: OnlineRoomState): void {
       .sort((left, right) => left.seat - right.seat)[0].accountId;
   }
 
-  if (room.seats.length < ONLINE_MIN_PLAYERS) {
+  if (room.phase !== "finished" && room.seats.length < ONLINE_MIN_PLAYERS) {
     room.phase = "lobby";
     // Keep a completed hand long enough for the remaining player to see its
     // result. A future join clears it before the lobby resumes.
@@ -1374,7 +1795,13 @@ function validateCommand(command: OnlinePokerCommand): string | null {
 }
 
 function commandFingerprint(command: OnlinePokerCommand) {
-  if (command.type === "join" || command.type === "start" || command.type === "leave") {
+  if (
+    command.type === "join"
+    || command.type === "start"
+    || command.type === "finish"
+    || command.type === "restart"
+    || command.type === "leave"
+  ) {
     return JSON.stringify([command.type, command.expectedRevision]);
   }
   if (command.type === "ready") {
@@ -1450,6 +1877,19 @@ export function applyOnlinePokerCommand(
     if (next.hand?.result) next.hand = null;
   } else if (!member) {
     return fail(room, "NOT_A_MEMBER", "你不在这个房间");
+  } else if (command.type === "finish") {
+    if (next.ownerAccountId !== actor.accountId) return fail(room, "NOT_ROOM_OWNER", "只有房主可以结束整局");
+    if (next.phase === "finished" || next.phase === "closed") {
+      return fail(room, "WRONG_PHASE", "本局已经结束");
+    }
+    next.session.finishRequestedByAccountId = actor.accountId;
+    if (next.phase === "lobby" || next.phase === "between_hands") {
+      finishOnlineSession(next, commandNow);
+    }
+  } else if (command.type === "restart") {
+    if (next.ownerAccountId !== actor.accountId) return fail(room, "NOT_ROOM_OWNER", "只有房主可以重新开局");
+    if (next.phase !== "finished") return fail(room, "WRONG_PHASE", "只能在整局结算后重新开局");
+    restartOnlineSession(next);
   } else if (command.type === "ready") {
     if (next.phase !== "lobby" && next.phase !== "between_hands") {
       return fail(room, "WRONG_PHASE", "当前不能改变准备状态");
@@ -1506,7 +1946,7 @@ export function applyOnlinePokerCommand(
         ...command,
         type: "act",
         action: timeoutAction,
-      });
+      }, true);
       if (timeoutError) return { ok: false, state: room, error: { ...timeoutError, revision: room.revision } };
     } else if (next.phase === "showdown" && hand.pendingShowSeat !== null) {
       if (!showDecisionExpired(next, commandNow)) {
@@ -1542,9 +1982,17 @@ export function applyOnlinePokerCommand(
     const player = playerBySeat(hand, member.seat);
     if (!player) return fail(room, "SHOW_NOT_ALLOWED", "找不到本手玩家");
     player.shown = command.show;
+    if (command.show) {
+      const stats = sessionStatsForHandPlayer(next, player);
+      if (stats) stats.voluntaryShows += 1;
+    }
     hand.pendingShowSeat = null;
     next.phase = "between_hands";
   } else if (command.type === "leave") {
+    if (next.phase !== "finished") {
+      const stats = ensureSessionPlayer(next, member);
+      stats.left = true;
+    }
     member.pendingLeave = true;
     member.ready = false;
     member.connected = false;
@@ -1554,6 +2002,7 @@ export function applyOnlinePokerCommand(
   }
 
   resolveDepartingShowChoice(next);
+  resolveFinishRequest(next, commandNow);
   finalizePendingLeaves(next);
   synchronizeTurnClock(next, previousTurnKey, commandNow);
   synchronizePhaseClocks(next, commandNow);
@@ -1583,6 +2032,144 @@ export function setOnlinePlayerConnection(
   nextMember.disconnectedAt = connected ? null : now;
   next.revision += 1;
   return next;
+}
+
+function rounded(value: number, digits = 1): number {
+  if (!Number.isFinite(value)) return 0;
+  const scale = 10 ** digits;
+  return Math.round(value * scale) / scale;
+}
+
+function percentage(numerator: number, denominator: number): number {
+  return denominator > 0 ? rounded((numerator / denominator) * 100) : 0;
+}
+
+function sessionSampleSize(hands: number): OnlineSessionSampleSize {
+  if (hands < 20) return "insufficient";
+  if (hands < 100) return "developing";
+  return "meaningful";
+}
+
+function playerStyleTags(
+  stats: OnlineSessionPlayerStats,
+  vpipPercent: number,
+  pfrPercent: number,
+  aggressionFrequencyPercent: number,
+  timeoutPercent: number,
+): string[] {
+  if (stats.handsDealt < 20) return ["样本积累中"];
+  const tags: string[] = [];
+  if (vpipPercent >= 32) tags.push("入池偏宽");
+  else if (vpipPercent <= 18) tags.push("入池偏紧");
+  else tags.push("入池相对均衡");
+  if (vpipPercent - pfrPercent >= 12) tags.push("跟注占比较高");
+  else if (pfrPercent >= vpipPercent - 5) tags.push("主动入池");
+  if (aggressionFrequencyPercent >= 50) tags.push("翻后积极");
+  else if (aggressionFrequencyPercent <= 25) tags.push("翻后克制");
+  else tags.push("翻后攻守均衡");
+  if (timeoutPercent >= 10) tags.push("时间管理待改善");
+  return tags;
+}
+
+function playerInsights(
+  stats: OnlineSessionPlayerStats,
+  vpipPercent: number,
+  pfrPercent: number,
+  aggressionFrequencyPercent: number,
+  wentToShowdownPercent: number,
+  timeoutPercent: number,
+  bigBlind: number,
+): string[] {
+  const netBb = bigBlind > 0 ? rounded(stats.netChips / bigBlind) : 0;
+  const insights = [`本局净收益 ${stats.netChips >= 0 ? "+" : ""}${stats.netChips}（${netBb >= 0 ? "+" : ""}${netBb} BB）。`];
+  if (stats.handsDealt < 20) {
+    insights.push(`目前只有 ${stats.handsDealt} 手，样本不足以判断稳定风格；频率仅描述本局实际行动。`);
+  } else if (stats.handsDealt < 100) {
+    insights.push(`当前 ${stats.handsDealt} 手属于发展中样本，短期牌运仍会显著影响结果。`);
+  } else {
+    insights.push(`已累计 ${stats.handsDealt} 手，可用于观察本局趋势，但仍不能替代逐手求解器分析。`);
+  }
+  insights.push(`翻牌前 VPIP ${vpipPercent}% / PFR ${pfrPercent}%；翻后主动行动频率 ${aggressionFrequencyPercent}%。`);
+  if (stats.sawFlopHands > 0) insights.push(`看到翻牌后有 ${wentToShowdownPercent}% 进入摊牌。`);
+  if (stats.timeoutActions > 0) insights.push(`共有 ${stats.timeoutActions} 次超时，占全部决策 ${timeoutPercent}%。`);
+  return insights;
+}
+
+function projectSessionReport(room: OnlineRoomState): OnlinePublicSessionReport | null {
+  const session = room.session;
+  if (room.phase !== "finished" || !session || session.finishedAt === null) return null;
+  const ranked = [...session.players].sort((left, right) => (
+    right.netChips - left.netChips
+    || right.finalStack - left.finalStack
+    || left.seat - right.seat
+  ));
+  return {
+    startedAt: session.startedAt,
+    finishedAt: session.finishedAt,
+    durationMs: session.startedAt === null ? 0 : Math.max(0, session.finishedAt - session.startedAt),
+    handsCompleted: session.handsCompleted,
+    totalPotAwarded: session.totalPotAwarded,
+    bigBlind: room.bigBlind,
+    players: ranked.map((stats, index): OnlinePublicSessionPlayerReport => {
+      const aggressiveActions = stats.postflopBetActions + stats.postflopRaiseActions;
+      const aggressionFrequencyDenominator = aggressiveActions
+        + stats.postflopCallActions
+        + stats.postflopCheckActions;
+      const vpipPercent = percentage(stats.vpipHands, stats.handsDealt);
+      const pfrPercent = percentage(stats.pfrHands, stats.handsDealt);
+      const aggressionFrequencyPercent = percentage(aggressiveActions, aggressionFrequencyDenominator);
+      const wentToShowdownPercent = percentage(stats.showdownHands, stats.sawFlopHands);
+      const timeoutPercent = percentage(stats.timeoutActions, stats.decisions);
+      return {
+        rank: index + 1,
+        seat: stats.seat,
+        displayName: stats.displayName,
+        finalStack: stats.finalStack,
+        buyInTotal: stats.buyInTotal,
+        rebuyCount: stats.rebuyCount,
+        left: stats.left,
+        handsDealt: stats.handsDealt,
+        handsWon: stats.handsWon,
+        netChips: stats.netChips,
+        netBigBlinds: room.bigBlind > 0 ? rounded(stats.netChips / room.bigBlind) : 0,
+        bbPer100: stats.handsDealt > 0 && room.bigBlind > 0
+          ? rounded((stats.netChips / room.bigBlind / stats.handsDealt) * 100)
+          : 0,
+        vpipPercent,
+        pfrPercent,
+        sawFlopPercent: percentage(stats.sawFlopHands, stats.handsDealt),
+        aggressionFrequencyPercent,
+        aggressionFactor: stats.postflopCallActions > 0
+          ? rounded(aggressiveActions / stats.postflopCallActions, 2)
+          : null,
+        wentToShowdownPercent,
+        wonAtShowdownPercent: stats.showdownHands > 0
+          ? percentage(stats.showdownWins, stats.showdownHands)
+          : null,
+        allInHands: stats.allInHands,
+        timeoutPercent,
+        voluntaryShows: stats.voluntaryShows,
+        biggestWin: stats.biggestWin,
+        biggestLoss: stats.biggestLoss,
+        decisions: stats.decisions,
+        foldActions: stats.foldActions,
+        checkActions: stats.checkActions,
+        callActions: stats.callActions,
+        raiseActions: stats.raiseActions,
+        sampleSize: sessionSampleSize(stats.handsDealt),
+        styleTags: playerStyleTags(stats, vpipPercent, pfrPercent, aggressionFrequencyPercent, timeoutPercent),
+        insights: playerInsights(
+          stats,
+          vpipPercent,
+          pfrPercent,
+          aggressionFrequencyPercent,
+          wentToShowdownPercent,
+          timeoutPercent,
+          room.bigBlind,
+        ),
+      };
+    }),
+  };
 }
 
 export function projectRoomState(room: OnlineRoomState, viewerAccountId: string | null): OnlinePublicRoomState {
@@ -1680,5 +2267,7 @@ export function projectRoomState(room: OnlineRoomState, viewerAccountId: string 
         }
       : null,
     legalActions: viewerAccountId === null ? null : legalOnlineActions(room, viewerAccountId),
+    finishRequested: room.phase !== "finished" && Boolean(room.session?.finishRequestedByAccountId),
+    sessionReport: projectSessionReport(room),
   };
 }

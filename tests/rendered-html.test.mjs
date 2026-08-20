@@ -201,6 +201,11 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /leavingRef\.current \|\| next\.room\.revision < latestRevision\.current/);
   assert.match(multiplayerClient, /leavingRef\.current = true/);
   assert.match(multiplayerClient, /已永久离开/);
+  assert.match(multiplayerClient, /type: "finish"/);
+  assert.match(multiplayerClient, /type: "restart"/);
+  assert.match(multiplayerClient, /所有人的本局分析/);
+  assert.match(multiplayerClient, /不虚构求解器 EV 损失或“GTO 准确率”/);
+  assert.match(multiplayerClient, /sessionReport/);
   assert.doesNotMatch(multiplayerClient, /const canLeave =/);
   assert.doesNotMatch(multiplayerClient, /!canLeave/);
   assert.doesNotMatch(multiplayerClient, /这是其他玩家唯一能看到的信息/);
@@ -212,6 +217,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerCss, /grid-template-columns: 150px minmax\(330px, 1fr\) 270px/);
   assert.match(multiplayerCss, /\.handTransition\s*\{[\s\S]*?grid-column: 1 \/ -1/);
   assert.match(multiplayerCss, /\.showDecisionPanel,[\s\S]*?\.nextHandWaitingPanel/);
+  assert.match(multiplayerCss, /\.sessionSummary\s*\{/);
+  assert.match(multiplayerCss, /\.summaryGrid\s*\{/);
   assert.match(staticMultiplayer, /supabase\.co\/functions\/v1\/poker-api/);
   assert.match(staticMultiplayer, /rangecraft\.multiplayer\.guest-token/);
   assert.match(staticMultiplayer, /signOutLabel="返回首页"/);
@@ -221,6 +228,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(edgeFunction, /raiseAllInOnly: table\.legalActions\.raise\?\.allInOnly \?\? false/);
   assert.match(edgeFunction, /result\.winnerDetails/);
   assert.match(edgeFunction, /type === "use-time-bank" \|\| type === "timeout"/);
+  assert.match(edgeFunction, /type === "finish"/);
+  assert.match(edgeFunction, /type === "restart"/);
   assert.match(page, /choosePokerPolicyAction/);
   assert.match(page, /policyPlan\.actionFrequencies/);
   assert.match(page, /resolvePokerDecisionStacks/);

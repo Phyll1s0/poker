@@ -9,7 +9,8 @@ import {
   type OnlineRoomState,
 } from "./online-poker.ts";
 
-export type GameRoomStatus = "lobby" | "playing" | "closed";
+export type GameRoomStatus = "lobby" | "playing" | "finished" | "closed";
+type StoredGameRoomStatus = Exclude<GameRoomStatus, "finished">;
 
 export type GameRoomSummary = {
   id: string;
@@ -91,7 +92,7 @@ type GameRoomRow = {
   name: string;
   join_code: string;
   owner_account_id: string;
-  status: GameRoomStatus;
+  status: StoredGameRoomStatus;
   max_players: number;
   revision: number;
   state_json: string | null;
@@ -149,7 +150,9 @@ export function parseMultiplayerCommand(payload: Record<string, unknown>): Parse
     }
     return { ...base, type, ready: payload.ready };
   }
-  if (type === "start" || type === "leave") return { ...base, type };
+  if (type === "start" || type === "finish" || type === "restart" || type === "leave") {
+    return { ...base, type };
+  }
 
   const handId = requiredString(payload.handId, "handId");
   if (type === "use-time-bank" || type === "timeout") return { ...base, type, handId };
@@ -263,7 +266,7 @@ function hydrateRoomState(row: GameRoomRow, members: GameMemberRow[]): OnlineRoo
   return state;
 }
 
-function stateStatus(state: OnlineRoomState): GameRoomStatus {
+function stateStatus(state: OnlineRoomState): StoredGameRoomStatus {
   if (state.phase === "lobby") return "lobby";
   if (state.phase === "closed") return "closed";
   return "playing";
@@ -433,14 +436,18 @@ export class MultiplayerGameService {
     const players = clientPlayers(table);
     const selfAccountId = table.viewerSeat === null ? "departed" : publicSeatId(table.viewerSeat);
     const publicOwnerId = table.ownerSeat === null ? "departed" : publicSeatId(table.ownerSeat);
-    return {
-      room: mapRoom({
+    const room = mapRoom({
         ...row,
         owner_account_id: publicOwnerId,
         status: stateStatus(state),
         revision: state.revision,
         member_count: state.seats.filter((seat) => !seat.pendingLeave).length,
-      }),
+      });
+    return {
+      room: {
+        ...room,
+        status: state.phase === "finished" ? "finished" : room.status,
+      },
       selfAccountId,
       table,
       players,

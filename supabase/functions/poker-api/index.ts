@@ -373,7 +373,7 @@ function roomSummary(row: RoomRow, memberCount: number, ownerAccountId = "privat
     name: row.name,
     joinCode: row.join_code,
     ownerAccountId,
-    status: row.status,
+    status: row.state?.phase === "finished" ? "finished" as const : row.status,
     maxPlayers: row.max_players,
     memberCount,
     revision: Number(row.revision),
@@ -456,7 +456,7 @@ function makeSnapshot(row: RoomRow, state: OnlineRoomState, guestId: string) {
 
   return {
     room: roomSummary(
-      { ...row, status: stateStatus(state), revision: state.revision },
+      { ...row, status: stateStatus(state), revision: state.revision, state },
       state.seats.filter((seat) => !seat.pendingLeave).length,
       publicOwnerId,
     ),
@@ -612,7 +612,9 @@ function parseCommand(payload: JsonObject): Exclude<OnlinePokerCommand, { type: 
     if (typeof payload.ready !== "boolean") throw new ApiError(400, "INVALID_COMMAND", "ready 必须是布尔值。");
     return { ...base, type, ready: payload.ready };
   }
-  if (type === "start" || type === "leave") return { ...base, type };
+  if (type === "start" || type === "finish" || type === "restart" || type === "leave") {
+    return { ...base, type };
+  }
   const handId = requiredString(payload.handId, "handId");
   if (type === "use-time-bank" || type === "timeout") return { ...base, type, handId };
   if (type === "show") {

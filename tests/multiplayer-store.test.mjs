@@ -378,6 +378,85 @@ test("D1 room state executes commands and never projects another player's hole c
   }
 });
 
+test("D1 persists one shared finished report and keeps the same room restartable", async () => {
+  const { sqlite, store } = await testStore();
+  try {
+    const owner = (await store.registerAccount("finish-owner", "结算房主")).account;
+    const guest = (await store.registerAccount("finish-guest", "结算来宾")).account;
+    const outsider = (await store.registerAccount("finish-outsider", "候补玩家")).account;
+    const room = await store.createRoom(owner.id, "整局结算桌", 3);
+    await store.joinRoom(guest.id, room.joinCode);
+    const service = new MultiplayerGameService(new SqliteD1Database(sqlite));
+
+    let ownerView = await service.getSnapshot(room.id, owner.id);
+    ownerView = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
+      type: "ready",
+      ready: true,
+      requestId: "finish-ready-owner",
+      expectedRevision: ownerView.room.revision,
+    }));
+    let guestView = await service.applyCommand(room.id, guest.id, parseMultiplayerCommand({
+      type: "ready",
+      ready: true,
+      requestId: "finish-ready-guest",
+      expectedRevision: ownerView.room.revision,
+    }));
+    ownerView = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
+      type: "start",
+      requestId: "finish-start-owner",
+      expectedRevision: guestView.room.revision,
+    }));
+    ownerView = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
+      type: "finish",
+      requestId: "finish-request-owner",
+      expectedRevision: ownerView.room.revision,
+    }));
+    assert.equal(ownerView.table.finishRequested, true);
+    ownerView = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
+      type: "act",
+      handId: ownerView.game.handId,
+      action: "fold",
+      requestId: "finish-owner-folds",
+      expectedRevision: ownerView.room.revision,
+    }));
+    assert.equal(ownerView.table.phase, "showdown");
+
+    guestView = await service.getSnapshot(room.id, guest.id);
+    guestView = await service.applyCommand(room.id, guest.id, parseMultiplayerCommand({
+      type: "show",
+      handId: guestView.game.handId,
+      show: false,
+      requestId: "finish-guest-mucks",
+      expectedRevision: guestView.room.revision,
+    }));
+    assert.equal(guestView.table.phase, "finished");
+    assert.equal(guestView.room.status, "finished");
+    assert.equal(guestView.table.sessionReport.handsCompleted, 1);
+
+    ownerView = await service.getSnapshot(room.id, owner.id);
+    assert.deepEqual(ownerView.table.sessionReport, guestView.table.sessionReport);
+    assert.equal((await store.listRooms(owner.id))[0].status, "finished");
+    const persisted = sqlite.prepare("SELECT status, state_json FROM rooms WHERE id = ?").get(room.id);
+    assert.equal(persisted.status, "playing", "finished stays readable without expanding the deployed status constraint");
+    assert.equal(JSON.parse(persisted.state_json).phase, "finished");
+    await assert.rejects(
+      store.joinRoom(outsider.id, room.joinCode),
+      (error) => error instanceof MultiplayerStoreError && error.code === "ROOM_NOT_FOUND",
+    );
+
+    ownerView = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
+      type: "restart",
+      requestId: "finish-restart-owner",
+      expectedRevision: ownerView.room.revision,
+    }));
+    assert.equal(ownerView.table.phase, "lobby");
+    assert.equal(ownerView.table.sessionReport, null);
+    assert.equal((await store.listRooms(owner.id))[0].status, "lobby");
+  } finally {
+    sqlite.close();
+  }
+});
+
 test("D1 permanently leaves during a hand, frees membership, and makes a one-player table joinable", async () => {
   const { sqlite, store } = await testStore();
   try {

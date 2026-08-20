@@ -2749,3 +2749,471 @@
     grid-template-columns: 1fr 1fr;
   }
 }
+
+/* Whole-session settlement lives outside the height-constrained action dock. */
+.tableStageEnded,
+.multiplayerPage .tableStageEnded {
+  padding: 92px 28px 18px;
+  justify-content: flex-start;
+  overflow: hidden;
+}
+
+.finishRequestedPill {
+  border-color: rgba(216, 183, 116, 0.32);
+  color: #e1c98f;
+  background: rgba(216, 183, 116, 0.09);
+}
+
+.sessionSummary {
+  width: min(930px, 100%);
+  max-height: 100%;
+  position: relative;
+  z-index: 12;
+  padding: 22px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid rgba(216, 183, 116, 0.17);
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 88% 0%, rgba(99, 196, 156, 0.08), transparent 34%),
+    linear-gradient(145deg, rgba(20, 25, 22, 0.985), rgba(13, 17, 15, 0.985));
+  box-shadow: 0 28px 74px rgba(0, 0, 0, 0.44);
+  scrollbar-color: rgba(216, 183, 116, 0.28) transparent;
+  scrollbar-width: thin;
+}
+
+.sessionSummary > h2 {
+  margin: 8px 0;
+  font: 500 28px/1.2 Georgia, "Songti SC", serif;
+}
+
+.summaryHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.summaryHeader h2 {
+  margin: 7px 0 6px;
+  color: #eee9df;
+  font: 500 clamp(26px, 3.6vw, 38px)/1.1 Georgia, "Songti SC", serif;
+  letter-spacing: -0.025em;
+}
+
+.summaryHeader p:last-child {
+  margin: 0;
+  color: #727971;
+  font-size: 9px;
+  line-height: 1.6;
+}
+
+.summaryHeroResult {
+  min-width: 190px;
+  padding: 13px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  border: 1px solid rgba(99, 196, 156, 0.18);
+  border-radius: 7px;
+  background: rgba(99, 196, 156, 0.045);
+}
+
+.summaryHeroResult span,
+.summaryHeroResult small {
+  color: #77827a;
+  font-size: 8px;
+}
+
+.summaryHeroResult strong {
+  color: #78d5ad;
+  font: 500 25px/1 Georgia, "Songti SC", serif;
+}
+
+.summaryHeroResult[data-sign="negative"] {
+  border-color: rgba(211, 111, 97, 0.22);
+  background: rgba(211, 111, 97, 0.045);
+}
+
+.summaryHeroResult[data-sign="negative"] strong {
+  color: #df8d80;
+}
+
+.summaryLastHand {
+  margin-top: 16px;
+  padding: 12px 14px;
+  display: grid;
+  gap: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.summaryLastHand > span,
+.summarySectionHeading > span {
+  color: var(--mp-gold);
+  font-size: 7px;
+  letter-spacing: 0.14em;
+}
+
+.summaryLastHand > strong {
+  color: #c9c6bc;
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 1.55;
+}
+
+.summaryLastHand .winningHands {
+  margin-top: 4px;
+  position: static;
+}
+
+.summaryNotice {
+  margin-top: 14px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  border-left: 2px solid var(--mp-gold);
+  color: #747a74;
+  background: rgba(216, 183, 116, 0.035);
+  font-size: 8px;
+  line-height: 1.55;
+}
+
+.summaryNotice strong {
+  flex: 0 0 auto;
+  color: #c5b78f;
+  font-weight: 600;
+}
+
+.summaryGrid {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: minmax(245px, 0.72fr) minmax(0, 1.65fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.summaryStandings,
+.summaryAnalysis {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.014);
+}
+
+.summarySectionHeading {
+  margin-bottom: 11px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.summarySectionHeading > strong {
+  color: #d9d5ca;
+  font: 500 14px/1.2 Georgia, "Songti SC", serif;
+}
+
+.summaryStandingList,
+.summaryPlayerReports {
+  display: grid;
+  gap: 7px;
+}
+
+.summaryStandingRow {
+  min-width: 0;
+  padding: 9px;
+  display: grid;
+  grid-template-columns: 20px 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.055);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.016);
+}
+
+.summaryStandingRow[data-self="true"],
+.summaryPlayerReport[data-self="true"] {
+  border-color: rgba(99, 196, 156, 0.25);
+  background: rgba(99, 196, 156, 0.045);
+}
+
+.summaryStandingRow > b {
+  color: var(--mp-gold);
+  font: 500 15px/1 Georgia, serif;
+  text-align: center;
+}
+
+.summaryAvatar {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(216, 183, 116, 0.2);
+  border-radius: 50%;
+  color: #bfb59b;
+  background: rgba(216, 183, 116, 0.05);
+  font: 500 9px/1 Georgia, serif;
+}
+
+.summaryStandingRow > div:nth-of-type(1) {
+  min-width: 0;
+}
+
+.summaryStandingRow > div:nth-of-type(1) strong,
+.summaryStandingRow > div:nth-of-type(1) small {
+  overflow: hidden;
+  display: block;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.summaryStandingRow > div:nth-of-type(1) strong {
+  color: #cfccc2;
+  font-size: 9px;
+}
+
+.summaryStandingRow > div:nth-of-type(1) small {
+  margin-top: 4px;
+  color: #676d68;
+  font-size: 7px;
+}
+
+.summaryStandingStack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.summaryStandingStack span {
+  color: #777c76;
+  font-size: 7px;
+}
+
+.summaryStandingStack strong {
+  color: #979b95;
+  font: 600 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.summaryStandingStack strong[data-sign="positive"] {
+  color: #71c9a5;
+}
+
+.summaryStandingStack strong[data-sign="negative"] {
+  color: #da8a7d;
+}
+
+.summaryPlayerReport {
+  padding: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 7px;
+  background: rgba(8, 11, 10, 0.24);
+}
+
+.summaryPlayerReport > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.summaryPlayerReport > header > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.summaryPlayerReport > header strong {
+  color: #d8d4c9;
+  font-size: 10px;
+}
+
+.summaryPlayerReport > header > div:first-child span {
+  color: #6f756f;
+  font-size: 7px;
+}
+
+.summaryTags {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.summaryTags span {
+  padding: 3px 5px;
+  border: 1px solid rgba(216, 183, 116, 0.18);
+  border-radius: 999px;
+  color: #b7a87f;
+  background: rgba(216, 183, 116, 0.04);
+  font-size: 6px;
+  white-space: nowrap;
+}
+
+.summaryMetrics {
+  margin-top: 9px;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 5px;
+}
+
+.summaryMetrics > div {
+  min-width: 0;
+  padding: 7px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.012);
+}
+
+.summaryMetrics span {
+  color: #666d67;
+  font-size: 6px;
+  white-space: nowrap;
+}
+
+.summaryMetrics strong {
+  color: #c8c6bd;
+  font: 600 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.summaryInsights {
+  margin: 9px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  list-style: none;
+}
+
+.summaryInsights li {
+  position: relative;
+  padding-left: 10px;
+  color: #898e88;
+  font-size: 7px;
+  line-height: 1.5;
+}
+
+.summaryInsights li::before {
+  content: "◆";
+  position: absolute;
+  left: 0;
+  top: 1px;
+  color: var(--mp-gold);
+  font-size: 5px;
+}
+
+.summaryPlayerReport > footer {
+  margin-top: 8px;
+  padding-top: 7px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.045);
+  color: #5f6560;
+  font-size: 6px;
+  line-height: 1.4;
+}
+
+.summaryActions {
+  margin-top: 14px;
+  padding-top: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.summaryActions > div {
+  min-width: 0;
+  margin-right: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.summaryActions > div strong {
+  color: #aaa9a1;
+  font-size: 8px;
+}
+
+.summaryActions > div span {
+  color: #626862;
+  font-size: 7px;
+  line-height: 1.45;
+}
+
+.summaryActions > button {
+  min-height: 36px;
+  white-space: nowrap;
+}
+
+@media (max-width: 860px) {
+  .tableStageEnded,
+  .multiplayerPage .tableStageEnded {
+    min-height: calc(100svh - 64px);
+    padding: 92px 18px 20px;
+    overflow: visible;
+  }
+
+  .sessionSummary {
+    max-height: none;
+  }
+
+  .summaryGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .summaryMetrics {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .summaryHeader,
+  .summaryNotice,
+  .summaryActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .sessionSummary {
+    padding: 15px;
+  }
+
+  .summaryHeroResult {
+    min-width: 0;
+    align-items: flex-start;
+  }
+
+  .summaryNotice {
+    gap: 5px;
+  }
+
+  .summaryPlayerReport > header,
+  .summaryPlayerReport > footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .summaryTags {
+    justify-content: flex-start;
+  }
+
+  .summaryActions > div {
+    margin-right: 0;
+  }
+
+  .summaryActions > button {
+    width: 100%;
+  }
+}

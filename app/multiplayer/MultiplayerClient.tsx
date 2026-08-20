@@ -70,13 +70,58 @@ type PublicGame = {
   result: { summary: string; winners: string[] } | null;
 };
 
+type SessionReportPlayer = {
+  rank: number;
+  seat: number;
+  displayName: string;
+  finalStack: number;
+  buyInTotal: number;
+  rebuyCount: number;
+  left: boolean;
+  handsDealt: number;
+  handsWon: number;
+  netChips: number;
+  netBigBlinds: number;
+  bbPer100: number;
+  vpipPercent: number;
+  pfrPercent: number;
+  sawFlopPercent: number;
+  aggressionFrequencyPercent: number;
+  aggressionFactor: number | null;
+  wentToShowdownPercent: number;
+  wonAtShowdownPercent: number | null;
+  allInHands: number;
+  timeoutPercent: number;
+  voluntaryShows: number;
+  biggestWin: number;
+  biggestLoss: number;
+  decisions: number;
+  foldActions: number;
+  checkActions: number;
+  callActions: number;
+  raiseActions: number;
+  sampleSize: "insufficient" | "developing" | "meaningful";
+  styleTags: string[];
+  insights: string[];
+};
+
+type SessionReport = {
+  startedAt: number | null;
+  finishedAt: number;
+  durationMs: number;
+  handsCompleted: number;
+  totalPotAwarded: number;
+  bigBlind: number;
+  players: SessionReportPlayer[];
+};
+
 type RoomSnapshot = {
   room: RoomSummary;
   selfAccountId: string;
   players: PublicPlayer[];
   game: PublicGame | null;
   table: {
-    phase: "lobby" | "playing" | "showdown" | "between_hands" | "closed";
+    phase: "lobby" | "playing" | "showdown" | "between_hands" | "finished" | "closed";
     viewerSeat: number | null;
     tableMode: "cash" | "tournament";
     startingStack: number;
@@ -85,6 +130,8 @@ type RoomSnapshot = {
     actionTimeMs: number;
     initialTimeBankMs: number;
     timeBankUnitMs: number;
+    finishRequested: boolean;
+    sessionReport: SessionReport | null;
     hand: {
       pendingShowSeat: number | null;
       actionDeadlineAt: number | null;
@@ -113,7 +160,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   NOT_YOUR_TURN: "现在还没有轮到你行动。",
   PLAYERS_NOT_READY: "所有玩家都准备后才能开局。",
   NOT_ENOUGH_PLAYERS: "至少需要两名可参赛玩家才能开始下一手。",
-  NOT_ROOM_OWNER: "只有房主可以开始第一手牌。",
+  NOT_ROOM_OWNER: "只有房主可以执行这个操作。",
   WRONG_PHASE: "当前阶段不能执行这个操作。",
   WRONG_HAND: "这条行动属于上一手牌，已为你刷新。",
   CALL_REQUIRED: "面对下注时不能过牌。",
@@ -418,6 +465,151 @@ function WinningHands({ game }: { game: PublicGame }) {
   );
 }
 
+function formatSessionPercent(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return "—";
+  return `${value.toFixed(value >= 10 ? 0 : 1)}%`;
+}
+
+function formatSigned(value: number, suffix = "") {
+  const rounded = Math.abs(value) >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${value > 0 ? "+" : ""}${rounded}${suffix}`;
+}
+
+function formatSessionDuration(durationMs: number) {
+  const minutes = Math.max(0, Math.round(durationMs / 60_000));
+  if (minutes < 1) return "不到 1 分钟";
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const remaining = minutes % 60;
+  return remaining ? `${hours} 小时 ${remaining} 分钟` : `${hours} 小时`;
+}
+
+function SessionSummary({
+  report,
+  game,
+  viewerSeat,
+  isOwner,
+  busy,
+  onRestart,
+  onLeave,
+}: {
+  report: SessionReport;
+  game: PublicGame | null;
+  viewerSeat: number | null;
+  isOwner: boolean;
+  busy: boolean;
+  onRestart: () => void;
+  onLeave: () => void;
+}) {
+  const hero = report.players.find((player) => player.seat === viewerSeat) ?? null;
+  const sampleLabel = report.handsCompleted < 20
+    ? "样本很少，只展示本局事实数据"
+    : report.handsCompleted < 100
+      ? "初步样本，结果仍容易受发牌波动影响"
+      : "已有一定样本，仍不等同于长期水平或 GTO 评分";
+
+  return (
+    <section className={styles.sessionSummary} aria-labelledby="session-summary-title">
+      <header className={styles.summaryHeader}>
+        <div>
+          <p className={styles.panelKicker}>SESSION SETTLEMENT · 全桌统一结算</p>
+          <h2 id="session-summary-title">牌局已结束</h2>
+          <p>共完成 {report.handsCompleted} 手 · {formatSessionDuration(report.durationMs)} · 累计争夺 {report.totalPotAwarded} 筹码</p>
+        </div>
+        <div className={styles.summaryHeroResult} data-sign={hero && hero.netChips < 0 ? "negative" : "positive"}>
+          <span>{hero ? "你的本局净结果" : "最终结算"}</span>
+          <strong>{hero ? formatSigned(hero.netChips) : `${report.players.length} 位牌手`}</strong>
+          {hero && <small>{formatSigned(hero.netBigBlinds, " BB")} · {formatSigned(hero.bbPer100, " bb/100")}</small>}
+        </div>
+      </header>
+
+      {game?.result && (
+        <div className={styles.summaryLastHand}>
+          <span>FINAL HAND · 最后一手</span>
+          <strong>{game.result.summary}</strong>
+          <WinningHands game={game} />
+        </div>
+      )}
+
+      <div className={styles.summaryNotice} role="note">
+        <strong>{sampleLabel}</strong>
+        <span>以下点评来自服务端记录的真实行动与结算；它描述这局的打法倾向，不虚构求解器 EV 损失或“GTO 准确率”。</span>
+      </div>
+
+      <div className={styles.summaryGrid}>
+        <section className={styles.summaryStandings} aria-label="最终排名">
+          <div className={styles.summarySectionHeading}>
+            <span>STANDINGS</span>
+            <strong>最终排名</strong>
+          </div>
+          <div className={styles.summaryStandingList}>
+            {report.players.map((player) => (
+              <article className={styles.summaryStandingRow} data-self={player.seat === viewerSeat || undefined} key={`${player.rank}-${player.seat}-${player.displayName}`}>
+                <b>{player.rank}</b>
+                <span className={styles.summaryAvatar}>{Array.from(player.displayName)[0]?.toUpperCase() ?? "P"}</span>
+                <div>
+                  <strong>{player.displayName}{player.seat === viewerSeat ? " · 你" : ""}</strong>
+                  <small>{player.handsDealt} 手 · 赢下 {player.handsWon} 手{player.left ? " · 已离桌" : ""}</small>
+                </div>
+                <div className={styles.summaryStandingStack}>
+                  <span>{player.finalStack} 筹码</span>
+                  <strong data-sign={player.netChips < 0 ? "negative" : player.netChips > 0 ? "positive" : "neutral"}>{formatSigned(player.netChips)}</strong>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className={styles.summaryAnalysis} aria-label="所有玩家本局分析">
+          <div className={styles.summarySectionHeading}>
+            <span>TABLE REVIEW</span>
+            <strong>所有人的本局分析</strong>
+          </div>
+          <div className={styles.summaryPlayerReports}>
+            {report.players.map((player) => (
+              <article className={styles.summaryPlayerReport} data-self={player.seat === viewerSeat || undefined} key={`report-${player.rank}-${player.seat}-${player.displayName}`}>
+                <header>
+                  <div>
+                    <strong>{player.displayName}{player.seat === viewerSeat ? " · 你" : ""}</strong>
+                    <span>{player.handsDealt} 手样本 · {formatSigned(player.netBigBlinds, " BB")}</span>
+                  </div>
+                  <div className={styles.summaryTags}>
+                    {(player.styleTags.length ? player.styleTags : ["样本观察"]).map((tag) => <span key={tag}>{tag}</span>)}
+                  </div>
+                </header>
+                <div className={styles.summaryMetrics}>
+                  <div><span>VPIP</span><strong>{formatSessionPercent(player.vpipPercent)}</strong></div>
+                  <div><span>PFR</span><strong>{formatSessionPercent(player.pfrPercent)}</strong></div>
+                  <div><span>翻后主动</span><strong>{formatSessionPercent(player.aggressionFrequencyPercent)}</strong></div>
+                  <div><span>侵略系数</span><strong>{player.aggressionFactor === null ? "—" : player.aggressionFactor.toFixed(2)}</strong></div>
+                  <div><span>WTSD</span><strong>{formatSessionPercent(player.wentToShowdownPercent)}</strong></div>
+                  <div><span>W$SD</span><strong>{formatSessionPercent(player.wonAtShowdownPercent)}</strong></div>
+                </div>
+                <ul className={styles.summaryInsights}>
+                  {player.insights.map((insight) => <li key={insight}>{insight}</li>)}
+                </ul>
+                <footer>
+                  <span>决策 {player.decisions} · 弃 {player.foldActions} / 过 {player.checkActions} / 跟 {player.callActions} / 加 {player.raiseActions}</span>
+                  <span>全下 {player.allInHands} 手 · 超时 {formatSessionPercent(player.timeoutPercent)} · 主动亮牌 {player.voluntaryShows} 次</span>
+                </footer>
+              </article>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      <div className={styles.summaryActions}>
+        <div>
+          <strong>{isOwner ? "你可以保留邀请码再开一局" : "等待房主决定是否再开一局"}</strong>
+          <span>再开一局会重置筹码、时间库和本局统计，所有人需要重新准备。</span>
+        </div>
+        {isOwner && <button className={styles.primaryButton} type="button" disabled={busy} onClick={onRestart}>再开一局</button>}
+        <button className={styles.secondaryButton} type="button" disabled={busy} onClick={onLeave}>离开房间</button>
+      </div>
+    </section>
+  );
+}
+
 export default function MultiplayerClient({
   displayName,
   signOutHref,
@@ -682,6 +874,27 @@ export default function MultiplayerClient({
     }
   };
 
+  const finishSession = async () => {
+    if (!snapshot || !isOwner || snapshot.table.finishRequested || phase === "finished") return;
+    const waitsForCurrentHand = phase === "playing" || phase === "showdown";
+    const confirmed = window.confirm(waitsForCurrentHand
+      ? "确定结束整局吗？当前手牌会正常打完，并完成赢家亮牌或盖牌后，再向全桌展示最终结算。"
+      : "确定现在结束整局并生成全员结算吗？"
+    );
+    if (!confirmed) return;
+    const succeeded = await sendCommand({ type: "finish" });
+    if (succeeded && waitsForCurrentHand) {
+      setNotice("房主已设置：本手完整结算后结束整局。");
+    }
+  };
+
+  const restartSession = async () => {
+    if (!snapshot || !isOwner || phase !== "finished") return;
+    if (!window.confirm("确定使用同一邀请码再开一局吗？筹码、时间库和本局统计都会重置。")) return;
+    const succeeded = await sendCommand({ type: "restart" });
+    if (succeeded) setNotice("新一局已经建立，请所有玩家重新准备。");
+  };
+
   const copyJoinCode = async (code: string) => {
     try {
       if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
@@ -907,7 +1120,7 @@ export default function MultiplayerClient({
             <i />
             <span>{tableModeLabel(snapshot.table.tableMode)} · {tableDepthBb}BB · 盲注 {snapshot.table.smallBlind}/{snapshot.table.bigBlind}</span>
             <i />
-            <span>{snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s · {snapshot.players.length}/{snapshot.room.maxPlayers} 人 · {game ? `第 ${game.handNo} 手` : "等待开局"}</span>
+            <span>{snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s · {snapshot.players.length}/{snapshot.room.maxPlayers} 人 · {phase === "finished" ? "整局已结算" : game ? `第 ${game.handNo} 手` : "等待开局"}</span>
           </div>
         )}
         <div className={styles.navRight}>
@@ -1069,7 +1282,7 @@ export default function MultiplayerClient({
                     <li className={styles.roomRow} key={room.id}>
                       <div>
                         <strong>{room.name}</strong>
-                        <small>{room.memberCount}/{room.maxPlayers} 人 · {room.status === "lobby" ? "等待开局" : "牌局进行中"} · {room.joinCode}</small>
+                        <small>{room.memberCount}/{room.maxPlayers} 人 · {room.status === "lobby" ? "等待开局" : room.status === "finished" ? "整局已结算" : "牌局进行中"} · {room.joinCode}</small>
                       </div>
                       <div className={styles.roomActions}>
                         <button className={styles.secondaryButton} type="button" onClick={() => void copyJoinCode(room.joinCode)}>复制邀请码</button>
@@ -1085,10 +1298,10 @@ export default function MultiplayerClient({
 
         {account && snapshot && (
           <section className={styles.tableShell}>
-            <div className={styles.tableStage}>
+            <div className={`${styles.tableStage} ${phase === "finished" ? styles.tableStageEnded : ""}`}>
               <header className={styles.tableToolbar}>
                 <div className={styles.tableToolbarCopy}>
-                  <span>FRIENDS TABLE · {game ? `HAND ${game.handNo}` : "LOBBY"}</span>
+                  <span>FRIENDS TABLE · {phase === "finished" ? "SESSION COMPLETE" : game ? `HAND ${game.handNo}` : "LOBBY"}</span>
                   <strong>{snapshot.room.name}</strong>
                 </div>
                 <div className={styles.roomMeta}>
@@ -1096,19 +1309,45 @@ export default function MultiplayerClient({
                   <span className={styles.statusPill}>盲注 {snapshot.table.smallBlind}/{snapshot.table.bigBlind}</span>
                   <span className={styles.statusPill}>读秒 {snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s</span>
                   <span className={styles.statusPill}>{snapshot.players.length}/{snapshot.room.maxPlayers} 人</span>
+                  {snapshot.table.finishRequested && phase !== "finished" && <span className={`${styles.statusPill} ${styles.finishRequestedPill}`}>本手后结算</span>}
+                  {isOwner && phase !== "lobby" && phase !== "finished" && phase !== "closed" && (
+                    <button className={styles.dangerButton} type="button" onClick={() => void finishSession()} disabled={busy || snapshot.table.finishRequested}>
+                      {snapshot.table.finishRequested ? "等待本手结束" : "结束游戏"}
+                    </button>
+                  )}
                   <button className={styles.dangerButton} type="button" onClick={() => void leaveRoom()} disabled={busy || leaving} title="永久离开房间；牌局中未全下的手牌将自动弃牌">{leaving ? "正在离开…" : "永久离开"}</button>
                 </div>
               </header>
               <div className={`${styles.tableAmbient} ${styles.tableAmbientOne}`} />
               <div className={`${styles.tableAmbient} ${styles.tableAmbientTwo}`} />
-              <TableSurface
-                players={game?.players ?? snapshot.players}
-                selfAccountId={snapshot.selfAccountId}
-                game={game}
-                actionSecondsLeft={actionSecondsLeft}
-              />
+              {phase !== "finished" && (
+                <TableSurface
+                  players={game?.players ?? snapshot.players}
+                  selfAccountId={snapshot.selfAccountId}
+                  game={game}
+                  actionSecondsLeft={actionSecondsLeft}
+                />
+              )}
 
-            {!game && (
+            {phase === "finished" && snapshot.table.sessionReport && (
+              <SessionSummary
+                report={snapshot.table.sessionReport}
+                game={game}
+                viewerSeat={snapshot.table.viewerSeat}
+                isOwner={isOwner}
+                busy={busy || leaving}
+                onRestart={() => void restartSession()}
+                onLeave={() => void leaveRoom()}
+              />
+            )}
+            {phase === "finished" && !snapshot.table.sessionReport && (
+              <section className={styles.sessionSummary} role="status">
+                <p className={styles.panelKicker}>SESSION SETTLEMENT</p>
+                <h2>正在同步最终结算…</h2>
+              </section>
+            )}
+
+            {phase !== "finished" && !game && (
               <div className={`${styles.tableControls} ${styles.waitingControls}`}>
                 <div>
                   <p className={styles.panelKicker}>WAITING ROOM</p>
@@ -1139,7 +1378,7 @@ export default function MultiplayerClient({
               </div>
             )}
 
-            {game && (
+            {phase !== "finished" && game && (
               <div className={`${styles.tableControls} ${canRaise ? styles.tableControlsWithRaise : ""} ${phase === "showdown" || phase === "between_hands" ? styles.tableControlsTransition : ""}`}>
                 {game.result && <div className={styles.resultBanner}>{game.result.summary}</div>}
                 <WinningHands game={game} />

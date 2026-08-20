@@ -54,7 +54,7 @@ export type PrivateRoom = {
   name: string;
   ownerAccountId: string;
   ownerHandle: string;
-  status: "lobby" | "playing" | "closed";
+  status: "lobby" | "playing" | "finished" | "closed";
   maxPlayers: number;
   memberCount: number;
   seat: number;
@@ -96,6 +96,7 @@ type RoomRow = {
   member_count: number;
   seat: number;
   revision: number;
+  state_json: string | null;
   created_at: number;
   updated_at: number;
   expires_at: number;
@@ -243,13 +244,22 @@ function mapAccount(row: AccountRow): MultiplayerAccount {
 }
 
 function mapRoom(row: RoomRow, accountId: string): PrivateRoom {
+  let status: PrivateRoom["status"] = row.status;
+  if (row.status === "playing" && row.state_json) {
+    try {
+      const state = JSON.parse(row.state_json) as { phase?: unknown };
+      if (state.phase === "finished") status = "finished";
+    } catch {
+      // A malformed game state is handled by the game service; keep the stored status here.
+    }
+  }
   return {
     id: row.id,
     joinCode: row.join_code,
     name: row.name,
     ownerAccountId: row.owner_account_id,
     ownerHandle: row.owner_handle,
-    status: row.status,
+    status,
     maxPlayers: row.max_players,
     memberCount: row.member_count,
     seat: row.seat,
@@ -341,6 +351,7 @@ export class MultiplayerStore {
         (SELECT count(*) FROM room_members members WHERE members.room_id = r.id) AS member_count,
         mine.seat,
         r.revision,
+        r.state_json,
         r.created_at,
         r.updated_at,
         r.expires_at
@@ -498,6 +509,7 @@ export class MultiplayerStore {
         (SELECT count(*) FROM room_members members WHERE members.room_id = r.id) AS member_count,
         mine.seat,
         r.revision,
+        r.state_json,
         r.created_at,
         r.updated_at,
         r.expires_at
