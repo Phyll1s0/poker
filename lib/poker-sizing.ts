@@ -20,6 +20,15 @@ export type PokerSizingRoute = {
   allIn: boolean;
 };
 
+export type PokerSizingIntent = {
+  /** Post-flop fraction of the pot after calling. */
+  fraction?: number;
+  /** Explicit raise-to target, primarily for pre-flop branches. */
+  target?: number;
+  /** Conditional frequency inside the raise/bet branch. */
+  frequency: number;
+};
+
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, Number.isFinite(value) ? value : minimum));
 }
@@ -68,11 +77,46 @@ function normalizedRoutes(routes: Omit<PokerSizingRoute, "frequency">[], frequen
   }));
 }
 
+function mergeAndNormalizeRoutes(routes: PokerSizingRoute[]) {
+  const byTarget = new Map<number, PokerSizingRoute>();
+  for (const route of routes) {
+    const existing = byTarget.get(route.target);
+    if (existing) existing.frequency += Math.max(0, route.frequency);
+    else byTarget.set(route.target, { ...route, frequency: Math.max(0, route.frequency) });
+  }
+  const merged = [...byTarget.values()].sort((left, right) => left.target - right.target);
+  const total = merged.reduce((sum, route) => sum + route.frequency, 0);
+  return merged.map((route) => ({
+    ...route,
+    frequency: total > 0 ? route.frequency / total : 1 / Math.max(1, merged.length),
+  }));
+}
+
+function attachJamRoute(
+  context: PokerSizingContext,
+  routes: PokerSizingRoute[],
+  requestedJamShare: number,
+) {
+  const maxTarget = pokerSizingMaxTarget(context);
+  const jamShare = clamp(requestedJamShare, 0, 1);
+  if (jamShare <= 0) return mergeAndNormalizeRoutes(routes);
+  return mergeAndNormalizeRoutes([
+    ...routes.map((route) => ({ ...route, frequency: route.frequency * (1 - jamShare) })),
+    {
+      target: maxTarget,
+      fraction: pokerRaiseFraction(context, maxTarget),
+      frequency: jamShare,
+      allIn: true,
+    },
+  ]);
+}
+
 /** Builds a compact primary/secondary sizing tree for coaching and review. */
 export function buildPokerSizingRoutes(
   context: PokerSizingContext,
   recommendedTarget: number,
   shortStackJamFrequency = 0,
+  intents: readonly PokerSizingIntent[] = [],
 ): PokerSizingRoute[] {
   if (context.playerStack <= 0 || context.highestBet >= pokerSizingMaxTarget(context)) return [];
   const maxTarget = pokerSizingMaxTarget(context);
@@ -82,17 +126,25 @@ export function buildPokerSizingRoutes(
     fraction: pokerRaiseFraction(context, primaryTarget),
     allIn: primaryTarget === maxTarget,
   };
-  if (primary.allIn) return [{ ...primary, frequency: 1 }];
-
   const jamShare = clamp(shortStackJamFrequency, 0, 1);
-  if (jamShare >= 0.08) {
-    const jam: Omit<PokerSizingRoute, "frequency"> = {
-      target: maxTarget,
-      fraction: pokerRaiseFraction(context, maxTarget),
-      allIn: true,
-    };
-    return normalizedRoutes([primary, jam], [1 - jamShare, jamShare]);
+  if (intents.length) {
+    const planned = intents
+      .filter((intent) => intent.frequency > 0 && (intent.target !== undefined || intent.fraction !== undefined))
+      .map((intent) => {
+        const requested = intent.target !== undefined
+          ? intent.target
+          : context.highestBet + (context.pot + Math.max(0, context.toCall)) * Math.max(0, intent.fraction ?? 0);
+        const target = roundedPokerRaiseTarget(context, requested);
+        return {
+          target,
+          fraction: pokerRaiseFraction(context, target),
+          frequency: intent.frequency,
+          allIn: target === maxTarget,
+        };
+      });
+    if (planned.length) return attachJamRoute(context, mergeAndNormalizeRoutes(planned), jamShare);
   }
+  if (primary.allIn) return [{ ...primary, frequency: 1 }];
 
   let alternativeTarget: number | undefined;
   if (context.street === "preflop" && context.preflopRaiseCount === 0) {
@@ -105,14 +157,19 @@ export function buildPokerSizingRoutes(
   }
 
   if (alternativeTarget === undefined || alternativeTarget === primaryTarget || alternativeTarget === maxTarget) {
-    return [{ ...primary, frequency: 1 }];
+    return attachJamRoute(context, [{ ...primary, frequency: 1 }], jamShare);
   }
   const alternative: Omit<PokerSizingRoute, "frequency"> = {
     target: alternativeTarget,
     fraction: pokerRaiseFraction(context, alternativeTarget),
     allIn: alternativeTarget === maxTarget,
   };
-  return normalizedRoutes([primary, alternative], [0.72, 0.28]);
+  const primaryWeight = clamp(0.64 + Math.min(0.16, Math.abs(primary.fraction - alternative.fraction) * 0.18), 0.58, 0.8);
+  return attachJamRoute(
+    context,
+    normalizedRoutes([primary, alternative], [primaryWeight, 1 - primaryWeight]),
+    jamShare,
+  );
 }
 
 export function preferredPokerSizingRoute(routes: readonly PokerSizingRoute[]) {

@@ -80,6 +80,48 @@ test("includes an all-in branch when the policy mixes short-stack jams", () => {
   assert.equal(preferredPokerSizingRoute(routes), routes[1]);
 });
 
+test("keeps continuous low-frequency jams and planned conditional size weights", () => {
+  const context = { ...postflop, pot: 300, playerStack: 500 };
+  const routes = buildPokerSizingRoutes(context, 150, 0.04, [
+    { fraction: 0.33, frequency: 0.2 },
+    { fraction: 0.66, frequency: 0.55 },
+    { fraction: 1, frequency: 0.25 },
+  ]);
+  const jam = routes.find((route) => route.allIn);
+  const main = preferredPokerSizingRoute(routes);
+
+  assert.ok(jam);
+  assert.ok(Math.abs(jam.frequency - 0.04) < 1e-12);
+  assert.ok(main.fraction > 0.6 && main.fraction < 0.7);
+  assert.ok(Math.abs(routes.reduce((sum, route) => sum + route.frequency, 0) - 1) < 1e-12);
+});
+
+test("adds jam override mass to an all-in route already present in the base mix", () => {
+  const context = { ...postflop, pot: 300, playerStack: 300 };
+  const routes = buildPokerSizingRoutes(context, 200, 0.2, [
+    { fraction: 0.33, frequency: 0.2 },
+    { fraction: 0.66, frequency: 0.55 },
+    { fraction: 1, frequency: 0.25 },
+  ]);
+  const jam = routes.find((route) => route.allIn);
+
+  assert.ok(jam);
+  assert.ok(Math.abs(jam.frequency - 0.4) < 1e-12);
+  assert.ok(Math.abs(routes.reduce((sum, route) => sum + route.frequency, 0) - 1) < 1e-12);
+});
+
+test("does not discard smaller intents when the modal target is stack-capped", () => {
+  const context = { ...postflop, pot: 100, playerStack: 80 };
+  const routes = buildPokerSizingRoutes(context, 80, 0, [
+    { fraction: 0.33, frequency: 0.7 },
+    { fraction: 0.66, frequency: 0.3 },
+  ]);
+
+  assert.equal(routes.length, 2);
+  assert.ok(routes.every((route) => !route.allIn));
+  assert.ok(routes.some((route) => route.target < 80));
+});
+
 test("size scoring rewards exact and nearby routes over a doubled size", () => {
   const routes = buildPokerSizingRoutes(postflop, 50);
   const exact = scorePokerRaiseSize(postflop, 50, routes);

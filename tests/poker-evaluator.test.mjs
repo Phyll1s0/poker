@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  analyzeBoardTexture,
   bestHand,
   blockerValue,
   drawPotential,
@@ -86,6 +87,18 @@ test("reports draws and nut-suit blockers from public cards only", () => {
     blockerValue([c(14, "s"), c(13, "d")], [c(2, "s"), c(7, "s"), c(11, "s")]),
     0.15,
   );
+});
+
+test("describes board texture continuously instead of fixed named buckets", () => {
+  const dry = analyzeBoardTexture([c(14, "s"), c(7, "h"), c(2, "d")]);
+  const dynamic = analyzeBoardTexture([c(11, "s"), c(10, "s"), c(9, "h")]);
+  const paired = analyzeBoardTexture([c(8, "s"), c(8, "h"), c(3, "d")]);
+  const monotone = analyzeBoardTexture([c(12, "s"), c(7, "s"), c(2, "s")]);
+
+  assert.ok(dynamic.wetness > dry.wetness);
+  assert.ok(paired.pairedness > dry.pairedness);
+  assert.equal(monotone.flushPressure, 1);
+  assert.equal(dry.highCard, 1);
 });
 
 test("equity is deterministic with injected RNG and splits a locked board", () => {

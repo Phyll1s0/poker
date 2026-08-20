@@ -34,6 +34,10 @@ function seeded(seed) {
   };
 }
 
+function totalVariation(left, right) {
+  return Object.keys(left).reduce((sum, key) => sum + Math.abs(left[key] - right[key]), 0) / 2;
+}
+
 test("samples reproducibly with an injected seeded RNG", () => {
   const firstRandom = seeded(90210);
   const replayRandom = seeded(90210);
@@ -142,7 +146,8 @@ test("uses a normal open size and does not open-shove at 40 BB", () => {
     startingDepthBb: 40,
   }, () => 0);
 
-  assert.deepEqual(action, { kind: "raise", raiseTo: 25 });
+  assert.equal(action.kind, "raise");
+  assert.ok(action.raiseTo >= 20 && action.raiseTo <= 30);
 });
 
 test("tightens preflop continues when a raise puts the effective stack at risk", () => {
@@ -344,6 +349,189 @@ test("builds a separate four-bet and shallow-jam branch against a three-bet", ()
   assert.equal(deepEnough.preflopScenario, "vs-three-bet");
   assert.ok(deepEnough.actionFrequencies.raise > deepEnough.actionFrequencies.call);
   assert.equal(deepEnough.raiseTo, 200);
-  assert.equal(shallow.raiseTo, 400);
-  assert.ok(shallow.shortStackJamFrequency > 0.8);
+  assert.equal(shallow.raiseTo, 200);
+  assert.ok(shallow.shortStackJamFrequency > 0.7);
+  assert.deepEqual(choosePokerPolicyAction({
+    ...facingThreeBet,
+    startingDepthBb: 40,
+    effectiveStackBb: 37.5,
+    playerStack: 375,
+  }, () => 0), { kind: "raise", raiseTo: 400 });
+});
+
+test("publishes one legal normalized postflop mix for AI, coaching and review", () => {
+  const plan = evaluatePokerPolicy({
+    ...baseSpot,
+    boardWetness: 0.62,
+    boardPairing: 0,
+    boardHighCard: 0.5,
+    initiative: false,
+    streetRaiseCount: 1,
+  });
+  const total = Object.values(plan.actionFrequencies).reduce((sum, frequency) => sum + frequency, 0);
+
+  assert.ok(Math.abs(total - 1) < 1e-12);
+  assert.equal(plan.actionFrequencies.check, 0);
+  assert.ok(plan.actionFrequencies.call > plan.actionFrequencies.raise);
+  assert.ok(plan.actionFrequencies.raise > plan.actionFrequencies.fold);
+
+  const locked = evaluatePokerPolicy({ ...baseSpot, raiseLocked: true });
+  assert.equal(locked.actionFrequencies.raise, 0);
+  assert.deepEqual(locked.sizingRoutes, []);
+  assert.ok(Math.abs(locked.actionFrequencies.fold + locked.actionFrequencies.call - 1) < 1e-12);
+});
+
+test("moves postflop frequencies smoothly for nearby equities and former depth cutoffs", () => {
+  const lower = evaluatePokerPolicy({ ...baseSpot, equity: 0.459 });
+  const upper = evaluatePokerPolicy({ ...baseSpot, equity: 0.461 });
+  const justShallower = evaluatePokerPolicy({ ...baseSpot, effectiveStackBb: 44.9 });
+  const justDeeper = evaluatePokerPolicy({ ...baseSpot, effectiveStackBb: 45.1 });
+
+  assert.ok(totalVariation(lower.actionFrequencies, upper.actionFrequencies) < 0.02);
+  assert.ok(totalVariation(justShallower.actionFrequencies, justDeeper.actionFrequencies) < 0.02);
+});
+
+test("responds continuously to price, board texture, initiative and number of opponents", () => {
+  const facingSmall = evaluatePokerPolicy({ ...baseSpot, pot: 300, toCall: 50, highestBet: 50 });
+  const facingLarge = evaluatePokerPolicy({ ...baseSpot, pot: 300, toCall: 180, highestBet: 180 });
+  assert.ok(facingLarge.actionFrequencies.fold > facingSmall.actionFrequencies.fold);
+
+  const checkedTo = {
+    ...baseSpot,
+    street: "flop",
+    equity: 0.42,
+    handStrength: 0.35,
+    draw: 0.05,
+    blockers: 0.03,
+    pot: 100,
+    toCall: 0,
+    highestBet: 0,
+    initiative: true,
+    streetRaiseCount: 0,
+  };
+  const dryHeadsUp = evaluatePokerPolicy({
+    ...checkedTo,
+    boardWetness: 0.05,
+    boardPairing: 0,
+    boardHighCard: 1,
+  });
+  const wetHeadsUp = evaluatePokerPolicy({
+    ...checkedTo,
+    boardWetness: 0.95,
+    boardPairing: 0,
+    boardHighCard: 0.4,
+  });
+  const dryMultiway = evaluatePokerPolicy({
+    ...checkedTo,
+    boardWetness: 0.05,
+    boardPairing: 0,
+    boardHighCard: 1,
+    activeOpponents: 3,
+  });
+
+  assert.ok(dryHeadsUp.actionFrequencies.raise > wetHeadsUp.actionFrequencies.raise);
+  assert.ok(dryHeadsUp.sizingIntents[0].frequency > wetHeadsUp.sizingIntents[0].frequency);
+  assert.ok(dryMultiway.actionFrequencies.raise < dryHeadsUp.actionFrequencies.raise * 0.6);
+});
+
+test("categorical sampling matches the published postflop frequencies", () => {
+  const random = seeded(777);
+  const samples = 12_000;
+  const counts = { fold: 0, check: 0, call: 0, raise: 0 };
+  const plan = evaluatePokerPolicy(baseSpot);
+  for (let index = 0; index < samples; index += 1) {
+    counts[choosePokerPolicyAction(baseSpot, random).kind] += 1;
+  }
+  for (const kind of Object.keys(counts)) {
+    assert.ok(Math.abs(counts[kind] / samples - plan.actionFrequencies[kind]) < 0.02);
+  }
+});
+
+test("raise sampling matches the published conditional sizing mix", () => {
+  const spot = {
+    ...baseSpot,
+    street: "river",
+    equity: 0.88,
+    handStrength: 0.9,
+    draw: 0,
+    blockers: 0.12,
+    toCall: 0,
+    highestBet: 0,
+    minRaise: 10,
+    pot: 300,
+    initiative: true,
+    boardWetness: 0.4,
+    boardPairing: 0,
+    boardHighCard: 0.8,
+    streetRaiseCount: 0,
+  };
+  const plan = evaluatePokerPolicy(spot);
+  const counts = new Map(plan.sizingRoutes.map((route) => [route.target, 0]));
+  const random = seeded(1847);
+  let raises = 0;
+  for (let index = 0; index < 16_000; index += 1) {
+    const action = choosePokerPolicyAction(spot, random);
+    if (action.kind !== "raise") continue;
+    raises += 1;
+    counts.set(action.raiseTo, (counts.get(action.raiseTo) ?? 0) + 1);
+  }
+
+  assert.ok(raises > 8_000);
+  for (const route of plan.sizingRoutes) {
+    assert.ok(Math.abs((counts.get(route.target) ?? 0) / raises - route.frequency) < 0.025);
+  }
+});
+
+test("an injected upper-bound RNG still selects the final legal branches", () => {
+  const spot = {
+    ...baseSpot,
+    street: "river",
+    equity: 0.95,
+    handStrength: 0.96,
+    draw: 0,
+    blockers: 0.12,
+    toCall: 0,
+    highestBet: 0,
+    minRaise: 10,
+    pot: 300,
+    initiative: true,
+  };
+  const plan = evaluatePokerPolicy(spot);
+  const rolls = [1, 0, 0];
+  const action = choosePokerPolicyAction(spot, () => rolls.shift() ?? 0);
+  const finalSizingBranch = [...plan.sizingRoutes]
+    .filter((route) => route.frequency > 0)
+    .sort((left, right) => right.frequency - left.frequency)
+    .at(-1);
+
+  assert.ok(finalSizingBranch);
+  assert.equal(action.kind, "raise");
+  assert.equal(action.raiseTo, finalSizingBranch.target);
+});
+
+test("modal size crossings do not create action-frequency cliffs", () => {
+  const spot = {
+    ...baseSpot,
+    street: "flop",
+    equity: 0.52,
+    handStrength: 0.45,
+    draw: 0.08,
+    blockers: 0.05,
+    toCall: 0,
+    highestBet: 0,
+    minRaise: 10,
+    pot: 200,
+    initiative: true,
+    boardPairing: 0,
+    boardHighCard: 0.7,
+    streetRaiseCount: 0,
+  };
+  let previous = evaluatePokerPolicy({ ...spot, boardWetness: 0 });
+  let maximumStep = 0;
+  for (let step = 1; step <= 1_000; step += 1) {
+    const current = evaluatePokerPolicy({ ...spot, boardWetness: step / 1_000 });
+    maximumStep = Math.max(maximumStep, totalVariation(previous.actionFrequencies, current.actionFrequencies));
+    previous = current;
+  }
+  assert.ok(maximumStep < 0.01);
 });

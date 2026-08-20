@@ -3,6 +3,7 @@
 import { pathToFileURL } from "node:url";
 import { AI_PROFILES, AI_STYLE_OPTIONS, sampleAiLineup } from "../lib/poker-ai.ts";
 import {
+  analyzeBoardTexture,
   bestHand,
   blockerValue,
   drawPotential,
@@ -108,6 +109,7 @@ function decideAction(context) {
   const potOdds = toCall > 0 ? toCall / (pot + toCall) : 0;
   const draw = drawPotential(player.hole, board);
   const blockers = blockerValue(player.hole, board);
+  const boardTexture = analyzeBoardTexture(board);
   const handStrength = street === "preflop" ? preflopStrength(player.hole) : visibleHandStrength(player, board);
   const opponentStacks = players
     .filter((candidate) => candidate.id !== player.id && !candidate.folded)
@@ -157,6 +159,11 @@ function decideAction(context) {
     preflopLimpers,
     preflopColdCallers,
     preflopPreviouslyRaised: player.pfr,
+    boardWetness: boardTexture.wetness,
+    boardPairing: boardTexture.pairedness,
+    boardHighCard: boardTexture.highCard,
+    initiative: lastAggressor === player.id,
+    streetRaiseCount: raiseCount,
   }, random);
   return action.kind === "raise" ? { kind: "raise", target: action.raiseTo } : action;
 }
@@ -193,7 +200,7 @@ function bettingRound(state, street, startAt) {
   let openingRaiserId = null;
   let preflopLimpers = 0;
   let preflopColdCallers = 0;
-  let lastAggressor = null;
+  let lastAggressor = state.lineAggressor ?? null;
   let pending = new Set(players.filter((player) => !player.folded && player.stack > 0).map((player) => player.id));
   let cursor = startAt;
   let safety = 0;
@@ -289,6 +296,7 @@ function bettingRound(state, street, startAt) {
       .map((candidate) => candidate.id));
     if (player.bet <= previousBet) break;
   }
+  state.lineAggressor = lastAggressor;
 }
 
 function settle(players, board) {
@@ -372,6 +380,7 @@ function playHand(handIndex, stackBb, randoms, equityIterations, aggregates) {
     equityRandom: randoms.equity,
     policyRandom: randoms.policy,
     equityCache: new Map(),
+    lineAggressor: null,
   };
 
   bettingRound(state, "preflop", (dealer + 3) % PLAYER_COUNT);
@@ -499,7 +508,7 @@ export function formatReport(report) {
     "",
     `零和校验：${signed(report.totalNetBb, 6)} BB`,
     "Agg=(bet+raise)/call；W$SD=进入摊牌后的主池胜率（平分按份额计）；CI 按每个牌桌手聚类近似。",
-    `注意：这是共享牌力/策略核的快速回归，不是 CFR/GTO 求解器；权益敏感节点为吞吐量使用 ${report.config.equityIterations} 次采样，低于界面 AI 的 70/82 次。`,
+    `注意：这是共享牌力/策略核的快速回归，不是 CFR/GTO 求解器；权益敏感节点为吞吐量使用 ${report.config.equityIterations} 次采样，低于界面电脑的 90/120 次和实时教练的 220/360 次。`,
   ].join("\n");
 }
 

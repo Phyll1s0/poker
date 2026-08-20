@@ -21,6 +21,19 @@ export type PreflopHandFeatures = {
   gap: number;
 };
 
+export type PokerBoardTexture = {
+  /** Combined straight/flush pressure on the public board, from dry (0) to dynamic (1). */
+  wetness: number;
+  /** Pairing pressure: unpaired is 0, paired boards rise toward 1. */
+  pairedness: number;
+  /** Rank pressure of the highest public card, normalized to 0..1. */
+  highCard: number;
+  /** How close the board is to a single-suit texture. */
+  flushPressure: number;
+  /** How many ranks occupy the same five-card straight window. */
+  connectivity: number;
+};
+
 export type PokerRandom = () => number;
 export type OpponentRangeWeight = (hole: readonly [PokerCard, PokerCard]) => number;
 
@@ -258,6 +271,43 @@ export function blockerValue(hole: readonly PokerCard[], community: readonly Pok
     && hole.some((card) => suitKey(card.suit) === blockedSuit[0] && card.rank === 14);
   const highBlockers = hole.filter((card) => card.rank >= 13).length;
   return clamp((nutSuitBlocker ? 0.1 : 0) + highBlockers * 0.025, 0, 0.15);
+}
+
+/**
+ * Reduces public cards to continuous texture features for strategy mixing.
+ * This intentionally describes the board rather than assigning it to a small
+ * set of named buckets, so nearby runouts do not cause abrupt policy jumps.
+ */
+export function analyzeBoardTexture(community: readonly PokerCard[]): PokerBoardTexture {
+  if (community.length === 0) {
+    return { wetness: 0, pairedness: 0, highCard: 0, flushPressure: 0, connectivity: 0 };
+  }
+  community.forEach((card, index) => assertCard(card, `community[${index}]`));
+  const uniqueRanks = [...new Set(community.map((card) => card.rank))];
+  const pairedness = clamp(
+    (community.length - uniqueRanks.length) / Math.max(1, community.length - 1),
+  );
+  const suitCounts = new Map<string, number>();
+  for (const card of community) {
+    const key = suitKey(card.suit);
+    suitCounts.set(key, (suitCounts.get(key) ?? 0) + 1);
+  }
+  const maximumSuitCount = Math.max(...suitCounts.values());
+  const flushPressure = community.length < 3
+    ? 0
+    : clamp((maximumSuitCount - 1) / Math.max(1, Math.min(3, community.length) - 1));
+  const straightRanks = new Set(uniqueRanks);
+  if (straightRanks.has(14)) straightRanks.add(1);
+  let maximumWindowHits = 1;
+  for (let low = 1; low <= 10; low += 1) {
+    let hits = 0;
+    for (let rank = low; rank < low + 5; rank += 1) hits += Number(straightRanks.has(rank));
+    maximumWindowHits = Math.max(maximumWindowHits, hits);
+  }
+  const connectivity = clamp(((maximumWindowHits - 1) / 2) ** 2);
+  const highCard = clamp((Math.max(...uniqueRanks) - 8) / 6);
+  const wetness = clamp(flushPressure * 0.55 + connectivity * 0.52 - pairedness * 0.16);
+  return { wetness, pairedness, highCard, flushPressure, connectivity };
 }
 
 export function makeDeck(suits: readonly PokerSuit[] = SYMBOL_SUITS): PokerCard[] {

@@ -67,7 +67,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /portalViewFromHash/);
   assert.match(page, /return "#\/multiplayer"/);
   assert.match(page, /近似 GTO 建议/);
-  assert.match(page, /加注尺寸路线/);
+  assert.match(page, /进入加注分支后的尺寸混合/);
   assert.match(page, /pokerRaiseTargetForFraction/);
   assert.match(page, /20 手整局/);
   assert.match(page, /function setHeroShowChoice/);
@@ -100,6 +100,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(edgeFunction, /type === "use-time-bank" \|\| type === "timeout"/);
   assert.match(page, /choosePokerPolicyAction/);
   assert.match(page, /policyPlan\.actionFrequencies/);
+  assert.doesNotMatch(page, /fold:\s*0\.72/);
   assert.match(page, /弃牌来自翻前范围/);
   assert.match(page, /const TABLE_PRESETS/);
   assert.match(page, /function grantSquid/);
