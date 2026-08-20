@@ -191,6 +191,29 @@ button { color: inherit; }
 .landing-mode-card.multiplayer > strong { color: #b7a781; }
 .landing-mode-card > strong span { font-size: 13px; }
 
+.landing-about { width: min(1180px, calc(100% - 56px)); margin: 0 auto; padding: 0 0 98px; position: relative; z-index: 2; scroll-margin-top: 24px; }
+.landing-about-heading { margin-bottom: 25px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, .72fr); align-items: end; gap: 40px; }
+.landing-about-heading > div { display: flex; flex-direction: column; gap: 8px; }
+.landing-about-heading span { color: var(--gold); font-size: 8px; letter-spacing: .19em; }
+.landing-about-heading h2 { margin: 0; color: #dedad1; font: 500 27px/1.25 Georgia, "Songti SC", serif; }
+.landing-about-heading p { margin: 0; color: #727771; font-size: 10px; line-height: 1.75; }
+.landing-about-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.landing-about-card { min-height: 190px; padding: 19px; position: relative; overflow: hidden; border: 1px solid rgba(255,255,255,.075); border-radius: 7px; background: linear-gradient(145deg, rgba(24,29,27,.9), rgba(16,19,18,.86)); }
+.landing-about-card::after { content: ""; width: 95px; height: 95px; position: absolute; right: -52px; bottom: -54px; border: 1px solid rgba(216,183,116,.055); border-radius: 50%; box-shadow: 0 0 0 15px rgba(216,183,116,.012); }
+.landing-about-card > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.landing-about-card > div span { color: rgba(216,183,116,.62); font: 500 10px/1 Georgia, serif; }
+.landing-about-card > div small { overflow: hidden; color: #575d58; font-size: 6px; letter-spacing: .14em; text-overflow: ellipsis; white-space: nowrap; }
+.landing-about-card h3 { margin: 25px 0 10px; color: #d3d0c8; font: 500 16px/1.2 Georgia, "Songti SC", serif; }
+.landing-about-card p { margin: 0; color: #777c76; font-size: 9px; line-height: 1.75; }
+.landing-about-card:nth-child(4), .landing-about-card:nth-child(6) { border-color: rgba(216,183,116,.13); background: linear-gradient(145deg, rgba(46,41,29,.22), rgba(17,20,19,.9)); }
+.landing-about-cta { min-height: 92px; margin-top: 11px; padding: 19px 22px; display: flex; align-items: center; justify-content: space-between; gap: 24px; border: 1px solid rgba(101,198,159,.16); border-radius: 7px; background: linear-gradient(110deg, rgba(38,105,79,.18), rgba(18,22,20,.86) 60%); }
+.landing-about-cta > div { display: flex; flex-direction: column; gap: 6px; }
+.landing-about-cta > div span { color: var(--green-bright); font-size: 7px; letter-spacing: .16em; }
+.landing-about-cta > div strong { color: #c9cdc5; font: 500 14px/1.35 Georgia, "Songti SC", serif; }
+.landing-about-cta button { min-height: 42px; padding: 0 16px; display: flex; align-items: center; gap: 18px; border: 1px solid rgba(101,198,159,.4); border-radius: 5px; background: rgba(62,157,121,.14); color: #cae5d9; font-size: 9px; }
+.landing-about-cta button:hover { border-color: rgba(101,198,159,.65); background: rgba(62,157,121,.22); }
+.landing-about-cta button span { font-size: 13px; }
+
 .landing-footer { min-height: 64px; padding: 0 max(28px, calc((100% - 1180px) / 2)); display: flex; align-items: center; justify-content: space-between; border-top: 1px solid rgba(255,255,255,.065); color: #555a55; }
 .landing-footer span { font: 7px/1 Georgia, serif; letter-spacing: .18em; }
 .landing-footer p { margin: 0; font-size: 7px; }
@@ -1103,6 +1126,33 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
 .modal-close { position: absolute; top: 14px; right: 16px; border: 0; background: transparent; color: #7c807b; font-size: 22px; cursor: pointer; }
 .info-modal h2 { margin: 12px 0 17px; font: 500 29px/1.25 Georgia, serif; }
 .info-modal > p { color: #969991; font-size: 12px; line-height: 1.75; }
+.poker-rules-modal { width: min(900px, 100%); padding: 38px 42px 42px; }
+.poker-rules-modal > p { max-width: 780px; margin-bottom: 23px; }
+.poker-rule-basics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border: 1px solid var(--line); }
+.poker-rule-basics > div { min-height: 128px; padding: 14px; display: flex; flex-direction: column; gap: 7px; border-right: 1px solid var(--line); }
+.poker-rule-basics > div:last-child { border-right: 0; }
+.poker-rule-basics span, .poker-rule-section-heading span, .poker-rule-details > div > span { color: var(--gold); font-size: 7px; letter-spacing: .11em; }
+.poker-rule-basics strong { color: #d6d2c9; font-size: 10px; line-height: 1.45; }
+.poker-rule-basics small { color: #747973; font-size: 8px; line-height: 1.6; }
+.poker-rule-section { margin-top: 25px; }
+.poker-rule-section-heading { margin-bottom: 11px; display: flex; align-items: flex-end; justify-content: space-between; gap: 15px; }
+.poker-rule-section-heading h3 { margin: 0; color: #d8d4ca; font: 500 17px/1.2 Georgia, "Songti SC", serif; }
+.poker-action-rules { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }
+.poker-action-rules > div { min-height: 126px; padding: 13px; position: relative; display: flex; flex-direction: column; gap: 8px; border: 1px solid rgba(255,255,255,.07); border-radius: 5px; background: rgba(255,255,255,.014); }
+.poker-action-rules b { color: #d2cec5; font-size: 10px; }
+.poker-action-rules span { color: #727771; font-size: 8px; line-height: 1.55; }
+.poker-action-rules kbd, .poker-action-rules em { width: max-content; margin-top: auto; padding: 3px 6px; border: 1px solid rgba(101,198,159,.18); border-radius: 3px; background: rgba(101,198,159,.045); color: #88b39f; font-size: 7px; font-style: normal; }
+.poker-hand-ranks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+.poker-hand-ranks > div { min-height: 80px; padding: 12px; display: grid; grid-template-columns: 25px minmax(0, 1fr); align-content: center; gap: 5px 7px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.poker-hand-ranks > div > span { grid-row: 1 / 3; align-self: center; color: rgba(216,183,116,.56); font: 500 9px/1 Georgia, serif; }
+.poker-hand-ranks strong { color: #cbc8bf; font: 500 11px/1.2 Georgia, "Songti SC", serif; }
+.poker-hand-ranks small { color: #696e69; font-size: 7px; line-height: 1.45; }
+.poker-tie-rule { margin: 10px 0 0; color: #717671; font-size: 8px; line-height: 1.65; }
+.poker-rule-details { margin: 25px 0 22px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.poker-rule-details > div { min-height: 154px; padding: 15px; display: flex; flex-direction: column; gap: 7px; border: 1px solid rgba(216,183,116,.12); border-radius: 5px; background: rgba(216,183,116,.025); }
+.poker-rule-details strong { color: #d0ccc2; font-size: 10px; line-height: 1.5; }
+.poker-rule-details p { margin: 0; color: #747973; font-size: 8px; line-height: 1.6; }
+.poker-rules-modal .modal-primary { margin-top: 0; }
 .modal-grid { margin: 24px 0; display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); }
 .modal-grid > div { padding: 16px; display: flex; flex-direction: column; gap: 8px; }
 .modal-grid > div { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
@@ -1142,6 +1192,10 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
   .landing-table-card { width: min(560px, 100%); justify-self: center; }
   .landing-modes { padding-bottom: 72px; }
   .landing-mode-grid { grid-template-columns: 1fr; }
+  .landing-about { padding-bottom: 72px; }
+  .landing-about-heading { grid-template-columns: 1fr; gap: 12px; }
+  .landing-about-heading p { max-width: 650px; }
+  .landing-about-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .app-shell { overflow: auto; }
   .topbar { grid-template-columns: 1fr auto; }
   .session-meta { display: none; }
@@ -1159,11 +1213,21 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
   .hand-history-layout { grid-template-columns: 210px minmax(0, 1fr); }
   .hand-history-players { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hand-history-replay { grid-template-columns: 1fr; }
+  .poker-rule-basics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .poker-rule-basics > div { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .poker-rule-basics > div:nth-child(2n) { border-right: 0; }
+  .poker-rule-basics > div:last-child { grid-column: 1 / -1; border-right: 0; border-bottom: 0; }
+  .poker-action-rules { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .poker-action-rules > div:last-child { grid-column: 1 / -1; min-height: 92px; }
+  .poker-hand-ranks { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .poker-hand-ranks > div:last-child { grid-column: 1 / -1; }
+  .poker-rule-details { grid-template-columns: 1fr; }
+  .poker-rule-details > div { min-height: auto; }
 }
 
 @media (max-width: 640px) {
   .landing-nav { width: calc(100% - 28px); height: 68px; }
-  .landing-nav-actions > a:first-child { display: none; }
+  .landing-nav-actions > a:not(.landing-account-link) { display: none; }
   .landing-nav-actions a { min-height: 40px; padding-inline: 12px; }
   .landing-hero { width: calc(100% - 32px); padding: 58px 0 68px; gap: 48px; }
   .landing-hero-copy h1 { margin-top: 18px; font-size: clamp(38px, 12vw, 52px); line-height: 1.12; }
@@ -1180,6 +1244,13 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
   .landing-modes { width: calc(100% - 32px); padding-bottom: 58px; }
   .landing-mode-card { min-height: 238px; padding: 23px 20px; grid-template-columns: 39px 1fr; gap: 0 13px; }
   .landing-mode-card p { font-size: 9px; }
+  .landing-about { width: calc(100% - 32px); padding-bottom: 58px; }
+  .landing-about-heading h2 { font-size: 23px; }
+  .landing-about-grid { grid-template-columns: 1fr; }
+  .landing-about-card { min-height: 166px; }
+  .landing-about-card h3 { margin-top: 20px; }
+  .landing-about-cta { padding: 18px; align-items: stretch; flex-direction: column; }
+  .landing-about-cta button { width: 100%; justify-content: space-between; }
   .landing-footer { padding: 17px 16px; align-items: flex-start; flex-direction: column; justify-content: center; gap: 8px; }
   .topbar { height: 62px; padding: 0 14px; }
   .table-brand-group { gap: 8px; }
@@ -1226,6 +1297,17 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
   .coach-heading { padding-inline: 16px; }
   .log-content, .session-live { padding-inline: 16px; }
   .info-modal { padding: 34px 24px 24px; }
+  .poker-rules-modal { padding: 34px 18px 22px; }
+  .poker-rules-modal h2 { font-size: 25px; }
+  .poker-rule-basics { grid-template-columns: 1fr; }
+  .poker-rule-basics > div, .poker-rule-basics > div:nth-child(2n), .poker-rule-basics > div:nth-last-child(-n+2), .poker-rule-basics > div:last-child { min-height: auto; grid-column: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  .poker-rule-basics > div:last-child { border-bottom: 0; }
+  .poker-rule-section-heading { align-items: flex-start; flex-direction: column; }
+  .poker-action-rules { grid-template-columns: 1fr; }
+  .poker-action-rules > div, .poker-action-rules > div:last-child { min-height: auto; grid-column: auto; }
+  .poker-hand-ranks { grid-template-columns: 1fr; }
+  .poker-hand-ranks > div:last-child { grid-column: auto; }
+  .poker-rule-details { grid-template-columns: 1fr; }
   .modal-grid { grid-template-columns: 1fr; }
   .modal-grid > div, .modal-grid > div:nth-child(2n), .modal-grid > div:nth-last-child(-n+2) { border-right: 0; border-bottom: 1px solid var(--line); }
   .modal-grid > div:last-child { border-bottom: 0; }

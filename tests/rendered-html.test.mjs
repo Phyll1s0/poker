@@ -37,6 +37,9 @@ test("server-renders the RangeCraft landing page before mounting a poker table",
   assert.match(html, /把每一手牌/);
   assert.match(html, /进入单人训练/);
   assert.match(html, /免注册入桌/);
+  assert.match(html, /开始之前，先知道这里能练什么/);
+  assert.match(html, /完整 GTO 的边界/);
+  assert.match(html, /安装成应用/);
   assert.doesNotMatch(html, /正在洗牌/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
@@ -65,6 +68,13 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /function settleShowdown/);
   assert.match(page, /function chooseAiAction/);
   assert.match(page, /function LandingHome/);
+  assert.match(page, /LANDING_GUIDE_ITEMS/);
+  assert.match(page, /id="about-range-craft"/);
+  assert.match(page, /训练模式、策略边界、规则覆盖和安装方式都放在主页/);
+  assert.ok(
+    page.indexOf("完整 GTO 的边界") < page.indexOf("function SoloTrainer"),
+    "产品说明应位于最外层主页，而不是牌桌规则弹窗",
+  );
   assert.match(page, /function SoloTrainer/);
   assert.match(page, /portalViewFromHash/);
   assert.match(page, /return "#\/multiplayer"/);
@@ -103,6 +113,18 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /game\.status !== "showdown" \|\| !game\.showChoiceMade/);
   assert.match(page, /pokerPrivatePeekCandidateIds\(game\.players, game\.shownPlayerIds\)/);
   assert.match(page, /PrivatePeekOpportunity game=\{game\} onPeek=\{choosePrivatePeek\}/);
+  assert.match(page, /查看德州扑克规则/);
+  assert.match(page, /TEXAS HOLD.*EM RULEBOOK/);
+  assert.match(page, /从七张牌里组成最强的五张牌/);
+  assert.match(page, /主池、边池与退回/);
+  assert.match(page, /花色不分大小/);
+  assert.match(page, /不足额全下不一定会/);
+  assert.match(page, /不是标准德州扑克规则/);
+  assert.doesNotMatch(page, /ABOUT THE LAB|关于 GTO 边界/);
+  assert.match(globalsCss, /\.landing-about-grid/);
+  assert.match(globalsCss, /\.landing-nav-actions > a:not\(\.landing-account-link\)/);
+  assert.match(globalsCss, /\.poker-rules-modal/);
+  assert.match(globalsCss, /\.poker-hand-ranks/);
   assert.match(page, /最近 30 手牌谱与回放/);
   assert.match(page, /所有电脑底牌已在赛后记录中公开/);
   assert.match(page, /setSealedRunHistory/);
@@ -119,7 +141,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.doesNotMatch(multiplayerClient, /poker-history|PokerHandHistoryEntry|完整牌谱/);
   assert.match(page, /setInstallHelpOpen\(true\)/);
   assert.match(page, /ChatGPT \/ 微信等内置浏览器/);
-  assert.doesNotMatch(page, /if \(!installPrompt\) \{\s*setInfoOpen\(true\)/);
+  assert.doesNotMatch(page, /if \(!installPrompt\) \{\s*setRulesOpen\(true\)/);
   assert.match(globalsCss, /width: min\(800px, 78%, calc\(82dvh - 59px\)\)/);
   assert.match(globalsCss, /\.seat-0 \{ left: 50%; bottom: -100px/);
   assert.match(globalsCss, /\.seat-3 \{ left: 50%; top: -84px/);

@@ -1467,6 +1467,69 @@ function SquidScoreboard({ game, report = false }: { game: Game; report?: boolea
   );
 }
 
+const LANDING_GUIDE_ITEMS = [
+  {
+    index: "01",
+    eyebrow: "TABLE DEPTH",
+    title: "四种桌型",
+    text: "浅筹、标准、深筹分别以 40 / 100 / 200 BB 开始；血战鱿鱼以 200 BB 开始。筹码跨手延续，每手策略按当时双方的实际有效筹码计算。",
+  },
+  {
+    index: "02",
+    eyebrow: "TRAINING FLOW",
+    title: "三种训练",
+    text: "逐手训练即时点评；常规整局固定 20 手；无尽模式保留筹码、对手与玩家画像，主动结束后统计累计收益和 BB/100。浏览器保存最近 30 手牌谱。",
+  },
+  {
+    index: "03",
+    eyebrow: "SQUID SIDE GAME",
+    title: "血战鱿鱼",
+    text: "六人桌争夺 9 条鱿鱼，持有 3 / 5 / 7 条时触发 ×2 / ×3 / ×4。无人跟注时必须亮牌才能获得，主池平分则不发。",
+  },
+  {
+    index: "04",
+    eyebrow: "STRATEGY BOUNDARY",
+    title: "完整 GTO 的边界",
+    text: "当前是 169 手牌基准表、行动加权范围与连续混频构成的本地近似策略，不冒充求解器精确解。任意六人动态牌局仍需要预计算策略库或外部求解服务。",
+  },
+  {
+    index: "05",
+    eyebrow: "TABLE IMAGE",
+    title: "形象与适应",
+    text: "你和电脑都可以选择亮牌或盖牌。电脑会从公开行动形成对你松紧、侵略性与欺骗性的判断；无尽模式会随样本增加持续调整反制。",
+  },
+  {
+    index: "06",
+    eyebrow: "RULE COVERAGE",
+    title: "支持的规则范围",
+    text: "六人无限注现金桌、主池与边池、全下跑牌、未跟注筹码退回和不足额全下后的加注权都按牌局状态处理；鱿鱼结算属于额外训练玩法。",
+  },
+  {
+    index: "07",
+    eyebrow: "INSTALL APP",
+    title: "安装成应用",
+    text: "Chrome 或 Edge 可点牌桌顶栏“安装应用”；Mac Safari 使用“添加到程序坞”，iPhone / iPad 使用“添加到主屏幕”。",
+  },
+  {
+    index: "08",
+    eyebrow: "OPEN ANYWHERE",
+    title: "直接在线打开",
+    text: "正式网址无需启动本地服务器。安装完成后可以像普通软件一样从桌面、程序坞或手机主屏幕直接进入。",
+  },
+] as const;
+
+const POKER_HAND_RANKS = [
+  ["01", "同花顺", "同一花色的五张连续牌；A-K-Q-J-10 是最大的同花顺"],
+  ["02", "四条", "四张相同点数的牌，再比较第五张踢脚牌"],
+  ["03", "葫芦", "三张相同点数加一对；先比较三条的点数"],
+  ["04", "同花", "五张同一花色但不连续，从最高张依次比较"],
+  ["05", "顺子", "五张连续点数、花色不限；A-2-3-4-5 是最小顺子"],
+  ["06", "三条", "三张相同点数，再依次比较两张踢脚牌"],
+  ["07", "两对", "先比较较大的一对，再比较较小的一对和踢脚牌"],
+  ["08", "一对", "一组对子，再依次比较三张踢脚牌"],
+  ["09", "高牌", "没有组成以上牌型时，从最高张开始依次比较"],
+] as const;
+
 function LandingHome({ onEnterSolo }: { onEnterSolo: () => void }) {
   const multiplayerHref = multiplayerEntryHref();
 
@@ -1481,6 +1544,7 @@ function LandingHome({ onEnterSolo }: { onEnterSolo: () => void }) {
           <div><strong>RANGECRAFT</strong><span>德州扑克训练室</span></div>
         </div>
         <nav className="landing-nav-actions" aria-label="主页导航">
+          <a href="#about-range-craft">训练说明</a>
           <a href={multiplayerHref}>多人模式</a>
           <a className="landing-account-link" href={multiplayerHref}>免注册入桌</a>
         </nav>
@@ -1553,6 +1617,29 @@ function LandingHome({ onEnterSolo }: { onEnterSolo: () => void }) {
         </div>
       </section>
 
+      <section className="landing-about" id="about-range-craft" aria-labelledby="about-heading">
+        <div className="landing-about-heading">
+          <div>
+            <span>ABOUT RANGECRAFT</span>
+            <h2 id="about-heading">开始之前，先知道这里能练什么。</h2>
+          </div>
+          <p>训练模式、策略边界、规则覆盖和安装方式都放在主页。进入牌桌后，“？”只负责解释真正的德州扑克规则。</p>
+        </div>
+        <div className="landing-about-grid">
+          {LANDING_GUIDE_ITEMS.map((item) => (
+            <article className="landing-about-card" key={item.index}>
+              <div><span>{item.index}</span><small>{item.eyebrow}</small></div>
+              <h3>{item.title}</h3>
+              <p>{item.text}</p>
+            </article>
+          ))}
+        </div>
+        <div className="landing-about-cta">
+          <div><span>READY TO PRACTICE</span><strong>规则看懂以后，用真实决策把它练成习惯。</strong></div>
+          <button type="button" onClick={onEnterSolo}>进入单人训练 <span>→</span></button>
+        </div>
+      </section>
+
       <footer className="landing-footer">
         <span>RANGECRAFT · DECISION FIRST</span>
         <p>近似 GTO 训练工具，不代表求解器给出的精确 EV。</p>
@@ -1568,7 +1655,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   const [review, setReview] = useState<Review[]>([]);
   const [feedback, setFeedback] = useState<Review | null>(null);
   const [showLog, setShowLog] = useState(false);
-  const [infoOpen, setInfoOpen] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
   const [dealing, setDealing] = useState(false);
   const [soundOn, setSoundOn] = useState(true);
@@ -2155,7 +2242,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
           >
             <span>{isReviewRun ? "赛后点评" : "训练提示"}</span><b>{isReviewRun ? "LOCK" : training ? "ON" : "OFF"}</b>
           </button>
-          <button className="icon-button" aria-label="查看游戏说明" onClick={() => setInfoOpen(true)}>?</button>
+          <button className="icon-button" aria-label="查看德州扑克规则" title="德州扑克规则" onClick={() => setRulesOpen(true)}>?</button>
         </div>
       </header>
 
@@ -2549,7 +2636,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
 
           <footer className="coach-footer">
             <span><i /> 本地混合频率引擎</span>
-            <button onClick={() => setInfoOpen(true)}>关于 GTO 边界 ↗</button>
+            <button onClick={() => setRulesOpen(true)}>德州扑克规则 ↗</button>
           </footer>
         </aside>
       </div>
@@ -2692,24 +2779,50 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
         </div>
       )}
 
-      {infoOpen && (
+      {rulesOpen && (
         <div className="modal-backdrop">
-          <section className="info-modal" role="dialog" aria-modal="true" aria-labelledby="info-title">
-            <button className="modal-close" onClick={() => setInfoOpen(false)} aria-label="关闭">×</button>
-            <span className="eyebrow">ABOUT THE LAB</span>
-            <h2 id="info-title">更强的混合频率对手，<br />但不冒充“完整 GTO”。</h2>
-            <p>翻前先查询六人桌 169 手牌基准表，再按位置、前序行动、尺度与筹码深度修正；翻后综合对行动加权范围的估算权益、直接赔率、权益实现、SPR、牌面纹理、听牌与阻断牌，连续生成动作和条件尺度混合。电脑、实时建议与复盘共用同一策略；评分是频率匹配度，不是求解器计算出的精确 EV 损失。</p>
-            <div className="modal-grid">
-              <div><b>四种桌型</b><span>初始买入分别为浅筹 40 BB、标准 100 BB、深筹 200 BB，以及 200 BB 的血战鱿鱼；之后筹码跨手延续，每手策略按实际起始有效筹码计算。</span></div>
-              <div><b>三种训练</b><span>逐手模式每手即时点评；常规整局固定 20 手；无尽模式持续保留筹码、对手和玩家画像，主动结束后统计累计收益与 BB/100。鱿鱼以 9 条全部发完为终点。任一玩家低于 1 BB 时，下一手按现金桌规则自动补回桌型基准。浏览器只保留最近 30 手牌谱，整局与无尽对局结束后才解锁全部底牌回放。</span></div>
-              <div><b>血战鱿鱼</b><span>六人桌争夺 9 条；3/5/7 条触发 ×2/×3/×4。无人跟注时亮牌才获得。</span></div>
-              <div><b>完整 GTO 的边界</b><span>任意 6 人动态牌局需要预计算策略库或外部求解服务；现有传输接口可在后续接入。</span></div>
-              <div><b>形象博弈</b><span>你和 AI 都可选择亮牌或盖牌；所有电脑都会用公开信息形成对你的松紧、侵略性与欺骗性判断，无尽模式下会随样本增加持续反制，同时保留各自风格。</span></div>
-              <div><b>规则范围</b><span>6 人现金桌、边池、全下跑牌、不足额全下加注权与鱿鱼跨手结算均在本地处理。</span></div>
-              <div><b>安装成应用</b><span>Chrome 或 Edge 点顶栏“安装应用”；Mac Safari 选“文件 → 添加到程序坞”，iPhone/iPad 选“分享 → 添加到主屏幕”。</span></div>
-              <div><b>如何打开</b><span>线上地址无需启动服务器；本地地址只有运行开发服务时可用。安装后可直接从桌面或程序坞点图标进入。</span></div>
+          <section className="info-modal poker-rules-modal" role="dialog" aria-modal="true" aria-labelledby="rules-title">
+            <button className="modal-close" onClick={() => setRulesOpen(false)} aria-label="关闭德州扑克规则">×</button>
+            <span className="eyebrow">TEXAS HOLD&apos;EM RULEBOOK</span>
+            <h2 id="rules-title">先看懂一手牌，<br />再练好每个决定。</h2>
+            <p>每位玩家拿两张只有自己可见的底牌，桌面最多发出五张公共牌。你可以使用两张、一张或完全不用自己的底牌，从七张牌里组成最强的五张牌；也可以在摊牌前让所有对手弃牌，直接赢下底池。</p>
+
+            <div className="poker-rule-basics">
+              <div><span>牌桌位置</span><strong>D 庄位 → SB 小盲 → BB 大盲</strong><small>庄位每手顺时针移动；盲注是发牌前必须投入的筹码。</small></div>
+              <div><span>翻牌前</span><strong>每人 2 张底牌</strong><small>从大盲左侧开始行动；大盲在无人加注时拥有最后过牌选择。</small></div>
+              <div><span>翻牌</span><strong>一次发出 3 张公共牌</strong><small>仍在牌局中的玩家进入第二轮下注。</small></div>
+              <div><span>转牌</span><strong>再发 1 张公共牌</strong><small>第三轮下注，底池通常开始明显变大。</small></div>
+              <div><span>河牌与摊牌</span><strong>最后 1 张 · 比较最佳五张</strong><small>最后一轮下注结束后，未弃牌玩家公开手牌决定赢家。</small></div>
             </div>
-            <button className="modal-primary" onClick={() => setInfoOpen(false)}>回到牌桌</button>
+
+            <section className="poker-rule-section" aria-labelledby="action-rules-title">
+              <div className="poker-rule-section-heading"><span>ACTIONS</span><h3 id="action-rules-title">轮到你时可以做什么</h3></div>
+              <div className="poker-action-rules">
+                <div><b>弃牌</b><span>放弃本手；已经投入底池的筹码不会退回。</span><kbd>F</kbd></div>
+                <div><b>过牌</b><span>当前无需补筹码时把行动交给下一位玩家。</span><kbd>C</kbd></div>
+                <div><b>跟注</b><span>补齐当前最高投入；筹码不足时可以用剩余筹码全下跟注。</span><kbd>C</kbd></div>
+                <div><b>下注 / 加注</b><span>没人下注时建立价格；已有下注时提高到新的总额。界面显示的是“加注至”。</span><kbd>R</kbd></div>
+                <div><b>全下</b><span>投入全部剩余筹码；只能赢取每位对手与你等额匹配的部分。</span><em>ALL-IN</em></div>
+              </div>
+            </section>
+
+            <section className="poker-rule-section" aria-labelledby="hand-ranks-title">
+              <div className="poker-rule-section-heading"><span>HAND RANKINGS · STRONG TO WEAK</span><h3 id="hand-ranks-title">牌型从大到小</h3></div>
+              <div className="poker-hand-ranks">
+                {POKER_HAND_RANKS.map(([index, name, description]) => (
+                  <div key={index}><span>{index}</span><strong>{name}</strong><small>{description}</small></div>
+                ))}
+              </div>
+              <p className="poker-tie-rule">同牌型按组成牌型的点数和踢脚牌逐级比较；花色不分大小。若双方最好的五张牌完全相同，则平分相应底池。</p>
+            </section>
+
+            <div className="poker-rule-details">
+              <div><span>主池、边池与退回</span><strong>全下金额不同，会按可匹配额度分层。</strong><p>每个边池只有投入到该层且没有弃牌的玩家有资格争夺；弃牌前投入仍是死钱。没人能够跟上的超额筹码会原样退回，不算奖金。</p></div>
+              <div><span>加注权</span><strong>完整加注会重新开放行动，不足额全下不一定会。</strong><p>短码全下若没有达到一个完整最小加注量，已经行动过的玩家通常只能跟注或弃牌；多个不足额加注累计达到完整增量后才重新开放。</p></div>
+              <div><span>这张训练桌</span><strong>6-MAX · 盲注 5/10 · 无限注现金桌规则</strong><p>F 弃牌、C 过牌或跟注、R 加注、N 下一手。浅筹 / 标准 / 深筹只是初始买入深度；“血战鱿鱼”是附加训练玩法，不是标准德州扑克规则。</p></div>
+            </div>
+
+            <button className="modal-primary" onClick={() => setRulesOpen(false)}>看懂了，回到牌桌</button>
           </section>
         </div>
       )}
