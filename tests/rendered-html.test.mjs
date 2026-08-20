@@ -100,6 +100,13 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /className=\{styles\.primaryActions\}/);
   assert.match(multiplayerClient, /className=\{styles\.raiseControl\}/);
   assert.match(multiplayerClient, /addEventListener\("keydown", handleTableShortcut\)/);
+  assert.match(multiplayerClient, /SHOW OR MUCK · 赢家亮牌决定/);
+  assert.match(multiplayerClient, /全桌正在等待进入下一手/);
+  assert.match(multiplayerClient, /亮牌决定完成后开始全桌倒计时/);
+  assert.ok(
+    multiplayerClient.indexOf("styles.showDecisionPanel") < multiplayerClient.indexOf("styles.nextHandWaitingPanel"),
+    "赢家亮牌决定应显示在全桌下一手等待区上方",
+  );
   assert.match(multiplayerClient, /street: game\.street/);
   assert.match(multiplayerClient, /bigBlind: snapshot\?\.table\.bigBlind/);
   assert.match(multiplayerClient, /3_000 \+ Math\.floor\(Math\.random\(\) \* 2_001\)/);
@@ -132,6 +139,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerCss, /\.multiplayerPage \.card\.blackCard,[\s\S]*?\.multiplayerPage \.miniCard\.blackCard\s*\{\s*color:/);
   assert.match(multiplayerCss, /width: min\(800px, 78%, calc\(82dvh - 59px\)\)/);
   assert.match(multiplayerCss, /grid-template-columns: 150px minmax\(330px, 1fr\) 270px/);
+  assert.match(multiplayerCss, /\.handTransition\s*\{[\s\S]*?grid-column: 1 \/ -1/);
+  assert.match(multiplayerCss, /\.showDecisionPanel,[\s\S]*?\.nextHandWaitingPanel/);
   assert.match(staticMultiplayer, /supabase\.co\/functions\/v1\/poker-api/);
   assert.match(staticMultiplayer, /rangecraft\.multiplayer\.guest-token/);
   assert.match(staticMultiplayer, /signOutLabel="返回首页"/);

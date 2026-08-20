@@ -847,11 +847,15 @@ export default function MultiplayerClient({
     return () => window.removeEventListener("keydown", handleTableShortcut);
   }, [busy, canRaise, game, isMyTurn, legal?.fold, passiveAction, raiseIsValid, raiseTo, sendCommand]);
 
+  const pendingShowSeat = snapshot?.table.hand?.pendingShowSeat ?? null;
+  const pendingShowPlayer = pendingShowSeat === null
+    ? null
+    : game?.players.find((player) => player.seat === pendingShowSeat) ?? null;
   const mustChooseShow = Boolean(
     snapshot
       && phase === "showdown"
       && snapshot.table.viewerSeat !== null
-      && snapshot.table.hand?.pendingShowSeat === snapshot.table.viewerSeat,
+      && pendingShowSeat === snapshot.table.viewerSeat,
   );
 
   const temporarilyLeaveTable = () => {
@@ -1115,11 +1119,13 @@ export default function MultiplayerClient({
             )}
 
             {game && (
-              <div className={`${styles.tableControls} ${canRaise ? styles.tableControlsWithRaise : ""}`}>
+              <div className={`${styles.tableControls} ${canRaise ? styles.tableControlsWithRaise : ""} ${phase === "showdown" || phase === "between_hands" ? styles.tableControlsTransition : ""}`}>
                 {game.result && <div className={styles.resultBanner}>{game.result.summary}</div>}
                 <WinningHands game={game} />
-                <div className={styles.controlSummary}>
-                  <span className={styles.turnLabel}>{isMyTurn ? "轮到你行动" : phase === "showdown" ? "正在摊牌" : "牌桌进行中"}</span>
+                {phase !== "showdown" && phase !== "between_hands" && (
+                  <>
+                    <div className={styles.controlSummary}>
+                  <span className={styles.turnLabel}>{isMyTurn ? "轮到你行动" : "牌桌进行中"}</span>
                   <strong>{STREET_LABELS[game.street]}</strong>
                   {phase === "playing" && game.actorAccountId && (
                     <div className={`${styles.actionClockSummary} ${(actionSecondsLeft ?? 99) <= 3 ? styles.actionClockUrgent : ""}`}>
@@ -1130,15 +1136,9 @@ export default function MultiplayerClient({
                   <span>
                     {isMyTurn
                       ? "选择路线与准确下注尺寸"
-                      : mustChooseShow
-                        ? "请选择亮出或盖掉赢家手牌"
-                        : phase === "showdown"
-                          ? "等待赢家决定是否亮牌"
-                          : phase === "between_hands"
-                            ? "倒计时结束后自动开始下一手"
-                            : game.actorAccountId
-                              ? `等待 ${actingPlayer?.handle ?? "对手"} 行动`
-                              : "本手已结束"}
+                      : game.actorAccountId
+                        ? `等待 ${actingPlayer?.handle ?? "对手"} 行动`
+                        : "本手已结束"}
                   </span>
                   {isMyTurn && selfPlayer && selfPlayer.timeBankMs > 0 && (
                     <button
@@ -1151,9 +1151,9 @@ export default function MultiplayerClient({
                       <small>剩余 {Math.ceil(selfPlayer.timeBankMs / 1_000)}s</small>
                     </button>
                   )}
-                </div>
+                    </div>
 
-                <div className={styles.primaryActions} aria-label="牌桌行动">
+                    <div className={styles.primaryActions} aria-label="牌桌行动">
                   <button
                     className={`${styles.actionButton} ${styles.foldAction}`}
                     type="button"
@@ -1178,10 +1178,10 @@ export default function MultiplayerClient({
                   >
                     <span>{canRaise ? (raiseIsAllIn ? `全下 ${raiseTo}` : `${raiseVerb}到 ${raiseTo}`) : "下注 / 加注"}</span><kbd>R</kbd>
                   </button>
-                </div>
+                    </div>
 
-                {isMyTurn && legal?.minRaiseTo != null && legal.maxRaiseTo != null ? (
-                  <div className={styles.raiseControl}>
+                    {isMyTurn && legal?.minRaiseTo != null && legal.maxRaiseTo != null ? (
+                      <div className={styles.raiseControl}>
                     <div className={styles.raiseHeading}>
                       <span>{legal.raiseAllInOnly ? "仅可不足额全下" : `${raiseVerb}范围 ${legal.minRaiseTo}–${legal.maxRaiseTo}`}</span>
                       <strong>{raiseIsAllIn ? `全下到 ${raiseTo}` : `${raiseVerb}到 ${raiseTo}`}</strong>
@@ -1229,45 +1229,66 @@ export default function MultiplayerClient({
                     <small className={styles.raiseExplanation}>
                       本次投入 {raiseAdditional}{selfPlayer ? ` · 操作后剩余 ${Math.max(0, selfPlayer.stack - raiseAdditional)}` : ""}
                     </small>
-                  </div>
-                ) : (
-                  <div className={styles.actionIdle}>
-                    <span>{phase === "playing" ? "桌上行动进行中" : "本手结算中"}</span>
-                    <strong>{isMyTurn ? "当前没有可用的加注路线" : `等待 ${actingPlayer?.handle ?? "牌桌"}`}</strong>
-                  </div>
+                      </div>
+                    ) : (
+                      <div className={styles.actionIdle}>
+                        <span>桌上行动进行中</span>
+                        <strong>{isMyTurn ? "当前没有可用的加注路线" : `等待 ${actingPlayer?.handle ?? "牌桌"}`}</strong>
+                      </div>
+                    )}
+                  </>
                 )}
 
-                {mustChooseShow && (
-                  <div className={styles.phaseActions}>
-                    <span>你可以通过亮牌或盖牌影响朋友对你打法的判断。</span>
-                    <button className={styles.secondaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "show", handId: game.handId, show: false })}>盖牌</button>
-                    <button className={styles.primaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "show", handId: game.handId, show: true })}>亮出赢家手牌</button>
-                  </div>
-                )}
-                {phase === "between_hands" && (
-                  <div className={styles.phaseActions}>
-                    <div className={styles.autoNextHand} role="status" aria-live="polite">
-                      <span className={styles.autoNextPulse} />
-                      <span>
-                        <strong>
-                          {selfPlayer?.stack === 0 && snapshot.table.tableMode === "tournament"
-                            ? "等待其余玩家进入下一手"
-                            : selfPlayer?.stack === 0
-                              ? `将自动补至 ${snapshot.table.startingStack} 筹码`
-                              : selfPlayer?.ready
-                                ? "已准备，等待其他玩家"
-                                : nextHandCountdown === 0
-                                  ? "正在进入下一手…"
-                                  : `${nextHandCountdown ?? "—"} 秒后进入下一手`}
-                        </strong>
-                        <small>全桌倒计时完成后自动发牌</small>
-                      </span>
-                    </div>
-                    {!selfPlayer?.ready && canRejoinNextHand && (
-                      <button className={styles.primaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "ready", ready: true })}>
-                        立即准备
-                      </button>
+                {(phase === "showdown" || phase === "between_hands") && (
+                  <div className={styles.handTransition}>
+                    {phase === "showdown" && (
+                      <div className={styles.showDecisionPanel} role="status" aria-live="polite">
+                        <div className={styles.showDecisionCopy}>
+                          <span>SHOW OR MUCK · 赢家亮牌决定</span>
+                          <strong>
+                            {mustChooseShow
+                              ? "你要亮出这手牌吗？"
+                              : `等待 ${pendingShowPlayer?.handle ?? "本手赢家"} 决定亮牌或盖牌`}
+                          </strong>
+                          <small>{mustChooseShow ? "亮牌可以塑造桌上形象，盖牌则保留信息。" : "赢家完成决定后，所有玩家一起进入下一手等待。"}</small>
+                        </div>
+                        {mustChooseShow ? (
+                          <div className={styles.showDecisionActions}>
+                            <button className={styles.secondaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "show", handId: game.handId, show: false })}>盖牌</button>
+                            <button className={styles.primaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "show", handId: game.handId, show: true })}>亮出赢家手牌</button>
+                          </div>
+                        ) : (
+                          <span className={styles.showDecisionWaiting}><i />等待决定</span>
+                        )}
+                      </div>
                     )}
+
+                    <div className={styles.nextHandWaitingPanel}>
+                      <div className={styles.autoNextHand} role="status" aria-live="polite">
+                        <span className={styles.autoNextPulse} />
+                        <span>
+                          <strong>
+                            {phase === "showdown"
+                              ? "全桌正在等待进入下一手"
+                              : selfPlayer?.stack === 0 && snapshot.table.tableMode === "tournament"
+                                ? "等待其余玩家进入下一手"
+                                : selfPlayer?.stack === 0
+                                  ? `将自动补至 ${snapshot.table.startingStack} 筹码`
+                                  : selfPlayer?.ready
+                                    ? "已准备，等待其他玩家"
+                                    : nextHandCountdown === 0
+                                      ? "正在进入下一手…"
+                                      : `${nextHandCountdown ?? "—"} 秒后进入下一手`}
+                          </strong>
+                          <small>{phase === "showdown" ? "亮牌决定完成后开始全桌倒计时" : "全桌倒计时完成后自动发牌"}</small>
+                        </span>
+                      </div>
+                      {phase === "between_hands" && !selfPlayer?.ready && canRejoinNextHand && (
+                        <button className={styles.primaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "ready", ready: true })}>
+                          立即准备
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
