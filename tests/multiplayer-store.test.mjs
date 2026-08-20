@@ -17,6 +17,8 @@ import {
   MultiplayerGameError,
   MultiplayerGameService,
   parseMultiplayerCommand,
+  parseMultiplayerMessageCursor,
+  parseMultiplayerRoomMessage,
 } from "../lib/multiplayer-game.ts";
 
 class SqliteD1Statement {
@@ -319,6 +321,86 @@ test("schema and routes keep identity server-owned and enable the D1 binding", a
   }
   assert.match(accountRoute, /registerAccount\(user\.userId, payload\.handle\)/);
   assert.match(joinRoute, /joinRoom\(account\.id, payload\.joinCode\)/);
+});
+
+test("D1 chat is server-authored, idempotent, ordered, and independent from poker revision", async (context) => {
+  const { sqlite, store } = await testStore();
+  context.after(() => sqlite.close());
+  const owner = (await store.registerAccount("chat-owner", "聊天房主")).account;
+  const guest = (await store.registerAccount("chat-guest", "聊天来宾")).account;
+  const room = await store.createRoom(owner.id, "聊天测试桌", 2);
+  await store.joinRoom(guest.id, room.joinCode);
+  const service = new MultiplayerGameService(new SqliteD1Database(sqlite));
+  const revisionBefore = (await service.getSnapshot(room.id, owner.id)).room.revision;
+  const payload = parseMultiplayerRoomMessage({
+    requestId: "chat-message-owner-1",
+    kind: "text",
+    content: "你好 <script>alert(1)</script>",
+    authorSeat: 5,
+    authorHandle: "伪造昵称",
+  });
+
+  const sent = await service.sendMessage(room.id, owner.id, payload);
+  assert.equal(sent.duplicate, false);
+  assert.equal(sent.message.seat, 0);
+  assert.equal(sent.message.handle, owner.handle);
+  assert.equal(sent.message.content, "你好 <script>alert(1)</script>");
+  const duplicate = await service.sendMessage(room.id, owner.id, payload);
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(duplicate.message.id, sent.message.id);
+
+  await service.sendMessage(room.id, guest.id, parseMultiplayerRoomMessage({
+    requestId: "chat-message-guest-1",
+    kind: "reaction",
+    content: "🔥",
+  }));
+  const initial = await service.getMessages(room.id, guest.id, null);
+  assert.deepEqual(initial.messages.map((message) => message.content), [
+    "你好 <script>alert(1)</script>",
+    "🔥",
+  ]);
+  const incremental = await service.getMessages(room.id, owner.id, parseMultiplayerMessageCursor(sent.message.id));
+  assert.deepEqual(incremental.messages.map((message) => message.content), ["🔥"]);
+  assert.equal((await service.getSnapshot(room.id, owner.id)).room.revision, revisionBefore);
+
+  assert.throws(
+    () => parseMultiplayerRoomMessage({ requestId: "chat-invalid-reaction", kind: "reaction", content: "<img>" }),
+    (error) => error instanceof MultiplayerGameError && error.code === "INVALID_MESSAGE",
+  );
+});
+
+test("D1 chat enforces the six-message burst limit at insertion time", async (context) => {
+  const { sqlite, store } = await testStore();
+  context.after(() => sqlite.close());
+  const owner = (await store.registerAccount("chat-rate-owner", "限速房主")).account;
+  const room = await store.createRoom(owner.id, "聊天限速测试桌", 2);
+  const service = new MultiplayerGameService(new SqliteD1Database(sqlite));
+  const originalNow = Date.now;
+  Date.now = () => 1_777_777_777_000;
+
+  try {
+    for (let index = 0; index < 6; index += 1) {
+      await service.sendMessage(room.id, owner.id, parseMultiplayerRoomMessage({
+        requestId: `chat-rate-message-${index}`,
+        kind: "text",
+        content: `消息 ${index + 1}`,
+      }));
+    }
+    await assert.rejects(
+      service.sendMessage(room.id, owner.id, parseMultiplayerRoomMessage({
+        requestId: "chat-rate-message-blocked",
+        kind: "text",
+        content: "第七条消息",
+      })),
+      (error) => error instanceof MultiplayerGameError && error.code === "RATE_LIMITED",
+    );
+    assert.equal(
+      sqlite.prepare("SELECT count(*) AS count FROM room_messages WHERE room_id = ?").get(room.id).count,
+      6,
+    );
+  } finally {
+    Date.now = originalNow;
+  }
 });
 
 test("D1 room state executes commands and never projects another player's hole cards", async () => {

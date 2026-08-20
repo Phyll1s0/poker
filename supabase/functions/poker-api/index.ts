@@ -17,6 +17,12 @@ import {
   type OnlinePublicRoomState,
   type OnlineRoomState,
 } from "./online-poker.ts";
+import {
+  MULTIPLAYER_CHAT_MESSAGE_LIMIT,
+  MultiplayerChatValidationError,
+  normalizeMultiplayerChatMessage,
+  type MultiplayerChatMessage,
+} from "./multiplayer-chat.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -30,6 +36,7 @@ const TOKEN_PATTERN = /^([0-9a-f-]{36})\.([A-Za-z0-9_-]{40,60})$/;
 const COMMAND_ID_PATTERN = /^[a-zA-Z0-9._:-]{8,128}$/;
 const ACTIONS = new Set(["fold", "check", "call", "raise"]);
 const ALLOWED_ORIGINS = new Set([
+  "https://rangecraft-poker-trainer.pigstd.chatgpt.site",
   "https://poker.phyll1s0.com",
   "https://phyll1s0.com",
   "https://phyll1s0.github.io",
@@ -66,6 +73,31 @@ type RoomRow = {
   created_at: string;
   updated_at: string;
   expires_at: string;
+};
+
+type RoomMessageRow = {
+  id: number | string;
+  room_id?: string;
+  guest_id?: string;
+  request_id?: string;
+  author_seat: number;
+  author_handle: string;
+  kind: "text" | "reaction";
+  body: string;
+  created_at: string;
+};
+
+type AppendRoomMessageResult = {
+  message?: {
+    id?: unknown;
+    seat?: unknown;
+    handle?: unknown;
+    kind?: unknown;
+    content?: unknown;
+    createdAt?: unknown;
+  };
+  duplicate?: unknown;
+  conflict?: unknown;
 };
 
 type ClientCard = {
@@ -497,6 +529,143 @@ async function memberRoom(roomId: string, guestId: string): Promise<RoomRow> {
   return data as RoomRow;
 }
 
+function publicRoomMessage(row: RoomMessageRow): MultiplayerChatMessage {
+  const createdAt = Date.parse(row.created_at);
+  if (
+    !/^[1-9][0-9]{0,18}$/.test(String(row.id))
+    || !Number.isInteger(row.author_seat)
+    || row.author_seat < 0
+    || row.author_seat > 5
+    || typeof row.author_handle !== "string"
+    || (row.kind !== "text" && row.kind !== "reaction")
+    || typeof row.body !== "string"
+    || !Number.isFinite(createdAt)
+  ) {
+    throw new ApiError(500, "DATABASE_ERROR", "牌桌消息格式不正确。");
+  }
+  return {
+    id: String(row.id),
+    seat: row.author_seat,
+    handle: row.author_handle,
+    kind: row.kind,
+    content: row.body,
+    createdAt,
+  };
+}
+
+function publicRpcRoomMessage(value: AppendRoomMessageResult["message"]): MultiplayerChatMessage {
+  if (!value) throw new ApiError(500, "DATABASE_ERROR", "牌桌消息没有正确保存。");
+  if (value.kind !== "text" && value.kind !== "reaction") {
+    throw new ApiError(500, "DATABASE_ERROR", "牌桌消息格式不正确。");
+  }
+  return publicRoomMessage({
+    id: typeof value.id === "string" || typeof value.id === "number" ? value.id : "",
+    author_seat: Number(value.seat),
+    author_handle: typeof value.handle === "string" ? value.handle : "",
+    kind: value.kind,
+    body: typeof value.content === "string" ? value.content : "",
+    created_at: typeof value.createdAt === "string" ? value.createdAt : "",
+  });
+}
+
+function messageCursor(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string" || !/^[1-9][0-9]{0,18}$/.test(value)) {
+    throw new ApiError(400, "INVALID_MESSAGE_CURSOR", "消息游标格式不正确。");
+  }
+  const maxBigint = "9223372036854775807";
+  if (value.length === maxBigint.length && value > maxBigint) {
+    throw new ApiError(400, "INVALID_MESSAGE_CURSOR", "消息游标格式不正确。");
+  }
+  return value;
+}
+
+async function listRoomMessages(guest: GuestRow, payload: JsonObject) {
+  const roomId = requiredString(payload.roomId, "roomId", 64);
+  await memberRoom(roomId, guest.id);
+  await consumeRateLimit(`chat-read:${roomId}:${guest.id}`, 180, 60);
+  const after = messageCursor(payload.afterMessageId);
+  const columns = "id, author_seat, author_handle, kind, body, created_at";
+
+  if (after) {
+    const { data, error } = await database.from("poker_room_messages")
+      .select(columns)
+      .eq("room_id", roomId)
+      .gt("id", after)
+      .order("id", { ascending: true })
+      .limit(MULTIPLAYER_CHAT_MESSAGE_LIMIT);
+    if (error) databaseFailure(error, "无法读取牌桌消息。");
+    return { messages: (data ?? []).map((row) => publicRoomMessage(row as RoomMessageRow)) };
+  }
+
+  const { data, error } = await database.from("poker_room_messages")
+    .select(columns)
+    .eq("room_id", roomId)
+    .order("id", { ascending: false })
+    .limit(MULTIPLAYER_CHAT_MESSAGE_LIMIT);
+  if (error) databaseFailure(error, "无法读取牌桌消息。");
+  return {
+    messages: (data ?? [])
+      .map((row) => publicRoomMessage(row as RoomMessageRow))
+      .reverse(),
+  };
+}
+
+async function sendRoomMessage(guest: GuestRow, payload: JsonObject) {
+  const roomId = requiredString(payload.roomId, "roomId", 64);
+  const requestId = requiredString(payload.requestId, "requestId");
+  if (!COMMAND_ID_PATTERN.test(requestId)) {
+    throw new ApiError(400, "INVALID_MESSAGE", "消息编号格式不正确。");
+  }
+  await memberRoom(roomId, guest.id);
+
+  let normalized: ReturnType<typeof normalizeMultiplayerChatMessage>;
+  try {
+    normalized = normalizeMultiplayerChatMessage(payload.kind, payload.content);
+  } catch (error) {
+    if (error instanceof MultiplayerChatValidationError) {
+      throw new ApiError(400, error.code, error.message);
+    }
+    throw error;
+  }
+
+  const { data: existing, error: existingError } = await database.from("poker_room_messages")
+    .select("id, author_seat, author_handle, kind, body, created_at")
+    .eq("room_id", roomId)
+    .eq("guest_id", guest.id)
+    .eq("request_id", requestId)
+    .maybeSingle();
+  if (existingError) databaseFailure(existingError, "无法检查牌桌消息。");
+  if (existing) {
+    const existingRow = existing as RoomMessageRow;
+    if (existingRow.kind !== normalized.kind || existingRow.body !== normalized.content) {
+      throw new ApiError(409, "MESSAGE_ID_CONFLICT", "这条消息编号已经用于其他内容。");
+    }
+    return { message: publicRoomMessage(existingRow), duplicate: true };
+  }
+
+  await consumeRateLimit(`chat-burst:${roomId}:${guest.id}`, 6, 10);
+  await consumeRateLimit(`chat-user:${roomId}:${guest.id}`, 30, 60);
+  await consumeRateLimit(`chat-room:${roomId}`, 120, 60);
+
+  const { data, error } = await database.rpc("poker_append_room_message", {
+    p_room_id: roomId,
+    p_guest_id: guest.id,
+    p_request_id: requestId,
+    p_kind: normalized.kind,
+    p_body: normalized.content,
+  });
+  if (error) databaseFailure(error, "发送牌桌消息失败。");
+  const result = (data ?? {}) as AppendRoomMessageResult;
+  if (result.conflict === true) {
+    throw new ApiError(409, "MESSAGE_ID_CONFLICT", "这条消息编号已经用于其他内容。");
+  }
+  return {
+    message: publicRpcRoomMessage(result.message),
+    duplicate: result.duplicate === true,
+  };
+}
+
 async function listRooms(guest: GuestRow) {
   const { data: memberships, error: memberError } = await database.from("poker_room_members")
     .select("room_id")
@@ -716,6 +885,13 @@ Deno.serve(async (request: Request) => {
       await consumeRateLimit(`state:${guest.id}`, 180, 60);
       const room = await memberRoom(requiredString(payload.roomId, "roomId", 64), guest.id);
       return jsonResponse(request, makeSnapshot(room, room.state as OnlineRoomState, guest.id));
+    }
+    if (action === "room-messages") {
+      return jsonResponse(request, await listRoomMessages(guest, payload));
+    }
+    if (action === "send-message") {
+      const result = await sendRoomMessage(guest, payload);
+      return jsonResponse(request, result, result.duplicate ? 200 : 201);
     }
     if (action === "command") return jsonResponse(request, await applyCommand(guest, payload));
     throw new ApiError(404, "UNKNOWN_ACTION", "不支持的牌桌请求。");

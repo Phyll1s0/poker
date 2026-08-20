@@ -63,3 +63,25 @@ export const roomMembers = sqliteTable("room_members", {
   index("idx_room_members_account_joined").on(table.accountId, table.joinedAt),
   check("room_members_seat_check", sql`${table.seat} between 0 and 5`),
 ]);
+
+export const roomMessages = sqliteTable("room_messages", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  roomId: text("room_id")
+    .notNull()
+    .references(() => rooms.id, { onDelete: "cascade" }),
+  accountId: text("account_id")
+    .notNull()
+    .references(() => accounts.id, { onDelete: "cascade" }),
+  requestId: text("request_id").notNull(),
+  authorSeat: integer("author_seat").notNull(),
+  authorHandle: text("author_handle").notNull(),
+  kind: text("kind", { enum: ["text", "reaction"] }).notNull(),
+  body: text("body").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("idx_room_messages_request").on(table.roomId, table.accountId, table.requestId),
+  index("idx_room_messages_room_cursor").on(table.roomId, table.id),
+  check("room_messages_seat_check", sql`${table.authorSeat} between 0 and 5`),
+  check("room_messages_kind_check", sql`${table.kind} in ('text', 'reaction')`),
+  check("room_messages_body_check", sql`length(${table.body}) between 1 and 120`),
+]);

@@ -20,6 +20,15 @@ import {
   setPokerAudioEnabled,
   unlockPokerAudio,
 } from "../../lib/poker-audio";
+import {
+  MULTIPLAYER_CHAT_MAX_LENGTH,
+  MULTIPLAYER_CHAT_REACTIONS,
+  compareMultiplayerChatMessageIds,
+  mergeMultiplayerChatMessages,
+  type MultiplayerChatKind,
+  type MultiplayerChatMessage,
+  type MultiplayerChatSnapshot,
+} from "../../lib/multiplayer-chat";
 import styles from "./multiplayer.module.css";
 
 type Account = {
@@ -197,6 +206,10 @@ const ERROR_MESSAGES: Record<string, string> = {
   TIME_EXPIRED: "本次行动已经超时。",
   ILLEGAL_ACTION: "这个行动在当前局面不合法。",
   INVALID_RAISE: "加注额超出当前允许范围。",
+  INVALID_MESSAGE: "消息不能为空、过长，或包含不可用的内容。",
+  INVALID_MESSAGE_CURSOR: "消息同步位置无效，正在重新加载。",
+  MESSAGE_ID_CONFLICT: "这条消息与已经发送的内容冲突，请重试。",
+  RATE_LIMITED: "发送得太快了，请稍等几秒再试。",
 };
 
 function apiErrorMessage(body: ApiErrorBody, fallback: string) {
@@ -223,6 +236,8 @@ export type MultiplayerOperation =
   | "createRoom"
   | "joinRoom"
   | "getRoom"
+  | "getMessages"
+  | "sendMessage"
   | "command";
 
 export type MultiplayerRequest = <T>(
@@ -252,6 +267,16 @@ const legacyRequest: MultiplayerRequest = async <T,>(
     body = payload;
   } else if (operation === "getRoom") {
     url = `/api/rooms/${encodeURIComponent(String(payload.roomId ?? ""))}/state`;
+  } else if (operation === "getMessages") {
+    const roomId = encodeURIComponent(String(payload.roomId ?? ""));
+    const after = typeof payload.afterMessageId === "string" && payload.afterMessageId
+      ? `?after=${encodeURIComponent(payload.afterMessageId)}`
+      : "";
+    url = `/api/rooms/${roomId}/messages${after}`;
+  } else if (operation === "sendMessage") {
+    url = `/api/rooms/${encodeURIComponent(String(payload.roomId ?? ""))}/messages`;
+    method = "POST";
+    body = payload;
   } else if (operation === "command") {
     url = `/api/rooms/${encodeURIComponent(String(payload.roomId ?? ""))}/commands`;
     method = "POST";
@@ -368,12 +393,14 @@ function PlayerSeat({
   actorAccountId,
   visualSeat,
   actionSecondsLeft,
+  tableMessage,
 }: {
   player: PublicPlayer;
   selfAccountId: string;
   actorAccountId: string | null;
   visualSeat: number;
   actionSecondsLeft: number | null;
+  tableMessage?: MultiplayerChatMessage;
 }) {
   const cards = player.holeCards ?? [];
   const hiddenCount = cards.length ? 0 : player.holeCardCount;
@@ -387,6 +414,14 @@ function PlayerSeat({
 
   return (
     <div className={className}>
+      {tableMessage && (
+        <div
+          className={`${styles.seatMessageBubble} ${tableMessage.kind === "reaction" ? styles.seatReactionBubble : ""}`}
+          aria-hidden="true"
+        >
+          {tableMessage.content}
+        </div>
+      )}
       <div className={styles.seatCards} aria-label={`${player.handle} 的手牌`}>
         {cards.map((card, index) => <CardView key={`${card.rank}-${card.suit}-${index}`} card={card} mini />)}
         {Array.from({ length: hiddenCount }, (_, index) => <span className={styles.miniBack} key={`hidden-${index}`} />)}
@@ -419,12 +454,14 @@ function TableSurface({
   game,
   actionSecondsLeft,
   boardDeal,
+  seatMessages,
 }: {
   players: PublicPlayer[];
   selfAccountId: string;
   game: PublicGame | null;
   actionSecondsLeft: number | null;
   boardDeal: MultiplayerBoardDeal | null;
+  seatMessages: ReadonlyMap<number, MultiplayerChatMessage>;
 }) {
   const selfSeat = players.find((player) => player.accountId === selfAccountId)?.seat ?? 0;
   const orderedPlayers = useMemo(() => [...players].sort((left, right) => {
@@ -474,9 +511,160 @@ function TableSurface({
           actorAccountId={game?.actorAccountId ?? null}
           visualSeat={visualSeats[index] ?? index}
           actionSecondsLeft={actionSecondsLeft}
+          tableMessage={seatMessages.get(player.seat)}
         />
       ))}
     </div>
+  );
+}
+
+function ChatDock({
+  messages,
+  selfSeat,
+  draft,
+  sending,
+  unreadCount,
+  error,
+  onDraftChange,
+  onClose,
+  onPinnedChange,
+  onReadLatest,
+  onSendText,
+  onSendReaction,
+}: {
+  messages: MultiplayerChatMessage[];
+  selfSeat: number | null;
+  draft: string;
+  sending: boolean;
+  unreadCount: number;
+  error: string | null;
+  onDraftChange: (value: string) => void;
+  onClose: () => void;
+  onPinnedChange: (pinned: boolean) => void;
+  onReadLatest: () => void;
+  onSendText: () => Promise<void>;
+  onSendReaction: (reaction: string) => Promise<void>;
+}) {
+  const logRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottom = useRef(true);
+  const composing = useRef(false);
+  const latestMessageId = messages.at(-1)?.id ?? null;
+
+  const scrollToLatest = useCallback((behavior: ScrollBehavior = "smooth") => {
+    const log = logRef.current;
+    if (!log) return;
+    stickToBottom.current = true;
+    log.scrollTo({ top: log.scrollHeight, behavior });
+    onPinnedChange(true);
+    onReadLatest();
+  }, [onPinnedChange, onReadLatest]);
+
+  useEffect(() => {
+    const log = logRef.current;
+    if (!log || !stickToBottom.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      log.scrollTop = log.scrollHeight;
+      onPinnedChange(true);
+      onReadLatest();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [latestMessageId, onPinnedChange, onReadLatest]);
+
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.isComposing) return;
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [onClose]);
+
+  return (
+    <aside className={styles.chatDock} id="multiplayer-chat" aria-label="牌桌聊天">
+      <header className={styles.chatHeader}>
+        <div>
+          <span>TABLE TALK</span>
+          <strong>牌桌聊天</strong>
+        </div>
+        <button type="button" onClick={onClose} aria-label="关闭聊天">×</button>
+      </header>
+
+      <div
+        className={styles.chatLog}
+        ref={logRef}
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions"
+        onScroll={(event) => {
+          const target = event.currentTarget;
+          const pinned = target.scrollHeight - target.scrollTop - target.clientHeight < 36;
+          stickToBottom.current = pinned;
+          onPinnedChange(pinned);
+          if (pinned) onReadLatest();
+        }}
+      >
+        {messages.length === 0 ? (
+          <div className={styles.chatEmpty}>还没有桌边消息。<br />发个表情打声招呼吧。</div>
+        ) : messages.map((message) => (
+          <article
+            className={`${styles.chatMessage} ${message.seat === selfSeat ? styles.chatMessageSelf : ""} ${message.kind === "reaction" ? styles.chatReaction : ""}`}
+            key={message.id}
+          >
+            <div>
+              <strong>{message.handle}{message.seat === selfSeat ? " · 你" : ""}</strong>
+              <time dateTime={new Date(message.createdAt).toISOString()}>
+                {new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+              </time>
+            </div>
+            <p>{message.content}</p>
+          </article>
+        ))}
+      </div>
+
+      {unreadCount > 0 && (
+        <button className={styles.chatNewMessages} type="button" onClick={() => scrollToLatest()}>
+          {unreadCount > 9 ? "9+" : unreadCount} 条新消息 ↓
+        </button>
+      )}
+
+      <div className={styles.quickReactions} aria-label="快捷表情">
+        {MULTIPLAYER_CHAT_REACTIONS.map((reaction) => (
+          <button
+            type="button"
+            key={reaction}
+            onClick={() => void onSendReaction(reaction)}
+            disabled={sending}
+            aria-label={`发送表情 ${reaction}`}
+          >
+            {reaction}
+          </button>
+        ))}
+      </div>
+
+      <form
+        className={styles.chatComposer}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (composing.current) return;
+          void onSendText();
+        }}
+      >
+        {error && <p className={styles.chatError} role="alert">{error}</p>}
+        <input
+          value={draft}
+          onChange={(event) => onDraftChange(event.target.value)}
+          onCompositionStart={() => { composing.current = true; }}
+          onCompositionEnd={() => { composing.current = false; }}
+          maxLength={MULTIPLAYER_CHAT_MAX_LENGTH}
+          enterKeyHint="send"
+          autoComplete="off"
+          placeholder="说点什么…"
+          aria-label="聊天内容"
+        />
+        <button type="submit" disabled={sending || !draft.trim()}>{sending ? "…" : "发送"}</button>
+      </form>
+    </aside>
   );
 }
 
@@ -694,6 +882,12 @@ export default function MultiplayerClient({
   const [timeBankSeconds, setTimeBankSeconds] = useState(100);
   const [joinCode, setJoinCode] = useState("");
   const [raiseDraft, setRaiseDraft] = useState<{ turnKey: string; value: number } | null>(null);
+  const [chatMessages, setChatMessages] = useState<MultiplayerChatMessage[]>([]);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatDraft, setChatDraft] = useState("");
+  const [chatSending, setChatSending] = useState(false);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [chatError, setChatError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -707,8 +901,15 @@ export default function MultiplayerClient({
   const lastBoardFrame = useRef<MultiplayerBoardFrame | null>(null);
   const lastAudioFrame = useRef<MultiplayerAudioFrame | null>(null);
   const soundOnRef = useRef(isPokerAudioEnabled());
+  const chatOpenRef = useRef(false);
+  const chatRoomIdRef = useRef<string | null>(null);
+  const chatCursorRef = useRef<string | null>(null);
+  const chatSendingRef = useRef(false);
+  const chatPinnedRef = useRef(true);
+  const viewerSeatRef = useRef<number | null>(null);
 
   const acceptSnapshot = useCallback((next: RoomSnapshot) => {
+    viewerSeatRef.current = next.table.viewerSeat;
     const nextFrame: MultiplayerBoardFrame | null = next.game
       ? {
           roomId: next.room.id,
@@ -764,8 +965,72 @@ export default function MultiplayerClient({
   const clearActiveRoomSnapshot = useCallback(() => {
     lastBoardFrame.current = null;
     lastAudioFrame.current = null;
+    chatRoomIdRef.current = null;
+    chatCursorRef.current = null;
+    chatOpenRef.current = false;
+    chatSendingRef.current = false;
+    chatPinnedRef.current = true;
+    viewerSeatRef.current = null;
     setBoardDeal(null);
+    setChatMessages([]);
+    setChatOpen(false);
+    setChatDraft("");
+    setChatSending(false);
+    setUnreadChatCount(0);
+    setChatError(null);
     setSnapshot(null);
+  }, []);
+
+  const mergeRoomMessages = useCallback((roomId: string, incoming: MultiplayerChatMessage[]) => {
+    if (viewedRoomId.current !== roomId || leavingRef.current) return;
+    const roomChanged = chatRoomIdRef.current !== roomId;
+    const previousCursor = roomChanged ? null : chatCursorRef.current;
+    const freshMessages = previousCursor === null
+      ? []
+      : incoming.filter((message) => compareMultiplayerChatMessageIds(message.id, previousCursor) > 0);
+    const unreadMessages = freshMessages.filter((message) => message.seat !== viewerSeatRef.current);
+    const newestIncoming = incoming.at(-1)?.id ?? null;
+
+    if (roomChanged) {
+      chatRoomIdRef.current = roomId;
+      chatCursorRef.current = null;
+      setUnreadChatCount(0);
+    }
+    if (
+      newestIncoming
+      && (chatCursorRef.current === null || compareMultiplayerChatMessageIds(newestIncoming, chatCursorRef.current) > 0)
+    ) {
+      chatCursorRef.current = newestIncoming;
+    }
+    setChatMessages((current) => mergeMultiplayerChatMessages(roomChanged ? [] : current, incoming));
+    if (
+      !roomChanged
+      && (!chatOpenRef.current || !chatPinnedRef.current)
+      && unreadMessages.length > 0
+    ) {
+      setUnreadChatCount((current) => Math.min(99, current + unreadMessages.length));
+    }
+  }, []);
+
+  const closeChat = useCallback(() => {
+    chatOpenRef.current = false;
+    setChatOpen(false);
+  }, []);
+
+  const openChat = useCallback(() => {
+    chatOpenRef.current = true;
+    chatPinnedRef.current = true;
+    setChatOpen(true);
+    setUnreadChatCount(0);
+  }, []);
+
+  const setChatPinned = useCallback((pinned: boolean) => {
+    chatPinnedRef.current = pinned;
+    if (pinned) setUnreadChatCount(0);
+  }, []);
+
+  const markLatestChatRead = useCallback(() => {
+    setUnreadChatCount(0);
   }, []);
 
   const loadRooms = useCallback(async () => {
@@ -789,7 +1054,18 @@ export default function MultiplayerClient({
       roomViewGeneration.current += 1;
       viewedRoomId.current = roomId;
       leavingRef.current = false;
+      chatRoomIdRef.current = roomId;
+      chatCursorRef.current = null;
+      chatOpenRef.current = false;
+      chatSendingRef.current = false;
+      chatPinnedRef.current = true;
       setLeaving(false);
+      setChatMessages([]);
+      setChatOpen(false);
+      setChatDraft("");
+      setChatSending(false);
+      setUnreadChatCount(0);
+      setChatError(null);
     } else if (viewedRoomId.current !== roomId) {
       return;
     }
@@ -840,6 +1116,51 @@ export default function MultiplayerClient({
       if (timer !== null) window.clearTimeout(timer);
     };
   }, [loadRoom, snapshot?.room.id]);
+
+  useEffect(() => {
+    const roomId = snapshot?.room.id;
+    if (!roomId) return;
+    let cancelled = false;
+    let timer: number | null = null;
+    let running = false;
+    const schedule = () => {
+      if (!cancelled) timer = window.setTimeout(() => void poll(), 1_600);
+    };
+    const poll = async () => {
+      if (cancelled || running) return;
+      if (document.visibilityState === "hidden") {
+        schedule();
+        return;
+      }
+      running = true;
+      try {
+        const body = await request<MultiplayerChatSnapshot>("getMessages", {
+          roomId,
+          ...(chatCursorRef.current ? { afterMessageId: chatCursorRef.current } : {}),
+        });
+        if (!cancelled) mergeRoomMessages(roomId, body.messages ?? []);
+      } catch {
+        // The game-state poll remains authoritative. Chat retries quietly so a
+        // temporary social-service failure never blocks a poker decision.
+      } finally {
+        running = false;
+        schedule();
+      }
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState !== "visible" || running) return;
+      if (timer !== null) window.clearTimeout(timer);
+      void poll();
+    };
+
+    void poll();
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [mergeRoomMessages, request, snapshot?.room.id]);
 
   const submitAccount = async (event: FormEvent) => {
     event.preventDefault();
@@ -940,6 +1261,54 @@ export default function MultiplayerClient({
       setBusy(false);
     }
   }, [acceptSnapshot, activeRoomId, loadRoom, loadRooms, request]);
+
+  const sendChatContent = useCallback(async (kind: MultiplayerChatKind, content: string) => {
+    if (!activeRoomId || leavingRef.current || chatSendingRef.current) return false;
+    const roomId = activeRoomId;
+    const generation = roomViewGeneration.current;
+    const viewIsCurrent = () => (
+      generation === roomViewGeneration.current
+      && viewedRoomId.current === roomId
+      && !leavingRef.current
+    );
+    chatSendingRef.current = true;
+    setChatSending(true);
+    setChatError(null);
+    try {
+      const body = await request<{ message: MultiplayerChatMessage; duplicate: boolean }>("sendMessage", {
+        roomId,
+        requestId: requestId(),
+        kind,
+        content,
+      });
+      if (viewIsCurrent()) {
+        mergeRoomMessages(roomId, [body.message]);
+      }
+      return viewIsCurrent();
+    } catch (reason) {
+      if (viewIsCurrent()) {
+        setChatError(reason instanceof Error ? reason.message : "消息发送失败，请稍后重试。");
+      }
+      return false;
+    } finally {
+      if (viewIsCurrent()) {
+        chatSendingRef.current = false;
+        setChatSending(false);
+      }
+    }
+  }, [activeRoomId, mergeRoomMessages, request]);
+
+  const sendChatText = useCallback(async () => {
+    const pendingDraft = chatDraft;
+    if (!pendingDraft.trim()) return;
+    if (await sendChatContent("text", pendingDraft)) {
+      setChatDraft((current) => current === pendingDraft ? "" : current);
+    }
+  }, [chatDraft, sendChatContent]);
+
+  const sendChatReaction = useCallback(async (reaction: string) => {
+    await sendChatContent("reaction", reaction);
+  }, [sendChatContent]);
 
   const leaveRoom = async () => {
     if (!snapshot || leavingRef.current) return;
@@ -1134,20 +1503,33 @@ export default function MultiplayerClient({
     && snapshot.players.filter((player) => player.stack > 0 && player.status !== "out").length === 1
     ? snapshot.players.find((player) => player.stack > 0 && player.status !== "out") ?? null
     : null;
+  const latestChatCreatedAt = chatMessages.at(-1)?.createdAt ?? null;
+  const seatChatMessages = useMemo(() => {
+    const recent = new Map<number, MultiplayerChatMessage>();
+    for (const message of chatMessages) {
+      if (message.createdAt > clockNow + 2_000 || clockNow - message.createdAt > 5_000) continue;
+      const currentPlayer = snapshot?.players.find((player) => player.seat === message.seat);
+      if (currentPlayer?.handle !== message.handle) continue;
+      recent.set(message.seat, message);
+    }
+    return recent;
+  }, [chatMessages, clockNow, snapshot?.players]);
 
   useEffect(() => {
     const hasRunningClock = phase === "playing"
       ? game?.actionDeadlineAt != null && Boolean(game.actorAccountId)
       : (phase === "showdown" || phase === "between_hands")
         && handTransitionDeadlineAt !== null;
-    if (!hasRunningClock) return;
+    const hasFreshChatBubble = latestChatCreatedAt !== null
+      && latestChatCreatedAt + 5_000 > Date.now();
+    if (!hasRunningClock && !hasFreshChatBubble) return;
     const initialTimer = window.setTimeout(() => setClockNow(Date.now()), 0);
     const timer = window.setInterval(() => setClockNow(Date.now()), 200);
     return () => {
       window.clearTimeout(initialTimer);
       window.clearInterval(timer);
     };
-  }, [game?.actionDeadlineAt, game?.actorAccountId, handTransitionDeadlineAt, phase]);
+  }, [game?.actionDeadlineAt, game?.actorAccountId, handTransitionDeadlineAt, latestChatCreatedAt, phase]);
 
   useEffect(() => {
     if (
@@ -1261,6 +1643,19 @@ export default function MultiplayerClient({
           {snapshot && (
             <button className={styles.navCodeButton} type="button" onClick={() => void copyJoinCode(snapshot.room.joinCode)} aria-label={`复制邀请码 ${snapshot.room.joinCode}`}>
               {snapshot.room.joinCode}<small>复制</small>
+            </button>
+          )}
+          {snapshot && (
+            <button
+              className={`${styles.navChatToggle} ${chatOpen ? styles.navChatToggleOn : ""}`}
+              type="button"
+              onClick={chatOpen ? closeChat : openChat}
+              aria-expanded={chatOpen}
+              aria-controls="multiplayer-chat"
+              aria-label={chatOpen ? "关闭牌桌聊天" : `打开牌桌聊天${unreadChatCount ? `，${unreadChatCount} 条未读` : ""}`}
+            >
+              <span aria-hidden="true">◌</span><b>聊天</b>
+              {unreadChatCount > 0 && <small>{unreadChatCount > 9 ? "9+" : unreadChatCount}</small>}
             </button>
           )}
           <button
@@ -1470,6 +1865,24 @@ export default function MultiplayerClient({
                   game={game}
                   actionSecondsLeft={actionSecondsLeft}
                   boardDeal={boardDeal?.roomId === snapshot.room.id ? boardDeal : null}
+                  seatMessages={seatChatMessages}
+                />
+              )}
+
+              {chatOpen && (
+                <ChatDock
+                  messages={chatMessages}
+                  selfSeat={snapshot.table.viewerSeat}
+                  draft={chatDraft}
+                  sending={chatSending}
+                  unreadCount={unreadChatCount}
+                  error={chatError}
+                  onDraftChange={setChatDraft}
+                  onClose={closeChat}
+                  onPinnedChange={setChatPinned}
+                  onReadLatest={markLatestChatRead}
+                  onSendText={sendChatText}
+                  onSendReaction={sendChatReaction}
                 />
               )}
 

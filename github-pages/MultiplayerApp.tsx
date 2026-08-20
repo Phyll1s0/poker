@@ -45,6 +45,8 @@ function edgeAction(
   if (operation === "createRoom") return { action: "create-room", ...payload };
   if (operation === "joinRoom") return { action: "join-room", ...payload };
   if (operation === "getRoom") return { action: "room-state", ...payload };
+  if (operation === "getMessages") return { action: "room-messages", ...payload };
+  if (operation === "sendMessage") return { action: "send-message", ...payload };
 
   const command = (payload.command ?? {}) as Record<string, unknown>;
   const { action: pokerAction, ...commandPayload } = command;

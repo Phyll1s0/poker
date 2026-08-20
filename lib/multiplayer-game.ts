@@ -8,6 +8,14 @@ import {
   type OnlinePublicRoomState,
   type OnlineRoomState,
 } from "./online-poker.ts";
+import {
+  MULTIPLAYER_CHAT_MESSAGE_LIMIT,
+  MultiplayerChatValidationError,
+  normalizeMultiplayerChatMessage,
+  type MultiplayerChatKind,
+  type MultiplayerChatMessage,
+  type MultiplayerChatSnapshot,
+} from "./multiplayer-chat.ts";
 
 export type GameRoomStatus = "lobby" | "playing" | "finished" | "closed";
 type StoredGameRoomStatus = Exclude<GameRoomStatus, "finished">;
@@ -115,6 +123,15 @@ type GameMemberRow = {
   seat: number;
 };
 
+type GameMessageRow = {
+  id: number;
+  author_seat: number;
+  author_handle: string;
+  kind: MultiplayerChatKind;
+  body: string;
+  created_at: number;
+};
+
 type D1Result<T = unknown> = {
   results?: T[];
 };
@@ -135,11 +152,44 @@ type ParsedClientCommand = Exclude<OnlinePokerCommand, { type: "join" }>;
 const COMMAND_ID_PATTERN = /^[a-zA-Z0-9._:-]{8,128}$/;
 const ACTIONS = new Set(["fold", "check", "call", "raise"]);
 
+export type ParsedMultiplayerRoomMessage = {
+  requestId: string;
+  kind: MultiplayerChatKind;
+  content: string;
+};
+
 function requiredString(value: unknown, field: string, maxLength = 128): string {
   if (typeof value !== "string" || !value.trim() || value.length > maxLength) {
     throw new MultiplayerGameError(400, "INVALID_COMMAND", `${field} 格式不正确。`);
   }
   return value;
+}
+
+export function parseMultiplayerRoomMessage(payload: Record<string, unknown>): ParsedMultiplayerRoomMessage {
+  const requestId = requiredString(payload.requestId, "requestId");
+  if (!COMMAND_ID_PATTERN.test(requestId)) {
+    throw new MultiplayerGameError(400, "INVALID_MESSAGE", "消息编号格式不正确。");
+  }
+  try {
+    return { requestId, ...normalizeMultiplayerChatMessage(payload.kind, payload.content) };
+  } catch (error) {
+    if (error instanceof MultiplayerChatValidationError) {
+      throw new MultiplayerGameError(400, error.code, error.message);
+    }
+    throw error;
+  }
+}
+
+export function parseMultiplayerMessageCursor(value: string | null): number | null {
+  if (value === null || value === "") return null;
+  if (!/^[1-9][0-9]{0,15}$/.test(value)) {
+    throw new MultiplayerGameError(400, "INVALID_MESSAGE_CURSOR", "消息游标格式不正确。");
+  }
+  const cursor = Number(value);
+  if (!Number.isSafeInteger(cursor)) {
+    throw new MultiplayerGameError(400, "INVALID_MESSAGE_CURSOR", "消息游标格式不正确。");
+  }
+  return cursor;
 }
 
 export function parseMultiplayerCommand(payload: Record<string, unknown>): ParsedClientCommand {
@@ -414,6 +464,17 @@ function clientGame(table: OnlinePublicRoomState, players: ClientPublicPlayer[])
   };
 }
 
+function clientRoomMessage(row: GameMessageRow): MultiplayerChatMessage {
+  return {
+    id: String(row.id),
+    seat: row.author_seat,
+    handle: row.author_handle,
+    kind: row.kind,
+    content: row.body,
+    createdAt: row.created_at,
+  };
+}
+
 export class MultiplayerGameService {
   private readonly database: MultiplayerGameDatabase;
 
@@ -479,6 +540,134 @@ export class MultiplayerGameService {
     const { row, members } = await this.loadRoom(roomId, accountId);
     const state = hydrateRoomState(row, members);
     return this.makeSnapshot(row, state, accountId);
+  }
+
+  async getMessages(
+    roomId: string,
+    accountId: string,
+    afterMessageId: number | null,
+  ): Promise<MultiplayerChatSnapshot> {
+    await this.loadRoom(roomId, accountId);
+    if (afterMessageId !== null) {
+      const rows = await this.database.prepare(`
+        SELECT id, author_seat, author_handle, kind, body, created_at
+        FROM room_messages
+        WHERE room_id = ? AND id > ?
+        ORDER BY id ASC
+        LIMIT ?
+      `).bind(roomId, afterMessageId, MULTIPLAYER_CHAT_MESSAGE_LIMIT).all<GameMessageRow>();
+      return { messages: rows.results.map(clientRoomMessage) };
+    }
+    const rows = await this.database.prepare(`
+      SELECT id, author_seat, author_handle, kind, body, created_at
+      FROM room_messages
+      WHERE room_id = ?
+      ORDER BY id DESC
+      LIMIT ?
+    `).bind(roomId, MULTIPLAYER_CHAT_MESSAGE_LIMIT).all<GameMessageRow>();
+    return { messages: rows.results.map(clientRoomMessage).reverse() };
+  }
+
+  async sendMessage(
+    roomId: string,
+    accountId: string,
+    message: ParsedMultiplayerRoomMessage,
+  ): Promise<{ message: MultiplayerChatMessage; duplicate: boolean }> {
+    await this.loadRoom(roomId, accountId);
+    const existing = await this.database.prepare(`
+      SELECT id, author_seat, author_handle, kind, body, created_at
+      FROM room_messages
+      WHERE room_id = ? AND account_id = ? AND request_id = ?
+      LIMIT 1
+    `).bind(roomId, accountId, message.requestId).first<GameMessageRow>();
+    if (existing) {
+      if (existing.kind !== message.kind || existing.body !== message.content) {
+        throw new MultiplayerGameError(409, "MESSAGE_ID_CONFLICT", "这条消息编号已经用于其他内容。");
+      }
+      return { message: clientRoomMessage(existing), duplicate: true };
+    }
+
+    const now = Date.now();
+    const inserted = await this.database.prepare(`
+      INSERT INTO room_messages (
+        room_id, account_id, request_id, author_seat, author_handle, kind, body, created_at
+      )
+      SELECT ?, ?, ?, members.seat, accounts.handle, ?, ?, ?
+      FROM room_members AS members
+      JOIN accounts ON accounts.id = members.account_id
+      JOIN rooms ON rooms.id = members.room_id
+      WHERE members.room_id = ? AND members.account_id = ?
+        AND rooms.status != 'closed' AND rooms.expires_at > ?
+        AND (
+          SELECT count(*) FROM room_messages AS burst
+          WHERE burst.room_id = ? AND burst.account_id = ? AND burst.created_at >= ?
+        ) < 6
+        AND (
+          SELECT count(*) FROM room_messages AS per_user
+          WHERE per_user.room_id = ? AND per_user.account_id = ? AND per_user.created_at >= ?
+        ) < 30
+        AND (
+          SELECT count(*) FROM room_messages AS per_room
+          WHERE per_room.room_id = ? AND per_room.created_at >= ?
+        ) < 120
+      ON CONFLICT(room_id, account_id, request_id) DO NOTHING
+      RETURNING id, author_seat, author_handle, kind, body, created_at
+    `).bind(
+      roomId,
+      accountId,
+      message.requestId,
+      message.kind,
+      message.content,
+      now,
+      roomId,
+      accountId,
+      now,
+      roomId,
+      accountId,
+      now - 10_000,
+      roomId,
+      accountId,
+      now - 60_000,
+      roomId,
+      now - 60_000,
+    ).first<GameMessageRow>();
+
+    if (!inserted) {
+      const raced = await this.database.prepare(`
+        SELECT id, author_seat, author_handle, kind, body, created_at
+        FROM room_messages
+        WHERE room_id = ? AND account_id = ? AND request_id = ?
+        LIMIT 1
+      `).bind(roomId, accountId, message.requestId).first<GameMessageRow>();
+      if (!raced) {
+        const currentMember = await this.database.prepare(`
+          SELECT count(*) AS count
+          FROM room_members AS members
+          JOIN rooms ON rooms.id = members.room_id
+          WHERE members.room_id = ? AND members.account_id = ?
+            AND rooms.status != 'closed' AND rooms.expires_at > ?
+        `).bind(roomId, accountId, Date.now()).first<{ count: number }>();
+        if ((currentMember?.count ?? 0) > 0) {
+          throw new MultiplayerGameError(429, "RATE_LIMITED", "发送得太快了，请稍等几秒再试。");
+        }
+        throw new MultiplayerGameError(404, "ROOM_NOT_FOUND", "你已经不在这个房间。" );
+      }
+      if (raced.kind !== message.kind || raced.body !== message.content) {
+        throw new MultiplayerGameError(409, "MESSAGE_ID_CONFLICT", "这条消息编号已经用于其他内容。");
+      }
+      return { message: clientRoomMessage(raced), duplicate: true };
+    }
+
+    await this.database.prepare(`
+      DELETE FROM room_messages
+      WHERE room_id = ? AND id IN (
+        SELECT id FROM room_messages
+        WHERE room_id = ?
+        ORDER BY id DESC
+        LIMIT -1 OFFSET 200
+      )
+    `).bind(roomId, roomId).first();
+    return { message: clientRoomMessage(inserted), duplicate: false };
   }
 
   async applyCommand(
