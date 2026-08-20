@@ -91,6 +91,13 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /整局时间库/);
   assert.match(multiplayerClient, /时间牌 \+/);
   assert.match(multiplayerClient, /type: "timeout"/);
+  assert.match(multiplayerClient, /player\.streetCommitted > 0/);
+  assert.doesNotMatch(multiplayerClient, /player\.committed > 0/);
+  assert.match(multiplayerClient, /const \[raiseDraft, setRaiseDraft\]/);
+  assert.match(multiplayerClient, /快捷下注尺寸/);
+  assert.match(multiplayerClient, /raiseAllInOnly/);
+  assert.match(multiplayerClient, /void loadRooms\(\)\.catch\(\(\) => undefined\)/);
+  assert.doesNotMatch(multiplayerClient, /setRaiseTo\(next\.game\.legalActions\.minRaiseTo\)/);
   assert.match(multiplayerClient, /暂离牌桌（保留座位）/);
   assert.match(multiplayerClient, /未全下的手牌会自动弃牌；已经全下的手牌会继续结算/);
   assert.match(multiplayerClient, /const leavingRef = useRef\(false\)/);
@@ -109,6 +116,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(staticMultiplayer, /signOutLabel="返回首页"/);
   assert.doesNotMatch(staticMultiplayer, /onSignOut=\{clearToken\}/);
   assert.match(edgeFunction, /function normalizeRoomSettings/);
+  assert.match(edgeFunction, /result\?\.totalPot \?\? hand\.committedPot/);
+  assert.match(edgeFunction, /raiseAllInOnly: table\.legalActions\.raise\?\.allInOnly \?\? false/);
   assert.match(edgeFunction, /result\.winnerDetails/);
   assert.match(edgeFunction, /type === "use-time-bank" \|\| type === "timeout"/);
   assert.match(page, /choosePokerPolicyAction/);

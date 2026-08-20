@@ -428,6 +428,7 @@ test("D1 permanently leaves during a hand, frees membership, and makes a one-pla
       expectedRevision: guestView.room.revision,
     }));
     assert.equal(guestView.table.phase, "lobby");
+    assert.equal(guestView.game.pot, 10, "completed snapshots keep the settled pot instead of displaying zero");
     assert.equal(guestView.room.ownerAccountId, guestView.selfAccountId);
     assert.equal(guestView.room.memberCount, 1);
 

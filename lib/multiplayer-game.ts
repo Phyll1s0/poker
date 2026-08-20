@@ -69,6 +69,7 @@ export type ClientPublicGame = {
     callAmount: number | null;
     minRaiseTo: number | null;
     maxRaiseTo: number | null;
+    raiseAllInOnly: boolean;
   } | null;
   result: { summary: string; winners: string[] } | null;
 };
@@ -338,11 +339,17 @@ function clientGame(table: OnlinePublicRoomState, players: ClientPublicPlayer[])
       ]
     : players;
   const resultSummary = result
-    ? result.payouts.map((payout) => {
-        const player = gamePlayers.find((candidate) => candidate.seat === payout.seat);
-        const handName = result.handNames.find((entry) => entry.seat === payout.seat)?.name;
-        return `${player?.handle ?? `座位 ${payout.seat + 1}`}${handName ? `（${handName}）` : ""} 赢得 ${payout.amount}`;
-      }).join("；")
+    ? [
+        ...result.payouts.map((payout) => {
+          const player = gamePlayers.find((candidate) => candidate.seat === payout.seat);
+          const handName = result.handNames.find((entry) => entry.seat === payout.seat)?.name;
+          return `${player?.handle ?? `座位 ${payout.seat + 1}`}${handName ? `（${handName}）` : ""} 赢得 ${payout.amount}`;
+        }),
+        ...result.returns.map((entry) => {
+          const player = gamePlayers.find((candidate) => candidate.seat === entry.seat);
+          return `${player?.handle ?? `座位 ${entry.seat + 1}`} 收回未跟注 ${entry.amount}`;
+        }),
+      ].join("；")
     : null;
   return {
     handId: hand.id,
@@ -354,7 +361,7 @@ function clientGame(table: OnlinePublicRoomState, players: ClientPublicPlayer[])
       : table.phase === "between_hands"
         ? "complete"
         : hand.street,
-    pot: hand.committedPot,
+    pot: result?.totalPot ?? hand.committedPot,
     board: hand.community.map(clientCard),
     dealerSeat: hand.dealerSeat,
     actorAccountId,
@@ -369,6 +376,7 @@ function clientGame(table: OnlinePublicRoomState, players: ClientPublicPlayer[])
           callAmount: legal.callAmount,
           minRaiseTo: legal.raise?.minRaiseTo ?? null,
           maxRaiseTo: legal.raise?.maxRaiseTo ?? null,
+          raiseAllInOnly: legal.raise?.allInOnly ?? false,
         }
       : null,
     result: result

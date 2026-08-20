@@ -412,17 +412,23 @@ function makeSnapshot(row: RoomRow, state: OnlineRoomState, guestId: string) {
         ]
       : players;
     const resultSummary = result
-      ? result.payouts.map((payout) => {
-          const player = gamePlayers.find((candidate) => candidate.seat === payout.seat);
-          const handName = result.handNames.find((entry) => entry.seat === payout.seat)?.name;
-          return `${player?.handle ?? `座位 ${payout.seat + 1}`}${handName ? `（${handName}）` : ""} 赢得 ${payout.amount}`;
-        }).join("；")
+      ? [
+          ...result.payouts.map((payout) => {
+            const player = gamePlayers.find((candidate) => candidate.seat === payout.seat);
+            const handName = result.handNames.find((entry) => entry.seat === payout.seat)?.name;
+            return `${player?.handle ?? `座位 ${payout.seat + 1}`}${handName ? `（${handName}）` : ""} 赢得 ${payout.amount}`;
+          }),
+          ...result.returns.map((entry) => {
+            const player = gamePlayers.find((candidate) => candidate.seat === entry.seat);
+            return `${player?.handle ?? `座位 ${entry.seat + 1}`} 收回未跟注 ${entry.amount}`;
+          }),
+        ].join("；")
       : null;
     return {
       handId: hand.id,
       handNo: hand.number,
       street: result ? "complete" : table.phase === "showdown" ? "showdown" : table.phase === "between_hands" ? "complete" : hand.street,
-      pot: hand.committedPot,
+      pot: result?.totalPot ?? hand.committedPot,
       board: hand.community.map(clientCard),
       dealerSeat: hand.dealerSeat,
       actorAccountId: hand.currentSeat === null ? null : publicSeatId(hand.currentSeat),
@@ -436,6 +442,7 @@ function makeSnapshot(row: RoomRow, state: OnlineRoomState, guestId: string) {
         callAmount: table.legalActions.callAmount,
         minRaiseTo: table.legalActions.raise?.minRaiseTo ?? null,
         maxRaiseTo: table.legalActions.raise?.maxRaiseTo ?? null,
+        raiseAllInOnly: table.legalActions.raise?.allInOnly ?? false,
       } : null,
       result: result ? {
         summary: resultSummary || "本手已经结束。",

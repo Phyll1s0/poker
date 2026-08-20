@@ -1,6 +1,10 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  clampMultiplayerRaiseTarget,
+  multiplayerRaisePresets,
+} from "../../lib/multiplayer-betting";
 import styles from "./multiplayer.module.css";
 
 type Account = {
@@ -47,6 +51,7 @@ type LegalActions = {
   callAmount: number | null;
   minRaiseTo: number | null;
   maxRaiseTo: number | null;
+  raiseAllInOnly: boolean;
 };
 
 type PublicGame = {
@@ -261,7 +266,7 @@ function PlayerSeat({
         </div>
         <div className={styles.seatStack}><i />{player.stack}</div>
       </div>
-      {player.committed > 0 && <div className={styles.tableBet}><i />{player.committed}</div>}
+      {player.streetCommitted > 0 && <div className={styles.tableBet}><i />{player.streetCommitted}</div>}
       <div className={`${styles.seatClock} ${player.accountId === actorAccountId ? styles.seatClockActive : ""}`}>
         {player.accountId === actorAccountId && <strong>{actionSecondsLeft ?? "—"}s</strong>}
         <span>时间库 {Math.ceil(player.timeBankMs / 1_000)}s</span>
@@ -381,7 +386,7 @@ export default function MultiplayerClient({
   const [actionSeconds, setActionSeconds] = useState(10);
   const [timeBankSeconds, setTimeBankSeconds] = useState(100);
   const [joinCode, setJoinCode] = useState("");
-  const [raiseTo, setRaiseTo] = useState(0);
+  const [raiseDraft, setRaiseDraft] = useState<{ turnKey: string; value: number } | null>(null);
   const [nextHandCountdown, setNextHandCountdown] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -429,9 +434,6 @@ export default function MultiplayerClient({
       ) return;
       latestRevision.current = next.room.revision;
       setSnapshot(next);
-      if (next.game?.legalActions?.minRaiseTo != null) {
-        setRaiseTo(next.game.legalActions.minRaiseTo);
-      }
       if (!quiet) setError(null);
     } catch (reason) {
       if (!quiet) setError(reason instanceof Error ? reason.message : "无法读取牌桌。请稍后重试。");
@@ -446,8 +448,17 @@ export default function MultiplayerClient({
   useEffect(() => {
     if (!snapshot?.room.id) return;
     const roomId = snapshot.room.id;
-    const timer = window.setInterval(() => void loadRoom(roomId, true), 1200);
-    return () => window.clearInterval(timer);
+    let cancelled = false;
+    let timer: number | null = null;
+    const poll = async () => {
+      await loadRoom(roomId, true);
+      if (!cancelled) timer = window.setTimeout(() => void poll(), 1200);
+    };
+    timer = window.setTimeout(() => void poll(), 1200);
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
   }, [loadRoom, snapshot?.room.id]);
 
   const submitAccount = async (event: FormEvent) => {
@@ -533,7 +544,9 @@ export default function MultiplayerClient({
         latestRevision.current = next.room.revision;
         setSnapshot(next);
       }
-      await loadRooms();
+      // The command is already committed. Refresh the lobby list in the
+      // background so a slow unrelated request cannot hold the betting UI.
+      void loadRooms().catch(() => undefined);
       return true;
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : "牌桌行动失败。请稍后重试。";
@@ -645,6 +658,33 @@ export default function MultiplayerClient({
   const isOwner = snapshot?.room.ownerAccountId === snapshot?.selfAccountId;
   const isMyTurn = Boolean(game && game.actorAccountId === snapshot?.selfAccountId && legal);
   const phase = snapshot?.table.phase ?? null;
+  const raiseTurnKey = game && legal?.minRaiseTo != null && legal.maxRaiseTo != null
+    ? `${game.handId}:${game.street}:${game.actorAccountId ?? "none"}:${legal.minRaiseTo}:${legal.maxRaiseTo}`
+    : null;
+  const raiseTo = raiseTurnKey && legal?.minRaiseTo != null
+    ? (raiseDraft?.turnKey === raiseTurnKey ? raiseDraft.value : legal.minRaiseTo)
+    : 0;
+  const raisePresets = useMemo(() => {
+    if (!game || !legal || legal.minRaiseTo == null || legal.maxRaiseTo == null) return [];
+    return multiplayerRaisePresets({
+      pot: game.pot,
+      currentBet: game.currentBet,
+      callAmount: legal.callAmount,
+      minRaiseTo: legal.minRaiseTo,
+      maxRaiseTo: legal.maxRaiseTo,
+      allInOnly: legal.raiseAllInOnly,
+    });
+  }, [game, legal]);
+  const raiseIsValid = Boolean(
+    legal?.minRaiseTo != null
+    && legal.maxRaiseTo != null
+    && Number.isInteger(raiseTo)
+    && raiseTo >= legal.minRaiseTo
+    && raiseTo <= legal.maxRaiseTo,
+  );
+  const raiseAdditional = selfPlayer ? Math.max(0, raiseTo - selfPlayer.streetCommitted) : 0;
+  const raiseIsAllIn = Boolean(selfPlayer && raiseAdditional === selfPlayer.stack);
+  const raiseVerb = game?.currentBet === 0 ? "下注" : "加注";
   const selfPlayerAccountId = selfPlayer?.accountId ?? null;
   const selfPlayerReady = selfPlayer?.ready ?? false;
   const canRejoinNextHand = Boolean(
@@ -1003,18 +1043,57 @@ export default function MultiplayerClient({
                     {isMyTurn && legal?.callAmount != null && <button className={styles.actionButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "call" })}>跟注 {legal.callAmount}</button>}
                     {isMyTurn && legal?.minRaiseTo != null && legal.maxRaiseTo != null && (
                       <div className={styles.raiseGroup}>
-                        <input
-                          className={styles.raiseInput}
-                          type="range"
-                          min={legal.minRaiseTo}
-                          max={legal.maxRaiseTo}
-                          step={1}
-                          value={raiseTo}
-                          onChange={(event) => setRaiseTo(Number(event.target.value))}
-                          aria-label="加注到"
-                        />
-                        <button className={`${styles.actionButton} ${styles.raiseAction}`} type="button" disabled={busy || raiseTo < legal.minRaiseTo || raiseTo > legal.maxRaiseTo} onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "raise", raiseTo })}>
-                          加注到 {raiseTo}
+                        <div className={styles.raiseEditor}>
+                          <div className={styles.raiseHeading}>
+                            <span>{legal.raiseAllInOnly ? "仅可不足额全下" : `${raiseVerb}范围 ${legal.minRaiseTo}–${legal.maxRaiseTo}`}</span>
+                            <strong>{raiseIsAllIn ? `全下到 ${raiseTo}` : `${raiseVerb}到 ${raiseTo}`}</strong>
+                          </div>
+                          <div className={styles.raiseInputs}>
+                            <input
+                              className={styles.raiseInput}
+                              type="range"
+                              min={legal.minRaiseTo}
+                              max={legal.maxRaiseTo}
+                              step={1}
+                              value={clampMultiplayerRaiseTarget(raiseTo, legal.minRaiseTo, legal.maxRaiseTo)}
+                              onChange={(event) => setRaiseDraft({ turnKey: raiseTurnKey!, value: Number(event.target.value) })}
+                              aria-label={`${raiseVerb}金额滑杆`}
+                            />
+                            <label className={styles.raiseNumberField}>
+                              <span>到</span>
+                              <input
+                                type="number"
+                                min={legal.minRaiseTo}
+                                max={legal.maxRaiseTo}
+                                step={1}
+                                inputMode="numeric"
+                                value={raiseTo}
+                                onChange={(event) => {
+                                  const value = event.target.valueAsNumber;
+                                  if (Number.isFinite(value)) setRaiseDraft({ turnKey: raiseTurnKey!, value });
+                                }}
+                                aria-label={`${raiseVerb}到的筹码总额`}
+                              />
+                            </label>
+                          </div>
+                          <div className={styles.raisePresets} aria-label="快捷下注尺寸">
+                            {raisePresets.map((preset) => (
+                              <button
+                                className={preset.target === raiseTo ? styles.raisePresetActive : ""}
+                                type="button"
+                                key={`${preset.key}-${preset.target}`}
+                                onClick={() => setRaiseDraft({ turnKey: raiseTurnKey!, value: preset.target })}
+                              >
+                                {preset.label}<small>{preset.target}</small>
+                              </button>
+                            ))}
+                          </div>
+                          <small className={styles.raiseExplanation}>
+                            本次投入 {raiseAdditional}{selfPlayer ? ` · 操作后剩余 ${Math.max(0, selfPlayer.stack - raiseAdditional)}` : ""}
+                          </small>
+                        </div>
+                        <button className={`${styles.actionButton} ${styles.raiseAction}`} type="button" disabled={busy || !raiseIsValid} onClick={() => void sendCommand({ type: "act", handId: game.handId, action: "raise", raiseTo })}>
+                          {raiseIsAllIn ? `全下 ${raiseTo}` : `${raiseVerb}到 ${raiseTo}`}
                         </button>
                       </div>
                     )}

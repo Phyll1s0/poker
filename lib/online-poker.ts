@@ -48,9 +48,17 @@ export type OnlineHandPlayerState = {
   bet: number;
   contributed: number;
   hasActed: boolean;
+  /** Remains true after a full raise reopens action, unlike hasActed. */
+  hasTakenAction: boolean;
   actedAtBet: number;
   raiseLocked: boolean;
   shown: boolean;
+};
+
+type OnlineFullRaiseRecord = {
+  seat: number;
+  target: number;
+  increment: number;
 };
 
 export type OnlinePayout = {
@@ -86,6 +94,10 @@ export type OnlineHandState = {
   pot: number;
   highestBet: number;
   minRaise: number;
+  /** Private full-raise history for restoring the legal minimum after an out-of-turn fold. */
+  fullRaiseHistory: OnlineFullRaiseRecord[];
+  /** Returns already credited during the hand, retained for the final result summary. */
+  pendingReturns: OnlinePayout[];
   lastAggressorSeat: number | null;
   raiseCount: number;
   result: OnlineHandResult | null;
@@ -232,7 +244,7 @@ export type OnlinePublicHand = {
   lastAggressorSeat: number | null;
   raiseCount: number;
   result: (OnlineHandResult & {
-    /** Public-safe winner details retained even after the winner releases their seat. */
+    /** Public-safe payout/return recipient details retained after a seat is released. */
     winnerDetails: {
       seat: number;
       displayName: string;
@@ -360,6 +372,8 @@ function cloneRoom(room: OnlineRoomState): OnlineRoomState {
             ...player,
             hole: [cloneCard(player.hole[0]), cloneCard(player.hole[1])],
           })),
+          fullRaiseHistory: (room.hand.fullRaiseHistory ?? []).map((record) => ({ ...record })),
+          pendingReturns: (room.hand.pendingReturns ?? []).map((entry) => ({ ...entry })),
           result: room.hand.result
             ? {
                 ...room.hand.result,
@@ -419,7 +433,28 @@ function normalizeStoredRoom(room: OnlineRoomState): void {
     if (typeof player.displayName !== "string" || !player.displayName.trim()) {
       player.displayName = room.seats.find((seat) => seat.seat === player.seat)?.displayName ?? `座位 ${player.seat + 1}`;
     }
+    if (typeof player.hasTakenAction !== "boolean") {
+      player.hasTakenAction = player.hasActed || player.actedAtBet > 0;
+    }
   });
+  if (room.hand) {
+    room.hand.fullRaiseHistory = Array.isArray(room.hand.fullRaiseHistory)
+      ? room.hand.fullRaiseHistory.filter((record) => (
+          Number.isInteger(record?.seat)
+          && Number.isInteger(record?.target)
+          && record.target > 0
+          && Number.isInteger(record?.increment)
+          && record.increment > 0
+        ))
+      : [];
+    room.hand.pendingReturns = Array.isArray(room.hand.pendingReturns)
+      ? room.hand.pendingReturns.filter((entry) => (
+          Number.isInteger(entry?.seat)
+          && Number.isInteger(entry?.amount)
+          && entry.amount > 0
+        ))
+      : [];
+  }
 }
 
 /** Uniform integer sampling backed by Web Crypto for every card shuffle. */
@@ -610,6 +645,7 @@ function beginHand(room: OnlineRoomState, options: OnlineEngineOptions): void {
       bet: 0,
       contributed: 0,
       hasActed: false,
+      hasTakenAction: false,
       actedAtBet: 0,
       raiseLocked: false,
       shown: false,
@@ -653,6 +689,8 @@ function beginHand(room: OnlineRoomState, options: OnlineEngineOptions): void {
     pot: 0,
     highestBet: openingHighestBet,
     minRaise: room.bigBlind,
+    fullRaiseHistory: [],
+    pendingReturns: [],
     lastAggressorSeat: null,
     raiseCount: 0,
     result: null,
@@ -729,16 +767,29 @@ export function legalOnlineActions(room: OnlineRoomState, accountId: string): On
   };
 }
 
-function collectBets(hand: OnlineHandState) {
+function addAmount(target: Map<number, number>, seat: number, amount: number) {
+  if (amount <= 0) return;
+  target.set(seat, (target.get(seat) ?? 0) + amount);
+}
+
+function payoutEntries(target: Map<number, number>): OnlinePayout[] {
+  return [...target]
+    .sort(([leftSeat], [rightSeat]) => leftSeat - rightSeat)
+    .map(([seat, amount]) => ({ seat, amount }));
+}
+
+function collectBets(room: OnlineRoomState, hand: OnlineHandState) {
   hand.pot += hand.players.reduce((sum, player) => sum + player.bet, 0);
   hand.players.forEach((player) => {
     player.bet = 0;
     player.hasActed = false;
+    player.hasTakenAction = false;
     player.actedAtBet = 0;
     player.raiseLocked = false;
   });
   hand.highestBet = 0;
-  hand.minRaise = ONLINE_BIG_BLIND;
+  hand.minRaise = room.bigBlind;
+  hand.fullRaiseHistory = [];
   hand.lastAggressorSeat = null;
   hand.raiseCount = 0;
 }
@@ -752,6 +803,8 @@ function settleShowdown(room: OnlineRoomState, hand: OnlineHandState) {
     .sort((left, right) => left - right);
   const payouts = new Map<number, number>();
   const returns = new Map<number, number>();
+  const newlyCreditedReturns = new Map<number, number>();
+  hand.pendingReturns.forEach((entry) => addAmount(returns, entry.seat, entry.amount));
   const handNames = new Map<number, string>();
   let previousLevel = 0;
   let mainPotWinners: number[] = [];
@@ -762,12 +815,21 @@ function settleShowdown(room: OnlineRoomState, hand: OnlineHandState) {
     previousLevel = level;
     if (contributors.length === 1) {
       const returningSeat = contributors[0].seat;
-      returns.set(returningSeat, (returns.get(returningSeat) ?? 0) + layerAmount);
+      addAmount(returns, returningSeat, layerAmount);
+      addAmount(newlyCreditedReturns, returningSeat, layerAmount);
       continue;
     }
-    const eligible = contributors.filter((player) => !player.folded);
-    if (!eligible.length) throw new Error("边池没有仍持牌的合资格玩家");
+    const directEligible = contributors.filter((player) => !player.folded);
+    // Forced out-of-turn departures can leave a historical side-pot layer with
+    // no live contributor. Folded hands can never win: treat that layer as dead
+    // money contested by every hand that is still live.
+    const eligible = directEligible.length
+      ? directEligible
+      : hand.players.filter((player) => !player.folded);
     if (layerAmount <= 0) continue;
+    if (!eligible.length) {
+      throw new Error("底池没有仍持牌的玩家");
+    }
     const ranked = eligible.map((player) => {
       const evaluation = bestOnlineHand([...player.hole, ...hand.community]);
       handNames.set(player.seat, evaluation.name);
@@ -782,7 +844,7 @@ function settleShowdown(room: OnlineRoomState, hand: OnlineHandState) {
     orderedWinners.forEach((seatNumber) => {
       const amount = share + (remainder > 0 ? 1 : 0);
       remainder = Math.max(0, remainder - 1);
-      payouts.set(seatNumber, (payouts.get(seatNumber) ?? 0) + amount);
+      addAmount(payouts, seatNumber, amount);
     });
   }
 
@@ -791,7 +853,7 @@ function settleShowdown(room: OnlineRoomState, hand: OnlineHandState) {
     if (!seat) throw new Error("结算座位不存在");
     seat.stack += amount;
   });
-  returns.forEach((amount, seatNumber) => {
+  newlyCreditedReturns.forEach((amount, seatNumber) => {
     const seat = seatByNumber(room, seatNumber);
     if (!seat) throw new Error("退回筹码的座位不存在");
     seat.stack += amount;
@@ -809,7 +871,7 @@ function settleShowdown(room: OnlineRoomState, hand: OnlineHandState) {
     winnerSeats: [...payouts.keys()],
     mainPotWinnerSeats: mainPotWinners,
     payouts: [...payouts].map(([seat, amount]) => ({ seat, amount })),
-    returns: [...returns].map(([seat, amount]) => ({ seat, amount })),
+    returns: payoutEntries(returns),
     handNames: [...handNames].map(([seat, name]) => ({ seat, name })),
   };
   hand.pendingShowSeat = null;
@@ -818,28 +880,56 @@ function settleShowdown(room: OnlineRoomState, hand: OnlineHandState) {
 }
 
 function awardUncontested(room: OnlineRoomState, hand: OnlineHandState, winnerSeat: number) {
-  const contributed = hand.players.reduce((sum, player) => sum + player.contributed, 0);
   const winner = seatByNumber(room, winnerSeat);
   if (!winner) throw new Error("赢家座位不存在");
   const winnerPlayer = playerBySeat(hand, winnerSeat);
   if (!winnerPlayer) throw new Error("赢家不在本手牌中");
-  const opponentHigh = Math.max(0, ...hand.players
-    .filter((player) => player.seat !== winnerSeat)
-    .map((player) => player.contributed));
-  const uncalled = Math.max(0, winnerPlayer.contributed - opponentHigh);
-  const totalPot = contributed - uncalled;
-  winner.stack += totalPot;
-  if (uncalled > 0) winner.stack += uncalled;
+
+  const levels = [...new Set(hand.players.filter((player) => player.contributed > 0).map((player) => player.contributed))]
+    .sort((left, right) => left - right);
+  const payouts = new Map<number, number>();
+  const returns = new Map<number, number>();
+  const newlyCreditedReturns = new Map<number, number>();
+  hand.pendingReturns.forEach((entry) => addAmount(returns, entry.seat, entry.amount));
+  let previousLevel = 0;
+  let mainPotWinners: number[] = [];
+
+  for (const level of levels) {
+    const contributors = hand.players.filter((player) => player.contributed >= level);
+    const layerAmount = (level - previousLevel) * contributors.length;
+    previousLevel = level;
+    if (layerAmount <= 0) continue;
+    if (contributors.length === 1) {
+      addAmount(returns, contributors[0].seat, layerAmount);
+      addAmount(newlyCreditedReturns, contributors[0].seat, layerAmount);
+      continue;
+    }
+    const layerWinner = contributors.find((player) => !player.folded) ?? winnerPlayer;
+    addAmount(payouts, layerWinner.seat, layerAmount);
+    if (!mainPotWinners.length) mainPotWinners = [layerWinner.seat];
+  }
+
+  payouts.forEach((amount, seatNumber) => {
+    const receivingSeat = seatByNumber(room, seatNumber);
+    if (!receivingSeat) throw new Error("结算座位不存在");
+    receivingSeat.stack += amount;
+  });
+  newlyCreditedReturns.forEach((amount, seatNumber) => {
+    const returningSeat = seatByNumber(room, seatNumber);
+    if (!returningSeat) throw new Error("退回筹码的座位不存在");
+    returningSeat.stack += amount;
+  });
+  const totalPot = [...payouts.values()].reduce((sum, amount) => sum + amount, 0);
   hand.players.forEach((player) => { player.bet = 0; });
   hand.pot = 0;
   hand.currentSeat = null;
   hand.result = {
     kind: "uncontested",
     totalPot,
-    winnerSeats: [winnerSeat],
-    mainPotWinnerSeats: [winnerSeat],
-    payouts: [{ seat: winnerSeat, amount: totalPot }],
-    returns: uncalled > 0 ? [{ seat: winnerSeat, amount: uncalled }] : [],
+    winnerSeats: [...payouts.keys()],
+    mainPotWinnerSeats: mainPotWinners.length ? mainPotWinners : [winnerSeat],
+    payouts: payoutEntries(payouts),
+    returns: payoutEntries(returns),
     handNames: [],
   };
   hand.pendingShowSeat = winnerSeat;
@@ -848,7 +938,7 @@ function awardUncontested(room: OnlineRoomState, hand: OnlineHandState, winnerSe
 }
 
 function dealNextStreet(room: OnlineRoomState, hand: OnlineHandState) {
-  collectBets(hand);
+  collectBets(room, hand);
   if (hand.street === "river") {
     settleShowdown(room, hand);
     return;
@@ -880,11 +970,76 @@ function bettingRoundComplete(room: OnlineRoomState, hand: OnlineHandState) {
     .every((player) => player.hasActed && player.bet === hand.highestBet);
 }
 
-function finishAction(room: OnlineRoomState, hand: OnlineHandState, actingSeat: number) {
+function markPlayerFolded(hand: OnlineHandState, player: OnlineHandPlayerState, actedAtBet: number) {
+  player.folded = true;
+  player.hasActed = true;
+  player.hasTakenAction = true;
+  player.actedAtBet = actedAtBet;
+  player.raiseLocked = false;
+}
+
+function rememberPendingReturn(hand: OnlineHandState, seat: number, amount: number) {
+  if (amount <= 0) return;
+  const existing = hand.pendingReturns.find((entry) => entry.seat === seat);
+  if (existing) existing.amount += amount;
+  else hand.pendingReturns.push({ seat, amount });
+}
+
+function normalizeBettingAfterFold(room: OnlineRoomState, hand: OnlineHandState) {
+  const fundedActors = activeActorSeats(room, hand);
+  const actualLiveHighest = Math.max(0, ...hand.players
+    .filter((player) => !player.folded)
+    .map((player) => player.bet));
+  const liveBettingFloor = hand.street === "preflop" && fundedActors.length >= 2
+    ? Math.max(actualLiveHighest, room.bigBlind)
+    : actualLiveHighest;
+
+  // Only a unique top tranche is uncalled. Matched chips from players who all
+  // departed remain dead money for the live hands to contest at settlement.
+  while (true) {
+    const ordered = [...hand.players].sort((left, right) => right.bet - left.bet);
+    const highest = ordered[0];
+    if (!highest || highest.bet <= 0 || !highest.folded) break;
+    const peersAtHighest = ordered.filter((player) => player.bet === highest.bet);
+    if (peersAtHighest.length !== 1) break;
+    const nextLevel = Math.max(liveBettingFloor, ordered[1]?.bet ?? 0);
+    const amount = highest.bet - nextLevel;
+    if (amount <= 0) break;
+    const seat = seatByNumber(room, highest.seat);
+    if (!seat) throw new Error("退回筹码的座位不存在");
+    highest.bet -= amount;
+    highest.contributed -= amount;
+    seat.stack += amount;
+    rememberPendingReturn(hand, highest.seat, amount);
+  }
+
+  const previousHighest = hand.highestBet;
+  hand.highestBet = liveBettingFloor;
+  if (hand.highestBet < previousHighest) {
+    hand.fullRaiseHistory = hand.fullRaiseHistory.filter((record) => record.target <= hand.highestBet);
+    const lastFullRaise = hand.fullRaiseHistory.at(-1) ?? null;
+    hand.minRaise = lastFullRaise?.increment ?? room.bigBlind;
+    hand.lastAggressorSeat = lastFullRaise?.seat ?? null;
+    hand.raiseCount = hand.fullRaiseHistory.length;
+    hand.players.forEach((player) => {
+      if (player.folded || (seatByNumber(room, player.seat)?.stack ?? 0) <= 0) return;
+      if (player.hasTakenAction && player.actedAtBet >= hand.highestBet) {
+        player.hasActed = true;
+        player.raiseLocked = false;
+      } else if (player.hasActed) {
+        player.raiseLocked = hand.highestBet - player.actedAtBet < hand.minRaise;
+      } else {
+        player.raiseLocked = false;
+      }
+    });
+  }
+}
+
+function closeHandOrStreetIfReady(room: OnlineRoomState, hand: OnlineHandState): boolean {
   const remaining = hand.players.filter((player) => !player.folded);
   if (remaining.length === 1) {
     awardUncontested(room, hand, remaining[0].seat);
-    return;
+    return true;
   }
   const actors = activeActorSeats(room, hand);
   const soleActor = actors.length === 1 ? playerBySeat(hand, actors[0]) : null;
@@ -893,12 +1048,17 @@ function finishAction(room: OnlineRoomState, hand: OnlineHandState, actingSeat: 
     && soleActor.bet >= betToMatchForActor(room, hand, soleActor.seat)
   )) {
     dealNextStreet(room, hand);
-    return;
+    return true;
   }
   if (bettingRoundComplete(room, hand)) {
     dealNextStreet(room, hand);
-    return;
+    return true;
   }
+  return false;
+}
+
+function finishAction(room: OnlineRoomState, hand: OnlineHandState, actingSeat: number) {
+  if (closeHandOrStreetIfReady(room, hand)) return;
   hand.currentSeat = nextActorSeat(room, hand, actingSeat);
   if (hand.currentSeat === null) dealNextStreet(room, hand);
 }
@@ -928,14 +1088,14 @@ function applyAction(
   const toCall = Math.max(0, betToMatch - player.bet);
 
   if (command.action === "fold") {
-    player.folded = true;
-    player.hasActed = true;
-    player.actedAtBet = betToMatch;
+    markPlayerFolded(hand, player, betToMatch);
+    normalizeBettingAfterFold(room, hand);
   } else if (command.action === "check") {
     if (toCall !== 0) {
       return { code: "CALL_REQUIRED", message: "面对下注时不能过牌", revision: room.revision };
     }
     player.hasActed = true;
+    player.hasTakenAction = true;
     player.actedAtBet = betToMatch;
   } else if (command.action === "call") {
     if (toCall === 0) {
@@ -946,6 +1106,7 @@ function applyAction(
     player.bet += paid;
     player.contributed += paid;
     player.hasActed = true;
+    player.hasTakenAction = true;
     player.actedAtBet = betToMatch;
   } else {
     const target = command.raiseTo;
@@ -973,13 +1134,17 @@ function applyAction(
     player.bet = target;
     player.contributed += paid;
     player.hasActed = true;
+    player.hasTakenAction = true;
     player.actedAtBet = target;
     player.raiseLocked = false;
     hand.highestBet = target;
     hand.lastAggressorSeat = seat.seat;
     hand.raiseCount += 1;
     const fullRaise = increase >= hand.minRaise;
-    if (fullRaise) hand.minRaise = increase;
+    if (fullRaise) {
+      hand.minRaise = increase;
+      hand.fullRaiseHistory.push({ seat: seat.seat, target, increment: increase });
+    }
     hand.players.forEach((other) => {
       if (other.seat === seat.seat || other.folded || (seatByNumber(room, other.seat)?.stack ?? 0) <= 0) return;
       if (fullRaise) {
@@ -1001,17 +1166,17 @@ function forceFoldDepartingPlayer(room: OnlineRoomState, seat: OnlineSeatState):
   const player = playerBySeat(hand, seat.seat);
   if (!player || player.folded || seat.stack <= 0) return;
 
-  player.folded = true;
-  player.hasActed = true;
-  player.actedAtBet = betToMatchForActor(room, hand, seat.seat);
+  const wasCurrentSeat = hand.currentSeat === seat.seat;
+  markPlayerFolded(hand, player, betToMatchForActor(room, hand, seat.seat));
+  normalizeBettingAfterFold(room, hand);
+  if (closeHandOrStreetIfReady(room, hand)) return;
 
-  if (hand.currentSeat === seat.seat) {
-    finishAction(room, hand, seat.seat);
-    return;
+  // An out-of-turn departure must not skip the player whose decision was
+  // already pending. Only advance when the departing player owned the turn.
+  if (wasCurrentSeat) {
+    hand.currentSeat = nextActorSeat(room, hand, seat.seat);
+    if (hand.currentSeat === null) dealNextStreet(room, hand);
   }
-
-  const remaining = hand.players.filter((candidate) => !candidate.folded);
-  if (remaining.length === 1) awardUncontested(room, hand, remaining[0].seat);
 }
 
 function resolveDepartingShowChoice(room: OnlineRoomState): void {
@@ -1363,13 +1528,16 @@ export function projectRoomState(room: OnlineRoomState, viewerAccountId: string 
                 payouts: hand.result.payouts.map((payout) => ({ ...payout })),
                 returns: hand.result.returns.map((entry) => ({ ...entry })),
                 handNames: hand.result.handNames.map((entry) => ({ ...entry })),
-                winnerDetails: hand.result.winnerSeats.map((winnerSeat) => {
-                  const winner = playerBySeat(hand, winnerSeat);
+                winnerDetails: [...new Set([
+                  ...hand.result.winnerSeats,
+                  ...hand.result.returns.map((entry) => entry.seat),
+                ])].map((recipientSeat) => {
+                  const winner = playerBySeat(hand, recipientSeat);
                   return {
-                    seat: winnerSeat,
+                    seat: recipientSeat,
                     displayName: winner?.displayName
-                      ?? room.seats.find((seat) => seat.seat === winnerSeat)?.displayName
-                      ?? `座位 ${winnerSeat + 1}`,
+                      ?? room.seats.find((seat) => seat.seat === recipientSeat)?.displayName
+                      ?? `座位 ${recipientSeat + 1}`,
                     holeCards: winner?.shown
                       ? [cloneCard(winner.hole[0]), cloneCard(winner.hole[1])]
                       : null,

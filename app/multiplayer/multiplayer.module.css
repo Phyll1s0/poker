@@ -1171,9 +1171,10 @@
   min-height: calc(100svh - 142px);
   position: relative;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  padding: 56px 110px 178px;
+  justify-content: flex-start;
+  padding: 104px 110px 28px;
   overflow: hidden;
   background:
     linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
@@ -1206,12 +1207,12 @@
 }
 
 .multiplayerPage .pokerTable {
-  width: min(860px, 78vw);
+  width: min(720px, 70vw);
   min-height: 0;
   aspect-ratio: 1.82 / 1;
   position: relative;
   z-index: 2;
-  margin: 0;
+  margin: 0 0 136px;
   overflow: visible;
   border: 0;
   border-radius: 0;
@@ -1601,11 +1602,12 @@
   width: min(850px, calc(100% - 76px));
   min-height: 116px;
   padding: 14px 16px;
-  position: absolute;
+  position: relative;
   z-index: 12;
-  left: 50%;
-  bottom: 18px;
-  transform: translateX(-50%);
+  left: auto;
+  bottom: auto;
+  transform: none;
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: 160px minmax(0, 1fr);
   align-items: center;
@@ -1740,18 +1742,118 @@
 }
 
 .multiplayerPage .raiseGroup {
-  min-width: 220px;
-  flex: 1.35;
+  min-width: 300px;
+  display: grid;
+  flex: 2;
+  grid-template-columns: minmax(180px, 1fr) minmax(105px, 0.42fr);
+  align-items: stretch;
+  gap: 8px;
+}
+
+.raiseEditor {
+  min-width: 0;
+  padding: 7px 9px;
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--mp-line);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.raiseHeading,
+.raiseInputs,
+.raisePresets {
+  display: flex;
+  align-items: center;
+}
+
+.raiseHeading {
+  justify-content: space-between;
+  gap: 12px;
+  color: #747a74;
+  font-size: 8px;
+}
+
+.raiseHeading strong {
+  color: #d9d5ca;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.raiseInputs {
+  gap: 9px;
 }
 
 .multiplayerPage .raiseInput {
-  width: 112px;
+  width: auto;
   min-height: 34px;
   padding: 0;
+  flex: 1;
   border: 0;
   background: transparent;
   accent-color: var(--mp-green);
   cursor: pointer;
+}
+
+.raiseNumberField {
+  width: 84px;
+  height: 32px;
+  padding: 0 7px;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  color: #6f756f;
+  background: #111512;
+  font-size: 8px;
+}
+
+.raiseNumberField input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: #e7e2d6;
+  background: transparent;
+  font: 700 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.raisePresets {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.raisePresets button {
+  min-height: 24px;
+  padding: 3px 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 4px;
+  color: #8d938d;
+  background: #171c19;
+  cursor: pointer;
+  font-size: 8px;
+}
+
+.raisePresets button small {
+  color: #c6c2b8;
+  font-size: 8px;
+}
+
+.raisePresets button:hover,
+.raisePresets .raisePresetActive {
+  border-color: rgba(99, 196, 156, 0.55);
+  color: #aee1cb;
+  background: rgba(99, 196, 156, 0.09);
+}
+
+.raiseExplanation {
+  color: #666d67;
+  font-size: 7px;
 }
 
 .resultBanner,
@@ -1783,14 +1885,17 @@
 
 @media (max-width: 980px) {
   .sessionMeta { display: none; }
-  .tableStage { min-height: 840px; padding: 90px 82px 210px; }
-  .multiplayerPage .pokerTable { width: min(680px, 75vw); }
+  .tableStage { min-height: 840px; padding: 96px 82px 28px; }
+  .multiplayerPage .pokerTable { width: min(650px, 72vw); margin-bottom: 128px; }
   .multiplayerPage .seat { min-width: 124px; }
   .multiplayerPage .seat1 { left: -72px; }
   .multiplayerPage .seat2 { left: -54px; }
   .multiplayerPage .seat4 { right: -54px; }
   .multiplayerPage .seat5 { right: -72px; }
-  .multiplayerPage .tableControls { width: calc(100% - 44px); }
+  .multiplayerPage .tableControls { width: calc(100% - 44px); grid-template-columns: 1fr; gap: 10px; }
+  .multiplayerPage .controlSummary { min-height: 0; padding: 0 0 10px; flex-direction: row; border-right: 0; border-bottom: 1px solid var(--mp-line); }
+  .multiplayerPage .actionRow { flex-wrap: wrap; }
+  .multiplayerPage .raiseGroup { min-width: 100%; }
   .waitingControls { grid-template-columns: 1fr !important; }
   .waitingControls .actionRow { min-width: 0; }
 }
@@ -1808,8 +1913,8 @@
   .multiplayerPage .tableTopbar { padding: 11px 14px; align-items: flex-start; }
   .multiplayerPage .tableTopbar h1 { font-size: 23px; }
   .roomMeta { justify-content: flex-start; }
-  .tableStage { min-height: 820px; padding: 112px 28px 250px; }
-  .multiplayerPage .pokerTable { width: 70%; min-width: 330px; aspect-ratio: 1.3 / 1; }
+  .tableStage { min-height: 840px; padding: 104px 28px 24px; }
+  .multiplayerPage .pokerTable { width: 70%; min-width: 330px; margin-bottom: 120px; aspect-ratio: 1.3 / 1; }
   .multiplayerPage .seat { min-width: 112px; transform: scale(0.78); transform-origin: center; }
   .multiplayerPage .seat0 { bottom: -88px; transform: translateX(-50%) scale(0.78); }
   .multiplayerPage .seat1 { left: -64px; bottom: -4px; }
@@ -1824,7 +1929,8 @@
   .multiplayerPage .controlSummary { min-height: 0; padding: 0 0 10px; border-right: 0; border-bottom: 1px solid var(--mp-line); }
   .multiplayerPage .actionRow { flex-wrap: wrap; }
   .actionButton { min-width: calc(33.333% - 6px); }
-  .multiplayerPage .raiseGroup { min-width: 100%; }
+  .multiplayerPage .raiseGroup { min-width: 100%; grid-template-columns: 1fr; }
+  .multiplayerPage .raiseGroup .raiseAction { width: 100%; }
   .waitingControls .lobbyPlayers { grid-template-columns: 1fr 1fr; }
   .waitingControls .actionRow { width: 100%; }
   .winningHands { grid-template-columns: 1fr; }

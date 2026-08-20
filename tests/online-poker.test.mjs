@@ -184,6 +184,21 @@ test("an out-of-turn departure folds without skipping the current actor", () => 
   assert.deepEqual(room.seats.map((seat) => seat.seat), [0, 2]);
 });
 
+test("an unmatched raise is returned to an out-of-turn player who permanently leaves", () => {
+  const { room: started, options } = startRoom(2);
+  let room = accepted(act(started, actors[0], "raise", options, 100));
+  assert.equal(room.hand.currentSeat, 1);
+
+  room = accepted(command(room, actors[0], { type: "leave" }, options));
+  assert.equal(room.phase, "showdown");
+  assert.deepEqual(room.hand.result.payouts, [{ seat: 1, amount: 20 }]);
+  assert.deepEqual(room.hand.result.returns, [{ seat: 0, amount: 90 }]);
+  assert.equal(room.hand.result.totalPot, 20);
+  assert.equal(room.seats.find((seat) => seat.seat === 0).stack, 990);
+  assert.equal(room.seats.find((seat) => seat.seat === 1).stack, 1_010);
+  assert.equal(room.seats.reduce((sum, seat) => sum + seat.stack, 0), 2_000);
+});
+
 test("room settings control stacks, mode, action clock and per-player time banks", () => {
   const { room } = startRoom(2, {
     roomOptions: {
@@ -487,6 +502,39 @@ test("an unacted player must raise a full increment over an incomplete all-in", 
   assert.equal(room.hand.currentSeat, 1);
 });
 
+test("cumulative incomplete all-ins reopen raising only after a full increment", () => {
+  const buildCumulativeRaise = (finalTarget) => {
+    const { room: started, options } = startRoom(5);
+    let room = accepted(act(started, actors[3], "call", options));
+    room = accepted(act(room, actors[4], "call", options));
+    room = accepted(act(room, actors[0], "call", options));
+    room = accepted(act(room, actors[1], "call", options));
+    room = accepted(act(room, actors[2], "check", options));
+    assert.equal(room.hand.street, "flop");
+    assert.equal(room.hand.currentSeat, 1);
+
+    room = accepted(act(room, actors[1], "check", options));
+    room = { ...room, seats: room.seats.map((seat) => seat.seat === 2 ? { ...seat, stack: 5 } : { ...seat }) };
+    room = accepted(act(room, actors[2], "raise", options, 5));
+    room = { ...room, seats: room.seats.map((seat) => seat.seat === 3 ? { ...seat, stack: 8 } : { ...seat }) };
+    room = accepted(act(room, actors[3], "raise", options, 8));
+    room = { ...room, seats: room.seats.map((seat) => seat.seat === 4 ? { ...seat, stack: finalTarget } : { ...seat }) };
+    room = accepted(act(room, actors[4], "raise", options, finalTarget));
+    room = accepted(act(room, actors[0], "call", options));
+    return { room, options };
+  };
+
+  const belowFullRaise = buildCumulativeRaise(9).room;
+  const locked = projectRoomState(belowFullRaise, actors[1].accountId).legalActions;
+  assert.equal(locked.callAmount, 9);
+  assert.equal(locked.raise, null, "a cumulative increase below one full bet keeps prior action locked");
+
+  const fullRaise = buildCumulativeRaise(10).room;
+  const reopened = projectRoomState(fullRaise, actors[1].accountId).legalActions;
+  assert.equal(reopened.callAmount, 10);
+  assert.equal(reopened.raise.minRaiseTo, 20, "a cumulative full-bet increase reopens raising");
+});
+
 test("all-in call runs the board, reveals live hands, and conserves chips", () => {
   const { room: started, options } = startRoom(2);
   let room = accepted(act(started, actors[0], "raise", options, 1000));
@@ -549,6 +597,108 @@ test("uncalled all-in chips are returned instead of reported as pot winnings", (
   assert.deepEqual(room.hand.result.payouts, [{ seat: 0, amount: 20 }]);
   assert.deepEqual(room.hand.result.returns, [{ seat: 0, amount: 990 }]);
   assert.equal(room.seats.reduce((sum, seat) => sum + seat.stack, 0), 2000);
+});
+
+test("a departing high bettor no longer forces the table to match an orphaned bet", () => {
+  const scenario = startRoom(3);
+  let room = accepted(act(scenario.room, actors[0], "raise", scenario.options, 100));
+  room = accepted(command(room, actors[0], { type: "leave" }, scenario.options));
+
+  const departed = room.hand.players.find((player) => player.seat === 0);
+  assert.equal(departed.folded, true);
+  assert.equal(departed.bet, 10);
+  assert.equal(departed.contributed, 10);
+  assert.equal(room.seats.find((seat) => seat.seat === 0).stack, 990);
+  assert.equal(room.hand.highestBet, 10);
+  assert.equal(room.hand.minRaise, 10);
+  assert.deepEqual(room.hand.pendingReturns, [{ seat: 0, amount: 90 }]);
+
+  const smallBlind = projectRoomState(room, actors[1].accountId).legalActions;
+  assert.equal(smallBlind.callAmount, 5);
+  assert.equal(smallBlind.raise.minRaiseTo, 20);
+
+  room = accepted(act(room, actors[1], "call", scenario.options));
+  room = accepted(act(room, actors[2], "check", scenario.options));
+  while (room.phase === "playing") {
+    const currentSeat = room.hand.currentSeat;
+    const legal = projectRoomState(room, actors[currentSeat].accountId).legalActions;
+    room = accepted(act(room, actors[currentSeat], legal.check ? "check" : "call", scenario.options));
+  }
+  assert.deepEqual(room.hand.result.returns, [{ seat: 0, amount: 90 }]);
+  assert.equal(room.seats.some((seat) => seat.seat === 0), false);
+  const departedReturner = projectRoomState(room, actors[1].accountId).hand.result.winnerDetails
+    .find((detail) => detail.seat === 0);
+  assert.equal(departedReturner.displayName, actors[0].displayName);
+});
+
+test("folding a later full raiser restores the prior legal raise increment", () => {
+  const scenario = startRoom(3);
+  let room = accepted(act(scenario.room, actors[0], "raise", scenario.options, 30));
+  room = accepted(act(room, actors[1], "raise", scenario.options, 100));
+  room = accepted(command(room, actors[1], { type: "leave" }, scenario.options));
+
+  assert.equal(room.hand.highestBet, 30);
+  assert.equal(room.hand.minRaise, 20);
+  assert.deepEqual(room.hand.fullRaiseHistory, [{ seat: 0, target: 30, increment: 20 }]);
+  const bigBlind = projectRoomState(room, actors[2].accountId).legalActions;
+  assert.equal(bigBlind.callAmount, 20);
+  assert.equal(bigBlind.raise.minRaiseTo, 50);
+});
+
+test("a postflop bettor leaving out of turn does not erase unacted players' decisions", () => {
+  const scenario = startRoom(3);
+  let room = accepted(act(scenario.room, actors[0], "call", scenario.options));
+  room = accepted(act(room, actors[1], "call", scenario.options));
+  room = accepted(act(room, actors[2], "check", scenario.options));
+  assert.equal(room.hand.street, "flop");
+  assert.equal(room.hand.currentSeat, 1);
+
+  room = accepted(act(room, actors[1], "raise", scenario.options, 30));
+  assert.equal(room.hand.currentSeat, 2);
+  room = accepted(command(room, actors[1], { type: "leave" }, scenario.options));
+
+  assert.equal(room.phase, "playing");
+  assert.equal(room.hand.street, "flop");
+  assert.equal(room.hand.currentSeat, 2);
+  assert.equal(room.hand.highestBet, 0);
+  assert.equal(room.hand.players.find((player) => player.seat === 2).hasActed, false);
+  const nextPlayer = projectRoomState(room, actors[2].accountId).legalActions;
+  assert.equal(nextPlayer.check, true);
+  assert.equal(nextPlayer.raise.minRaiseTo, 10);
+});
+
+test("consecutive out-of-turn departures settle orphaned side pots without stalling", () => {
+  const scenario = startRoom(4, { stacks: [191, 166, 101, 8] });
+  let room = accepted(act(scenario.room, actors[3], "call", scenario.options));
+  room = accepted(act(room, actors[0], "raise", scenario.options, 20));
+  room = accepted(act(room, actors[1], "call", scenario.options));
+  room = accepted(act(room, actors[2], "call", scenario.options));
+  assert.equal(room.hand.street, "flop");
+
+  room = accepted(act(room, actors[1], "check", scenario.options));
+  room = accepted(act(room, actors[2], "raise", scenario.options, 34));
+  room = accepted(act(room, actors[0], "call", scenario.options));
+  room = accepted(command(room, actors[2], { type: "leave" }, scenario.options));
+  room = accepted(command(room, actors[0], { type: "leave" }, scenario.options));
+
+  assert.equal(room.phase, "between_hands");
+  assert.equal(room.hand.community.length, 5);
+  assert.equal(room.hand.result.totalPot, 136);
+  assert.equal(room.hand.result.payouts.some((payout) => payout.seat === 0 || payout.seat === 2), false, "folded hands never receive an orphaned side pot");
+  assert.equal(room.hand.result.payouts.reduce((sum, payout) => sum + payout.amount, 0), 136);
+  assert.deepEqual(room.seats.map((seat) => seat.seat), [1, 3]);
+});
+
+test("dead blinds go to the only live hand when both blinds leave out of turn", () => {
+  const scenario = startRoom(3);
+  let room = accepted(command(scenario.room, actors[1], { type: "leave" }, scenario.options));
+  room = accepted(command(room, actors[2], { type: "leave" }, scenario.options));
+
+  assert.equal(room.phase, "showdown");
+  assert.deepEqual(room.hand.result.payouts, [{ seat: 0, amount: 10 }]);
+  assert.deepEqual(room.hand.result.returns, [{ seat: 2, amount: 5 }]);
+  assert.deepEqual(room.hand.result.winnerSeats, [0]);
+  assert.equal(room.hand.result.totalPot, 10);
 });
 
 test("the sole funded live player auto-runs out instead of folding an uncontested side pot", () => {
@@ -706,6 +856,7 @@ test("viewer projection exposes only their own or explicitly shown hole cards", 
     const serialized = JSON.stringify(projected);
     assert.doesNotMatch(serialized, /"deck"/);
     assert.doesNotMatch(serialized, /processedCommands/);
+    assert.doesNotMatch(serialized, /hasTakenAction|fullRaiseHistory|pendingReturns/);
     assert.doesNotMatch(serialized, /user-[0-9]/, "stable authentication subjects stay server-private");
   }
 
