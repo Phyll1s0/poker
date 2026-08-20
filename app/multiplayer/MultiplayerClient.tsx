@@ -199,16 +199,23 @@ const legacyRequest: MultiplayerRequest = async <T,>(
 function CardView({ card, mini = false }: { card: Card; mini?: boolean }) {
   const red = card.suit === "♥" || card.suit === "♦";
   const toneClass = red ? styles.redCard : styles.blackCard;
+  // Keep the ink explicit on the rendered card as well as in CSS. Some hosted
+  // browser color transforms were flattening the module class back to the
+  // default black card ink, which made hearts and diamonds indistinguishable.
+  const toneStyle = {
+    color: red ? "#c92f35" : "#171b19",
+    WebkitTextFillColor: red ? "#c92f35" : "#171b19",
+  };
   if (mini) {
     return (
-      <span className={`${styles.miniCard} ${toneClass}`} data-suit-tone={red ? "red" : "black"}>
+      <span className={`${styles.miniCard} ${toneClass}`} data-suit-tone={red ? "red" : "black"} style={toneStyle}>
         {card.rank}
         <span>{card.suit}</span>
       </span>
     );
   }
   return (
-    <span className={`${styles.card} ${toneClass}`} data-suit-tone={red ? "red" : "black"}>
+    <span className={`${styles.card} ${toneClass}`} data-suit-tone={red ? "red" : "black"} style={toneStyle}>
       {card.rank}
       <span className={styles.cardSuit}>{card.suit}</span>
     </span>

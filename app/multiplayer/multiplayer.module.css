@@ -1956,6 +1956,23 @@
   color: #171b19;
 }
 
+/* Attribute selectors are an independent fallback for hosted browsers that
+   rewrite or cache CSS-module class colors. Keep both the rank and suit ink
+   saturated enough to remain unambiguous on the warm card face. */
+.multiplayerPage [data-suit-tone="red"],
+.multiplayerPage [data-suit-tone="red"] .cardSuit,
+.multiplayerPage [data-suit-tone="red"] > span {
+  color: #c92f35 !important;
+  -webkit-text-fill-color: #c92f35;
+}
+
+.multiplayerPage [data-suit-tone="black"],
+.multiplayerPage [data-suit-tone="black"] .cardSuit,
+.multiplayerPage [data-suit-tone="black"] > span {
+  color: #171b19 !important;
+  -webkit-text-fill-color: #171b19;
+}
+
 .tableBrandGroup {
   display: flex;
   align-items: center;
