@@ -24,6 +24,12 @@ export type PublicBettingAction = {
   amount: number;
   toCall: number;
   stackBefore: number;
+  /** Remaining chips this player could still contest against the relevant opponent. */
+  effectiveStackBefore?: number;
+  /** Effective stack at the start of this hand against the relevant opponent. */
+  startingDepthBefore?: number;
+  /** Public id of the latest aggressor faced at this decision, when one exists. */
+  aggressorIdBefore?: number;
   isAllIn: boolean;
   potBefore: number;
   raiseCountBefore: number;
@@ -138,7 +144,11 @@ function preflopActionLikelihood(
       scenario: chartScenario,
       heroPosition: evidence.position,
       aggressorPosition: action.aggressorPositionBefore ?? evidence.openerPosition,
-      effectiveStackBb: action.stackBefore / Math.max(1, bigBlind),
+      effectiveStackBb: (
+        action.startingDepthBefore
+        ?? action.effectiveStackBefore
+        ?? action.stackBefore
+      ) / Math.max(1, bigBlind),
       facingSizeBb: chartScenario === "rfi" ? undefined : observedTargetBb,
     });
     const chartFrequency = action.kind === "raise"

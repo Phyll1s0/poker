@@ -6,6 +6,7 @@ import {
   evaluatePokerPolicy,
   pokerCallClosesContestableLayers,
   pokerContestablePotAtDecision,
+  pokerDecisionStackContext,
   pokerEffectiveStackAtDecision,
 } from "../lib/poker-policy.ts";
 
@@ -621,6 +622,114 @@ test("counts an all-in bettor's unmatched wager in the decision effective stack"
     { stack: 0, bet: 225 },
     { stack: 500, bet: 225 },
   ]), 700);
+});
+
+test("separates the relevant aggressor from the deepest contestable opponent", () => {
+  const opponents = [
+    { id: 1, stack: 0, bet: 200 },
+    { id: 2, stack: 2_000, bet: 0 },
+  ];
+  const facingShortAggressor = pokerDecisionStackContext(1_970, 30, opponents, 1);
+  const deepestContestable = pokerDecisionStackContext(1_970, 30, opponents);
+
+  assert.deepEqual(facingShortAggressor, {
+    playerStack: 1_970,
+    opponentReach: 170,
+    effectiveStack: 170,
+    opponentId: 1,
+  });
+  assert.deepEqual(deepestContestable, {
+    playerStack: 1_970,
+    opponentReach: 1_970,
+    effectiveStack: 1_970,
+    opponentId: 2,
+  });
+});
+
+test("computes a multiway raise cap from each opponent's total street reach", () => {
+  const context = pokerDecisionStackContext(900, 100, [
+    { id: 1, stack: 0, bet: 120 },
+    { id: 2, stack: 500, bet: 0 },
+  ]);
+
+  assert.equal(context.opponentId, 2);
+  assert.equal(context.effectiveStack, 400);
+  assert.equal(100 + context.effectiveStack, 500);
+});
+
+test("caps policy sizes at what a live opponent can match without calling it hero all-in", () => {
+  const plan = evaluatePokerPolicy({
+    ...baseSpot,
+    street: "flop",
+    pot: 300,
+    toCall: 20,
+    highestBet: 120,
+    playerBet: 100,
+    playerStack: 900,
+    maxContestableTarget: 500,
+    minRaise: 20,
+    effectiveStackBb: 2,
+    startingDepthBb: 20,
+    equity: 0.86,
+    handStrength: 0.9,
+  });
+
+  assert.equal(plan.maxTarget, 500);
+  assert.ok(plan.raiseTo <= 500);
+  assert.ok(plan.sizingRoutes.length > 0);
+  assert.ok(plan.sizingRoutes.every((route) => route.target <= 500));
+  assert.ok(plan.sizingRoutes.every((route) => route.allIn === false));
+});
+
+test("selects the preflop chart by hand-start depth, not chips left after betting", () => {
+  const fives = { highRank: 5, lowRank: 5, pair: true, suited: false, gap: 0 };
+  const spot = {
+    ...baseSpot,
+    street: "preflop",
+    preflopHand: fives,
+    preflopPercentile: 0.66,
+    preflopPosition: "BTN",
+    preflopOpenerPosition: "SB",
+    preflopRaiseCount: 2,
+    preflopPreviouslyRaised: true,
+    pot: 140,
+    toCall: 65,
+    highestBet: 90,
+    playerBet: 25,
+    playerStack: 200,
+    effectiveStackBb: 20,
+  };
+  const shallowStart = evaluatePokerPolicy({ ...spot, startingDepthBb: 40 });
+  const deepStart = evaluatePokerPolicy({ ...spot, startingDepthBb: 200 });
+
+  assert.notDeepEqual(shallowStart.actionFrequencies, deepStart.actionFrequencies);
+  assert.ok(deepStart.preflopEnterFrequency > shallowStart.preflopEnterFrequency);
+});
+
+test("keeps chart depth separate from remaining-stack jam pressure", () => {
+  const spot = {
+    ...baseSpot,
+    profile: { aggression: 0.7, looseness: 0.27, bluff: 0.12 },
+    street: "preflop",
+    preflopHand: { highRank: 5, lowRank: 5, pair: true, suited: false, gap: 0 },
+    preflopPercentile: 0.66,
+    preflopPosition: "BTN",
+    preflopOpenerPosition: "SB",
+    preflopRaiseCount: 2,
+    preflopPreviouslyRaised: true,
+    pot: 140,
+    toCall: 65,
+    highestBet: 90,
+    playerBet: 25,
+    playerStack: 975,
+    startingDepthBb: 100,
+  };
+  const shortRemaining = evaluatePokerPolicy({ ...spot, effectiveStackBb: 30 });
+  const deepRemaining = evaluatePokerPolicy({ ...spot, effectiveStackBb: 100 });
+
+  assert.deepEqual(shortRemaining.actionFrequencies, deepRemaining.actionFrequencies);
+  assert.ok(shortRemaining.shortStackJamFrequency > deepRemaining.shortStackJamFrequency);
+  assert.ok(shortRemaining.spr < deepRemaining.spr);
 });
 
 test("excludes an oversized all-in wager the short caller cannot win", () => {

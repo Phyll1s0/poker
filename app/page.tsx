@@ -18,7 +18,6 @@ import {
   evaluatePokerPolicy,
   pokerCallClosesContestableLayers,
   pokerContestablePotAtDecision,
-  pokerEffectiveStackAtDecision,
   sixMaxPreflopPosition,
   sixMaxPreflopPositionFactor,
   type PokerPolicyInput,
@@ -26,6 +25,7 @@ import {
 } from "../lib/poker-policy";
 import { createPublicOpponentRanges, type PublicBettingAction } from "../lib/poker-range";
 import { settlePokerShowdown } from "../lib/poker-settlement";
+import { resolveNextCashGameBankrolls, resolvePokerDecisionStacks } from "../lib/poker-stack";
 import {
   formatPokerSizingRoute,
   legalPokerRaiseTarget,
@@ -43,7 +43,7 @@ import { settleSquidRound, squidMultiplier } from "../lib/poker-squid";
 type Suit = "♠" | "♥" | "♦" | "♣";
 type Street = "preflop" | "flop" | "turn" | "river";
 type ActionKind = "fold" | "check" | "call" | "raise";
-type GameMode = "hand" | "session";
+type GameMode = "per_hand" | "session";
 type TablePresetKey = "short" | "standard" | "deep" | "squid";
 type TableImage = { loose: number; aggressive: number; deceptive: number; observations: number };
 type InstallPromptEvent = Event & {
@@ -135,7 +135,12 @@ type Review = {
   equityRealization: number;
   realizationThreshold: number;
   callEv: number | null;
+  heroStackBb: number;
+  opponentStackBb: number;
+  opponentName: string;
   effectiveStackBb: number;
+  startingDepthBb: number;
+  maxContestableBb: number;
   spr: number;
   strategySource: string;
   preflopPosition: string;
@@ -185,10 +190,10 @@ const TABLE_PRESETS: Record<TablePresetKey, {
   stackBb: number;
   squid: boolean;
 }> = {
-  short: { label: "浅筹现金 · 40 BB", shortLabel: "浅筹 40BB", description: "更频繁面对全下与低 SPR 决策", stackBb: 40, squid: false },
-  standard: { label: "标准现金 · 100 BB", shortLabel: "标准 100BB", description: "常规六人桌训练深度", stackBb: 100, squid: false },
-  deep: { label: "深筹现金 · 200 BB", shortLabel: "深筹 200BB", description: "更多转牌、河牌与大底池决策", stackBb: 200, squid: false },
-  squid: { label: "血战鱿鱼 · 200 BB", shortLabel: "血战鱿鱼", description: "9 条鱿鱼 · 基础价值 5 BB", stackBb: 200, squid: true },
+  short: { label: "浅筹现金 · 初始 40 BB", shortLabel: "浅筹桌 · 初始 40BB", description: "初始买入 40 BB；更频繁面对全下与低 SPR 决策", stackBb: 40, squid: false },
+  standard: { label: "标准现金 · 初始 100 BB", shortLabel: "标准桌 · 初始 100BB", description: "初始买入 100 BB；之后按实际筹码深度训练", stackBb: 100, squid: false },
+  deep: { label: "深筹现金 · 初始 200 BB", shortLabel: "深筹桌 · 初始 200BB", description: "初始买入 200 BB；更多转牌、河牌与大底池决策", stackBb: 200, squid: false },
+  squid: { label: "血战鱿鱼 · 初始 200 BB", shortLabel: "血战鱿鱼 · 初始 200BB", description: "初始买入 200 BB · 9 条鱿鱼 · 基础价值 5 BB", stackBb: 200, squid: true },
 };
 
 const AI_REVIEW_NOTES: Record<keyof typeof AI_PROFILES, string> = {
@@ -284,33 +289,35 @@ function currentEquity(game: Game, player: Player, iterations = 80): number {
     game.players.map((candidate) => `${candidate.id}:${Number(candidate.folded)}:${candidate.stack}:${candidate.bet}:${candidate.contributed}`).join("|"),
     game.actionHistory.map((action) => `${action.playerId}:${action.street}:${action.kind}:${action.amount}`).join("|"),
   ].join(";");
-  if (callClosesPlayerAction(game, player)) {
-    const toCall = Math.max(0, game.highestBet - player.bet);
-    const decisionPot = pokerContestablePotAtDecision(
-      player.id,
-      player.contributed,
-      player.stack,
-      toCall,
-      game.players,
-    );
-    if (decisionPot.finalPot > 0 && decisionPot.layers.length > 0) {
-      const rangeByPlayer = new Map(opponents.map((opponent) => [opponent.playerId, opponent.weight]));
-      const layerIterations = Math.max(48, Math.floor(iterations / decisionPot.layers.length));
-      const expectedPayout = decisionPot.layers.reduce((sum, layer, index) => {
-        const layerRanges = layer.opponentIds
-          .map((playerId) => rangeByPlayer.get(playerId))
-          .filter((weight): weight is NonNullable<typeof weight> => Boolean(weight));
-        if (!layerRanges.length) return sum + layer.amount;
-        const layerEquity = estimateEquity(player.hole, community, {
-          opponents: layerRanges.length,
-          iterations: layerIterations,
-          opponentRanges: layerRanges,
-          random: seededSpotRandom(`${publicSeed};layer:${index}:${layer.opponentIds.join(",")}`),
-        });
-        return sum + layer.amount * layerEquity;
-      }, 0);
-      return expectedPayout / decisionPot.finalPot;
-    }
+  // Main pots and side pots can have different opponent ranges even before the
+  // action closes (for example, one short stack is all-in while a deeper side
+  // pot remains live). Price every eligible layer separately instead of
+  // applying one aggregate multiway equity to the whole pot.
+  const toCall = Math.max(0, game.highestBet - player.bet);
+  const decisionPot = pokerContestablePotAtDecision(
+    player.id,
+    player.contributed,
+    player.stack,
+    toCall,
+    game.players,
+  );
+  if (decisionPot.finalPot > 0 && decisionPot.layers.length > 0) {
+    const rangeByPlayer = new Map(opponents.map((opponent) => [opponent.playerId, opponent.weight]));
+    const layerIterations = Math.max(48, Math.floor(iterations / decisionPot.layers.length));
+    const expectedPayout = decisionPot.layers.reduce((sum, layer, index) => {
+      const layerRanges = layer.opponentIds
+        .map((playerId) => rangeByPlayer.get(playerId))
+        .filter((weight): weight is NonNullable<typeof weight> => Boolean(weight));
+      if (!layerRanges.length) return sum + layer.amount;
+      const layerEquity = estimateEquity(player.hole, community, {
+        opponents: layerRanges.length,
+        iterations: layerIterations,
+        opponentRanges: layerRanges,
+        random: seededSpotRandom(`${publicSeed};layer:${index}:${layer.opponentIds.join(",")}`),
+      });
+      return sum + layer.amount * layerEquity;
+    }, 0);
+    return expectedPayout / decisionPot.finalPot;
   }
   return estimateEquity(player.hole, community, {
     opponents: opponents.length,
@@ -342,7 +349,17 @@ function visibleHandStrength(player: Player, community: Card[]) {
   return clamp(category / 7 + Math.max(...player.hole.map((card) => card.rank)) / 140, 0, 1);
 }
 
+function soloDecisionStackContext(game: Game, player: Player) {
+  return resolvePokerDecisionStacks({
+    player,
+    players: game.players,
+    highestBet: game.highestBet,
+    lastAggressorId: game.lastAggressor,
+  });
+}
+
 function pokerSizingContext(game: Game, player: Player): PokerSizingContext {
+  const stacks = soloDecisionStackContext(game, player);
   return {
     street: game.street,
     pot: committedPot(game),
@@ -350,6 +367,7 @@ function pokerSizingContext(game: Game, player: Player): PokerSizingContext {
     highestBet: game.highestBet,
     playerBet: player.bet,
     playerStack: player.stack,
+    maxContestableTarget: stacks.maxContestableTarget,
     minRaise: game.minRaise,
     bigBlind: BIG_BLIND,
     preflopRaiseCount: game.raiseCount,
@@ -417,21 +435,25 @@ function playerSquidPressure(game: Game, player: Player) {
   return squidCount === 0 ? 0.035 + squidProgress * 0.07 : nextSquidHitsMultiplier ? 0.055 : 0.018;
 }
 
+type SoloPokerPolicyInput = PokerPolicyInput & {
+  heroStackBb: number;
+  opponentStackBb: number;
+  opponentName: string;
+  maxContestableBb: number;
+};
+
 function buildPokerPolicyInput(
   game: Game,
   player: Player,
   equity: number,
   profile: PokerPolicyProfile,
-): PokerPolicyInput {
+): SoloPokerPolicyInput {
   const context = pokerSizingContext(game, player);
   const preflopActions = game.actionHistory.filter((action) => action.street === "preflop");
   const latestPreflopRaise = [...preflopActions].reverse().find((action) => action.kind === "raise");
   const latestAggressiveAction = [...game.actionHistory].reverse().find((action) => action.kind === "raise");
   const boardTexture = analyzeBoardTexture(game.community);
-  const opponents = game.players
-    .filter((candidate) => !candidate.folded && candidate.id !== player.id)
-    .map((candidate) => ({ stack: candidate.stack, bet: candidate.bet }));
-  const effectiveStack = pokerEffectiveStackAtDecision(player.stack, player.bet, opponents);
+  const stacks = soloDecisionStackContext(game, player);
   const decisionPot = pokerContestablePotAtDecision(
     player.id,
     player.contributed,
@@ -456,11 +478,12 @@ function buildPokerPolicyInput(
     activeOpponents: game.players.filter((candidate) => !candidate.folded && candidate.id !== player.id).length,
     opponentsCanRespond: canAnyOpponentRespond(game, player),
     callEndsHand: callClosesPlayerAction(game, player),
-    effectiveStackBb: effectiveStack / BIG_BLIND,
-    startingDepthBb: game.startingStack / BIG_BLIND,
+    effectiveStackBb: stacks.decision.effectiveStack / BIG_BLIND,
+    startingDepthBb: stacks.startingDepth / BIG_BLIND,
     highestBet: game.highestBet,
     playerBet: player.bet,
     playerStack: player.stack,
+    maxContestableTarget: context.maxContestableTarget,
     minRaise: game.minRaise,
     raiseLocked: player.raiseLocked,
     squidPressure: playerSquidPressure(game, player),
@@ -483,6 +506,10 @@ function buildPokerPolicyInput(
     boardHighCard: boardTexture.highCard,
     initiative: latestAggressiveAction?.playerId === player.id,
     streetRaiseCount: game.raiseCount,
+    heroStackBb: player.stack / BIG_BLIND,
+    opponentStackBb: (stacks.opponent?.stack ?? 0) / BIG_BLIND,
+    opponentName: stacks.opponent?.name ?? "主要对手",
+    maxContestableBb: stacks.contestable.effectiveStack / BIG_BLIND,
   };
 }
 
@@ -555,15 +582,16 @@ function freshGame(
   const startingStack = preset.stackBb * BIG_BLIND;
   const deck = shuffle(makeDeck());
   const dealer = previous ? (previous.dealer + 1) % PLAYER_TEMPLATES.length : 0;
-  const stacks = previous?.players.length && !options.resetStacks
-    ? previous.players.map((player) => (player.stack < BIG_BLIND ? startingStack : player.stack))
-    : PLAYER_TEMPLATES.map(() => startingStack);
-  const cashInvested = previous?.players.length && !options.resetStacks
-    ? previous.players.map((player, id) => (
-        (previous.cashInvested[id] ?? previous.startingStack)
-        + (player.stack < BIG_BLIND ? startingStack - player.stack : 0)
-      ))
-    : PLAYER_TEMPLATES.map(() => startingStack);
+  const carriedBankrolls = previous?.players.length && !options.resetStacks
+    ? resolveNextCashGameBankrolls({
+        stacks: previous.players.map((player) => player.stack),
+        cashInvested: previous.cashInvested,
+        buyInStack: startingStack,
+        bigBlind: BIG_BLIND,
+      })
+    : null;
+  const stacks = carriedBankrolls?.stacks ?? PLAYER_TEMPLATES.map(() => startingStack);
+  const cashInvested = carriedBankrolls?.cashInvested ?? PLAYER_TEMPLATES.map(() => startingStack);
   const stylePool = options.shuffleStyles
     ? sampleAiLineup(PLAYER_TEMPLATES.length - 1)
     : previous?.players.length
@@ -598,8 +626,8 @@ function freshGame(
   players[bigBlind].stack -= BIG_BLIND;
   players[bigBlind].bet = BIG_BLIND;
   players[bigBlind].contributed = BIG_BLIND;
-  const rebought = previous && !options.resetStacks
-    ? previous.players.filter((player) => player.stack < BIG_BLIND).map((player) => player.name)
+  const rebought = carriedBankrolls
+    ? carriedBankrolls.reboughtIds.map((playerId) => previous!.players[playerId].name)
     : [];
   const previousSquid = previous?.presetKey === "squid" ? previous.squid : undefined;
   const squid: SquidState = preset.squid
@@ -817,6 +845,7 @@ function advanceStreet(game: Game, players: Player[]): Game {
 
 function act(game: Game, playerId: number, kind: ActionKind, raiseTo?: number): Game {
   if (game.status !== "playing" || game.current !== playerId) return game;
+  const stackContextBefore = soloDecisionStackContext(game, game.players[playerId]);
   const players = game.players.map((player) => ({ ...player }));
   const player = players[playerId];
   const stackBefore = player.stack;
@@ -844,7 +873,9 @@ function act(game: Game, playerId: number, kind: ActionKind, raiseTo?: number): 
     player.bet += paid;
     player.contributed += paid;
     player.hasActed = true;
-    actionText = paid < toCall ? `${player.name} 全下 ${paid}` : `${player.name} 跟注 ${paid}`;
+    actionText = player.stack === 0
+      ? paid < toCall ? `${player.name} 不足额全下 ${paid}` : `${player.name} 全下跟注 ${paid}`
+      : `${player.name} 跟注 ${paid}`;
     resolvedKind = "call";
     amount = paid;
   } else if (kind === "raise") {
@@ -894,6 +925,9 @@ function act(game: Game, playerId: number, kind: ActionKind, raiseTo?: number): 
     amount,
     toCall,
     stackBefore,
+    effectiveStackBefore: stackContextBefore.decision.effectiveStack,
+    startingDepthBefore: stackContextBefore.startingDepth,
+    aggressorIdBefore: game.lastAggressor ?? undefined,
     isAllIn: resolvedKind !== "fold" && player.stack === 0,
     potBefore: committedPot(game),
     raiseCountBefore: game.raiseCount,
@@ -1070,14 +1104,23 @@ function getAdvice(game: Game, player: Player, equity: number) {
       ? ` 你还没有鱿鱼，越接近发完，争夺主池的附加价值越高。`
       : ` 你已有 ${squidCount} 条鱿鱼，当前倍率为 ×${squidMultiplier(squidCount)}。`;
   }
-  if (game.presetKey === "short") {
+  const actualStartingDepth = policyInput.startingDepthBb;
+  if (actualStartingDepth <= 55) {
     note += game.street === "preflop"
-      ? ` 当前为 40 BB 浅筹，面对 3-bet 时减少纯跟注，并让强牌更频繁进入全下分支。`
-      : ` 当前为 40 BB 浅筹，低 SPR 下强成牌与高权益听牌可以更早进入承诺线。`;
-  } else if (game.presetKey === "deep" || game.presetKey === "squid") {
+      ? ` 本手起始有效 ${actualStartingDepth.toFixed(1)} BB，属于浅筹节点；面对再加注时减少纯跟注，并让强牌更频繁进入承诺线。`
+      : ` 本手起始有效 ${actualStartingDepth.toFixed(1)} BB，低 SPR 下强成牌与高权益听牌可以更早进入承诺线。`;
+  } else if (actualStartingDepth >= 140) {
     note += game.street === "preflop"
-      ? ` 当前为 200 BB 深筹，位置、同花连张和隐含赔率更重要，但边缘牌面对再加注仍需保持纪律。`
-      : ` 当前为 200 BB 深筹，边缘成牌要控制大底池，坚果优势与位置价值更高。`;
+      ? ` 本手起始有效 ${actualStartingDepth.toFixed(1)} BB，属于深筹节点；位置、同花连张和隐含赔率更重要，但边缘牌面对再加注仍需保持纪律。`
+      : ` 本手起始有效 ${actualStartingDepth.toFixed(1)} BB，深筹下边缘成牌要控制大底池，坚果优势与位置价值更高。`;
+  }
+  const nominalDepth = game.startingStack / BIG_BLIND;
+  if (Math.abs(nominalDepth - actualStartingDepth) >= 10) {
+    note += ` 桌型的补款基准是 ${nominalDepth.toFixed(0)} BB，但本手策略按实际 ${actualStartingDepth.toFixed(1)} BB 节点计算。`;
+  }
+  note += ` 当前双方后手：你 ${policyInput.heroStackBb.toFixed(1)} BB / ${policyInput.opponentName} ${policyInput.opponentStackBb.toFixed(1)} BB；与该对手剩余可争夺的有效筹码为 ${policyInput.effectiveStackBb.toFixed(1)} BB。`;
+  if (policyInput.maxContestableBb > policyInput.effectiveStackBb + 0.05) {
+    note += ` 多人底池中仍有更深对手，加注的有效上限按 ${policyInput.maxContestableBb.toFixed(1)} BB 计算。`;
   }
   const labels: Record<ActionKind, string> = { fold: "弃牌", check: "过牌", call: "跟注", raise: "加注" };
   const mix = formatFrequencyMix(
@@ -1104,7 +1147,12 @@ function getAdvice(game: Game, player: Player, equity: number) {
     equityRealization: policyPlan.equityRealization,
     realizationThreshold: policyPlan.realizationThreshold,
     callEv,
+    heroStackBb: policyInput.heroStackBb,
+    opponentStackBb: policyInput.opponentStackBb,
+    opponentName: policyInput.opponentName,
     effectiveStackBb: policyInput.effectiveStackBb,
+    startingDepthBb: policyInput.startingDepthBb,
+    maxContestableBb: policyInput.maxContestableBb,
     spr: policyPlan.spr,
     strategySource: game.street === "preflop" ? "六人桌 169 手牌基准表" : "行动加权范围启发式模型",
     preflopPosition: policyPlan.preflopPosition,
@@ -1312,7 +1360,7 @@ function LandingHome({ onEnterSolo }: { onEnterSolo: () => void }) {
 
         <div className="landing-table-card" aria-label="RangeCraft 训练牌桌预览">
           <div className="landing-card-heading">
-            <div><span>LIVE TRAINING</span><strong>标准现金 · 100 BB</strong></div>
+            <div><span>LIVE TRAINING</span><strong>标准现金 · 初始 100 BB</strong></div>
             <em><i /> READY</em>
           </div>
           <div className="landing-table-preview" aria-hidden="true">
@@ -1350,7 +1398,7 @@ function LandingHome({ onEnterSolo }: { onEnterSolo: () => void }) {
             }}
           >
             <span className="mode-index">01</span>
-            <div><small>LOCAL TRAINING</small><h3>单人训练</h3><p>浅筹、标准、深筹与血战鱿鱼；电脑风格每桌随机，支持单手即时指导与整局统一复盘。</p></div>
+            <div><small>LOCAL TRAINING</small><h3>单人训练</h3><p>浅筹、标准、深筹与血战鱿鱼；电脑风格每桌随机，支持逐手即时指导与整局统一复盘。</p></div>
             <strong>立即开始 <span>→</span></strong>
           </a>
           <a className="landing-mode-card multiplayer" href={multiplayerHref}>
@@ -1380,7 +1428,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
   const [dealing, setDealing] = useState(false);
   const [soundOn, setSoundOn] = useState(true);
-  const [mode, setMode] = useState<GameMode>("hand");
+  const [mode, setMode] = useState<GameMode>("per_hand");
   const [sessionEnded, setSessionEnded] = useState(false);
   const [sessionResults, setSessionResults] = useState<SessionHandResult[]>([]);
   const [heroImage, setHeroImage] = useState<TableImage>({ loose: 0.5, aggressive: 0.5, deceptive: 0.5, observations: 0 });
@@ -1483,7 +1531,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     if (game?.status === "showdown" && !dealing) {
       const timer = window.setTimeout(() => {
         recordSessionHand(game);
-        if (mode === "hand" && game.showChoiceMade) setShowLog(true);
+        if (mode === "per_hand" && game.showChoiceMade) setShowLog(true);
         if (mode === "session" && isSessionComplete(game) && game.showChoiceMade) {
           setSessionEnded(true);
           setShowLog(true);
@@ -1531,14 +1579,14 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     setFeedback(null);
     setShowLog(false);
     setGame((current) => freshGame(current ?? undefined, {
-      resetStacks: mode === "hand",
-      shuffleStyles: mode === "hand",
+      resetStacks: false,
+      shuffleStyles: false,
     }));
   }, [mode, sessionEnded, game, recordSessionHand]);
 
   const resetRun = useCallback((nextMode: GameMode, nextPreset: TablePresetKey) => {
     setMode(nextMode);
-    setTraining(nextMode === "hand");
+    setTraining(nextMode === "per_hand");
     setReview([]);
     setFeedback(null);
     setShowLog(false);
@@ -1566,7 +1614,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   }, [hasRunProgress, onExit]);
 
   const switchMode = useCallback((nextMode: GameMode) => {
-    if (nextMode === mode || (currentPresetKey === "squid" && nextMode === "hand")) return;
+    if (nextMode === mode || (currentPresetKey === "squid" && nextMode === "per_hand")) return;
     if (hasRunProgress && !window.confirm("切换训练模式会重新开始当前练习，确定继续吗？")) return;
     resetRun(nextMode, currentPresetKey);
   }, [mode, currentPresetKey, hasRunProgress, resetRun]);
@@ -1628,7 +1676,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
           target: actualRaiseTo,
           fraction: actualBetFraction ?? 0,
           frequency: 1,
-          allIn: actualRaiseTo === pokerSizingMaxTarget(sizingContext),
+          allIn: actualRaiseTo === sizingContext.playerBet + sizingContext.playerStack,
         });
     const entry: Review = {
       id: Date.now(),
@@ -1644,7 +1692,12 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       equityRealization: advice.equityRealization,
       realizationThreshold: advice.realizationThreshold,
       callEv: advice.callEv,
+      heroStackBb: advice.heroStackBb,
+      opponentStackBb: advice.opponentStackBb,
+      opponentName: advice.opponentName,
       effectiveStackBb: advice.effectiveStackBb,
+      startingDepthBb: advice.startingDepthBb,
+      maxContestableBb: advice.maxContestableBb,
       spr: advice.spr,
       strategySource: advice.strategySource,
       preflopPosition: advice.preflopPosition,
@@ -1669,7 +1722,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       note: advice.note,
     };
     setReview((items) => [entry, ...items].slice(0, 400));
-    setFeedback(mode === "hand" ? entry : null);
+    setFeedback(mode === "per_hand" ? entry : null);
     setHeroImage((image) => {
       const looseSignal = kind === "fold" ? 0.18 : kind === "check" ? 0.4 : kind === "call" ? 0.68 : 0.78;
       const aggressionSignal = kind === "raise" ? 0.9 : kind === "fold" ? 0.34 : 0.24;
@@ -1736,9 +1789,9 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   const sessionScore = review.length ? Math.round(review.reduce((sum, item) => sum + item.score, 0) / review.length) : "—";
   const handReview = review.filter((item) => item.hand === game.handNo);
   const handScore = handReview.length ? Math.round(handReview.reduce((sum, item) => sum + item.score, 0) / handReview.length) : "—";
-  const reviewUnlocked = mode === "hand" ? handFinished && game.showChoiceMade : sessionEnded;
-  const reportReview = [...(mode === "hand" ? handReview : review)].reverse();
-  const reportScore = mode === "hand" ? handScore : sessionScore;
+  const reviewUnlocked = mode === "per_hand" ? handFinished && game.showChoiceMade : sessionEnded;
+  const reportReview = [...(mode === "per_hand" ? handReview : review)].reverse();
+  const reportScore = mode === "per_hand" ? handScore : sessionScore;
   const completedHands = mode === "session"
     ? Math.max(sessionResults.length, handFinished ? game.handNo : game.handNo - 1)
     : game.handNo;
@@ -1782,7 +1835,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
             <span>{soundOn ? "♪" : "—"}</span><b>音效</b><em>{soundOn ? "ON" : "OFF"}</em>
           </button>
           <button
-            className={`training-toggle ${training && mode === "hand" ? "on" : ""}`}
+            className={`training-toggle ${training && mode === "per_hand" ? "on" : ""}`}
             onClick={() => setTraining((value) => !value)}
             disabled={mode === "session"}
             title={mode === "session" ? game.presetKey === "squid" ? "鱿鱼整局在 9 条发完后统一点评" : "整局模式在第 20 手后统一点评" : undefined}
@@ -1808,13 +1861,13 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
               </label>
               <div className="mode-switch" aria-label="训练模式">
                 <button
-                  className={mode === "hand" ? "active" : ""}
-                  aria-pressed={mode === "hand"}
-                  onClick={() => switchMode("hand")}
+                  className={mode === "per_hand" ? "active" : ""}
+                  aria-pressed={mode === "per_hand"}
+                  onClick={() => switchMode("per_hand")}
                   disabled={currentPresetKey === "squid"}
                   title={currentPresetKey === "squid" ? "血战鱿鱼需要跨手记录，使用整局模式" : undefined}
                 >
-                  <b>单手训练</b><span>每手结束立即点评</span>
+                  <b>逐手训练</b><span>筹码延续 · 每手即时点评</span>
                 </button>
                 <button className={mode === "session" ? "active" : ""} aria-pressed={mode === "session"} onClick={() => switchMode("session")}>
                   <b>{currentPresetKey === "squid" ? "鱿鱼整局" : "20 手整局"}</b><span>{currentPresetKey === "squid" ? "9 条发完统一点评" : "结束后统一点评"}</span>
@@ -1874,7 +1927,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                 ) : mode === "session" && sessionIsComplete ? (
                   <button className="next-hand-button" onClick={() => setShowLog(true)}>查看{game.presetKey === "squid" ? "鱿鱼" : ""}整局复盘</button>
                 ) : (
-                  <button className="next-hand-button" onClick={startNextHand}>下一手 <kbd>N</kbd></button>
+                  <button className="next-hand-button" onClick={startNextHand}>下一手 · 筹码延续 <kbd>N</kbd></button>
                 )}
                 <WinningHands game={game} />
               </div>
@@ -1994,8 +2047,8 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                 </div>
                 <div className="metric-grid">
                   <div><span>底池赔率</span><strong>{isHumanTurn && advice ? `${Math.round(advice.potOdds * 100)}%` : "—"}</strong></div>
-                  <div><span>有效筹码</span><strong>{isHumanTurn && advice ? `${advice.effectiveStackBb.toFixed(1)} BB` : "—"}</strong></div>
-                  <div><span>SPR</span><strong>{isHumanTurn && advice ? advice.spr.toFixed(1) : "—"}</strong></div>
+                  <div><span>{isHumanTurn && advice ? `你 / ${advice.opponentName}` : "双方后手"}</span><strong>{isHumanTurn && advice ? `${advice.heroStackBb.toFixed(1)} / ${advice.opponentStackBb.toFixed(1)} BB` : "—"}</strong></div>
+                  <div><span>有效 / SPR</span><strong>{isHumanTurn && advice ? `${advice.effectiveStackBb.toFixed(1)} / ${advice.spr.toFixed(1)}` : "—"}</strong></div>
                 </div>
                 <p className="range-note">{isHumanTurn && advice
                   ? `${advice.strategySource} · 按位置、完整公开行动线、下注尺度与多人底池动态加权；不会读取电脑暗牌。`
@@ -2065,7 +2118,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                   </div>
                   <SquidScoreboard game={game} report />
                   <div className="session-hand-list">
-                    <div className="section-label"><span>逐手结果</span><small>低于 1 BB 自动补至当前桌型</small></div>
+                    <div className="section-label"><span>逐手结果</span><small>低于 1 BB 自动补至该桌型的初始买入</small></div>
                     {[...sessionResults].sort((a, b) => a.hand - b.hand).map((item) => (
                       <div key={item.hand}>
                         <span>{String(item.hand).padStart(2, "0")}</span>
@@ -2091,6 +2144,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                       <p>公共牌 {item.board} · 底池 {item.pot} · 面对 {item.toCall}</p>
                       <p>你的选择：{item.action}（{item.actionVerdict}，约 {Math.round(item.selectedFrequency * 100)}%）；最高频线路：{item.recommended}</p>
                       <p>参考混合：{item.mix}</p>
+                      <p>本手起始有效 {item.startingDepthBb.toFixed(1)} BB · 当前后手：你 {item.heroStackBb.toFixed(1)} BB / {item.opponentName} {item.opponentStackBb.toFixed(1)} BB · 本节点有效 {item.effectiveStackBb.toFixed(1)} BB{item.maxContestableBb > item.effectiveStackBb + 0.05 ? ` · 多人加注有效上限 ${item.maxContestableBb.toFixed(1)} BB` : ""}</p>
                       {item.sizingMix && <p>进入加注分支后的尺寸混合：{item.sizingMix}{item.sizeVerdict ? `；${item.sizeVerdict}` : ""}</p>}
                       {item.streetKey === "preflop" ? (
                         <small>{item.preflopPosition} · {item.preflopScenario} · 基准继续范围约 {Math.round(item.preflopTargetRange * 100)}% · 本手进入频率约 {Math.round(item.preflopEnterFrequency * 100)}% · 来源：{item.strategySource}。{item.note}</small>
@@ -2121,7 +2175,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                 </button>
               )}
 
-              {mode === "hand" && (
+              {mode === "per_hand" && (
                 <div className="hand-log">
                   <div className="section-label"><span>整手行动线</span><small>{game.log.length} 个事件</small></div>
                   {game.log.map((line, index) => <div key={`${line}-${index}`}><time>{String(game.log.length - index).padStart(2, "0")}</time><p>{line}</p></div>)}
@@ -2145,8 +2199,8 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
             <h2 id="info-title">更强的混合频率对手，<br />但不冒充“完整 GTO”。</h2>
             <p>翻前先查询六人桌 169 手牌基准表，再按位置、前序行动、尺度与筹码深度修正；翻后综合对行动加权范围的估算权益、直接赔率、权益实现、SPR、牌面纹理、听牌与阻断牌，连续生成动作和条件尺度混合。电脑、实时建议与复盘共用同一策略；评分是频率匹配度，不是求解器计算出的精确 EV 损失。</p>
             <div className="modal-grid">
-              <div><b>四种桌型</b><span>浅筹 40 BB、标准 100 BB、深筹 200 BB，以及 200 BB 的血战鱿鱼。</span></div>
-              <div><b>两种训练</b><span>单手模式逐手点评；常规整局固定 20 手，鱿鱼整局以 9 条全部发完为终点，答案都在结束后统一公开。</span></div>
+              <div><b>四种桌型</b><span>初始买入分别为浅筹 40 BB、标准 100 BB、深筹 200 BB，以及 200 BB 的血战鱿鱼；之后筹码跨手延续，每手策略按实际起始有效筹码计算。</span></div>
+              <div><b>两种训练</b><span>逐手模式保留同桌筹码与对手、每手即时点评；常规整局固定 20 手，鱿鱼整局以 9 条全部发完为终点，答案都在结束后统一公开。任一玩家低于 1 BB 时，下一手按现金桌规则自动补回桌型基准。</span></div>
               <div><b>血战鱿鱼</b><span>六人桌争夺 9 条；3/5/7 条触发 ×2/×3/×4。无人跟注时亮牌才获得。</span></div>
               <div><b>完整 GTO 的边界</b><span>任意 6 人动态牌局需要预计算策略库或外部求解服务；现有传输接口可在后续接入。</span></div>
               <div><b>形象博弈</b><span>你和 AI 都可选择亮牌或盖牌；AI 会用可见信息形成对你的松紧、侵略性与欺骗性判断。</span></div>

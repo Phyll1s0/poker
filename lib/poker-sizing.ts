@@ -8,6 +8,8 @@ export type PokerSizingContext = {
   highestBet: number;
   playerBet: number;
   playerStack: number;
+  /** Highest raise-to amount any live opponent can still match. */
+  maxContestableTarget?: number;
   minRaise: number;
   bigBlind: number;
   preflopRaiseCount: number;
@@ -33,8 +35,31 @@ function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, Number.isFinite(value) ? value : minimum));
 }
 
-export function pokerSizingMaxTarget(context: PokerSizingContext) {
+function pokerSizingPlayerAllInTarget(context: PokerSizingContext) {
   return Math.max(context.playerBet, context.playerBet + Math.max(0, context.playerStack));
+}
+
+export function pokerSizingMaxTarget(context: PokerSizingContext) {
+  const playerAllInTarget = pokerSizingPlayerAllInTarget(context);
+  const contestableTarget = context.maxContestableTarget === undefined
+    ? playerAllInTarget
+    : Math.max(context.playerBet, context.maxContestableTarget);
+  const contestableCap = Math.max(
+    context.playerBet,
+    Math.min(playerAllInTarget, contestableTarget),
+  );
+  const minimumFullRaiseTarget = Math.max(0, context.highestBet) + Math.max(0, context.minRaise);
+  if (
+    contestableCap > context.highestBet
+    && contestableCap < minimumFullRaiseTarget
+    && playerAllInTarget >= minimumFullRaiseTarget
+  ) {
+    // A deep player cannot announce an under-minimum raise merely because all
+    // opponents are shorter. Announce the legal minimum; settlement returns
+    // the unmatched excess, so the strategically contestable amount stays cap.
+    return minimumFullRaiseTarget;
+  }
+  return contestableCap;
 }
 
 /** Clamps a requested raise-to amount to the executable minimum and stack cap. */
@@ -106,7 +131,7 @@ function attachJamRoute(
       target: maxTarget,
       fraction: pokerRaiseFraction(context, maxTarget),
       frequency: jamShare,
-      allIn: true,
+      allIn: maxTarget === pokerSizingPlayerAllInTarget(context),
     },
   ]);
 }
@@ -124,7 +149,7 @@ export function buildPokerSizingRoutes(
   const primary: Omit<PokerSizingRoute, "frequency"> = {
     target: primaryTarget,
     fraction: pokerRaiseFraction(context, primaryTarget),
-    allIn: primaryTarget === maxTarget,
+    allIn: primaryTarget === pokerSizingPlayerAllInTarget(context),
   };
   const jamShare = clamp(shortStackJamFrequency, 0, 1);
   if (intents.length) {
@@ -139,7 +164,7 @@ export function buildPokerSizingRoutes(
           target,
           fraction: pokerRaiseFraction(context, target),
           frequency: intent.frequency,
-          allIn: target === maxTarget,
+          allIn: target === pokerSizingPlayerAllInTarget(context),
         };
       });
     if (planned.length) return attachJamRoute(context, mergeAndNormalizeRoutes(planned), jamShare);
@@ -162,7 +187,7 @@ export function buildPokerSizingRoutes(
   const alternative: Omit<PokerSizingRoute, "frequency"> = {
     target: alternativeTarget,
     fraction: pokerRaiseFraction(context, alternativeTarget),
-    allIn: alternativeTarget === maxTarget,
+    allIn: alternativeTarget === pokerSizingPlayerAllInTarget(context),
   };
   const primaryWeight = clamp(0.64 + Math.min(0.16, Math.abs(primary.fraction - alternative.fraction) * 0.18), 0.58, 0.8);
   return attachJamRoute(
@@ -184,15 +209,19 @@ function formatNumber(value: number, maximumFractionDigits = 1) {
 }
 
 export function formatPokerSizingRoute(context: PokerSizingContext, route: PokerSizingRoute) {
+  const effectiveTarget = Math.min(route.target, context.maxContestableTarget ?? route.target);
+  const effectiveSuffix = effectiveTarget < route.target
+    ? `；有效至 ${formatNumber(effectiveTarget, 0)}`
+    : "";
   if (context.street === "preflop") {
     const level = context.preflopRaiseCount === 0 ? "开池" : `${context.preflopRaiseCount + 2}bet`;
     const prefix = route.allIn ? "全下" : level;
     const action = prefix.endsWith("bet") ? `${prefix} 至` : `${prefix}至`;
-    return `${action} ${formatNumber(route.target, 0)}（${formatNumber(route.target / Math.max(1, context.bigBlind))} BB）`;
+    return `${action} ${formatNumber(route.target, 0)}（${formatNumber(route.target / Math.max(1, context.bigBlind))} BB${effectiveSuffix}）`;
   }
   const prefix = route.allIn ? "全下" : context.toCall > 0 ? "加注" : "下注";
   const basis = context.toCall > 0 ? "跟注后底池" : "底池";
-  return `${prefix}至 ${formatNumber(route.target, 0)}（${basis} ${Math.round(route.fraction * 100)}%）`;
+  return `${prefix}至 ${formatNumber(route.target, 0)}（${basis} ${Math.round(route.fraction * 100)}%${effectiveSuffix}）`;
 }
 
 /** Scores the selected size against every valid route; secondary routes remain acceptable. */

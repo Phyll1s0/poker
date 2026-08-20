@@ -1,4 +1,8 @@
-import { buildPokerSizingRoutes, type PokerSizingRoute } from "./poker-sizing.ts";
+import {
+  buildPokerSizingRoutes,
+  pokerSizingMaxTarget,
+  type PokerSizingRoute,
+} from "./poker-sizing.ts";
 import {
   encodePreflopHandClass,
   getPreflopStrategy,
@@ -56,6 +60,8 @@ export type PokerPolicyInput = {
   highestBet: number;
   playerBet: number;
   playerStack: number;
+  /** Highest current-street target that at least one live opponent can match. */
+  maxContestableTarget?: number;
   minRaise: number;
   raiseLocked: boolean;
   squidPressure: number;
@@ -151,22 +157,65 @@ function nonNegative(value: number) {
   return Math.max(0, Number.isFinite(value) ? value : 0);
 }
 
+export type PokerDecisionStackOpponent = {
+  id?: number;
+  stack: number;
+  bet: number;
+};
+
+export type PokerDecisionStackContext = {
+  playerStack: number;
+  /** Additional chips the selected opponent can match above the actor's current bet. */
+  opponentReach: number;
+  effectiveStack: number;
+  opponentId?: number;
+};
+
 /**
- * Chips that can still be contested from the acting player's point of view.
- * An opponent's outstanding bet is part of the effective stack even when that
- * bet left them with zero chips behind (the common all-in decision case).
+ * Public stack context at one decision. When a specific bettor/aggressor is
+ * supplied, depth is measured against that player; otherwise the deepest live
+ * opponent is used because they define how much of the actor's stack remains
+ * contestable. An outstanding bet remains part of the opponent's reach even
+ * when that bet left them with zero chips behind.
  */
+export function pokerDecisionStackContext(
+  playerStack: number,
+  playerBet: number,
+  opponents: readonly PokerDecisionStackOpponent[],
+  preferredOpponentId?: number,
+): PokerDecisionStackContext {
+  const available = nonNegative(playerStack);
+  const alreadyMatched = nonNegative(playerBet);
+  const candidates = opponents.map((opponent) => ({
+    id: opponent.id,
+    reach: Math.max(
+      0,
+      nonNegative(opponent.stack) + nonNegative(opponent.bet) - alreadyMatched,
+    ),
+  }));
+  const preferred = preferredOpponentId === undefined
+    ? undefined
+    : candidates.find((opponent) => opponent.id === preferredOpponentId);
+  const selected = preferred ?? candidates.reduce<(typeof candidates)[number] | undefined>(
+    (deepest, opponent) => !deepest || opponent.reach > deepest.reach ? opponent : deepest,
+    undefined,
+  );
+  const opponentReach = selected?.reach ?? 0;
+  return {
+    playerStack: available,
+    opponentReach,
+    effectiveStack: Math.min(available, opponentReach),
+    opponentId: selected?.id,
+  };
+}
+
 export function pokerEffectiveStackAtDecision(
   playerStack: number,
   playerBet: number,
-  opponents: readonly { stack: number; bet: number }[],
+  opponents: readonly PokerDecisionStackOpponent[],
+  preferredOpponentId?: number,
 ) {
-  const available = nonNegative(playerStack);
-  const alreadyMatched = nonNegative(playerBet);
-  const deepestOpponentReach = Math.max(0, ...opponents.map((opponent) => (
-    nonNegative(opponent.stack) + Math.max(0, nonNegative(opponent.bet) - alreadyMatched)
-  )));
-  return Math.min(available, deepestOpponentReach);
+  return pokerDecisionStackContext(playerStack, playerBet, opponents, preferredOpponentId).effectiveStack;
 }
 
 export type PokerDecisionPotLayer = {
@@ -289,13 +338,17 @@ function softmaxLegalActions(
     highestBet: number;
     playerBet: number;
     playerStack: number;
+    maxContestableTarget?: number;
     opponentsCanRespond?: boolean;
   },
   temperature = 1,
 ) {
   const canRaise = input.opponentsCanRespond !== false
     && !input.raiseLocked
-    && input.playerBet + input.playerStack > input.highestBet;
+    && Math.min(
+      input.playerBet + input.playerStack,
+      input.maxContestableTarget ?? input.playerBet + input.playerStack,
+    ) > input.highestBet;
   const legal: PokerPolicyActionKind[] = input.toCall > 0
     ? canRaise ? ["fold", "call", "raise"] : ["fold", "call"]
     : canRaise ? ["check", "raise"] : ["check"];
@@ -371,6 +424,7 @@ function normalizeActionFrequencies(
     highestBet: number;
     playerBet: number;
     playerStack: number;
+    maxContestableTarget?: number;
     opponentsCanRespond?: boolean;
   },
 ) {
@@ -382,7 +436,10 @@ function normalizeActionFrequencies(
   };
   const canRaise = input.opponentsCanRespond !== false
     && !input.raiseLocked
-    && input.playerBet + input.playerStack > input.highestBet;
+    && Math.min(
+      input.playerBet + input.playerStack,
+      input.maxContestableTarget ?? input.playerBet + input.playerStack,
+    ) > input.highestBet;
   if (input.toCall > 0) {
     frequencies.fold += frequencies.check;
     frequencies.check = 0;
@@ -421,8 +478,11 @@ function buildFallbackPreflopFrequencies(input: {
   highestBet: number;
   playerBet: number;
   playerStack: number;
+  maxContestableTarget: number;
+  minRaise: number;
   toCall: number;
   effectiveStackBb: number;
+  startingDepthBb: number;
   raiseLocked: boolean;
   opponentsCanRespond: boolean;
   squidPressure: number;
@@ -433,7 +493,18 @@ function buildFallbackPreflopFrequencies(input: {
   const aggressionFactor = clamp(0.82 + input.profile.aggression * 0.28, 0.82, 1.1);
   const bluffShape = preflopBluffShape(input);
   const premiumValue = preflopPremiumValue(input);
-  const maxTarget = input.playerBet + input.playerStack;
+  const maxTarget = pokerSizingMaxTarget({
+    street: "preflop",
+    pot: 0,
+    toCall: input.toCall,
+    highestBet: input.highestBet,
+    playerBet: input.playerBet,
+    playerStack: input.playerStack,
+    maxContestableTarget: input.maxContestableTarget,
+    minRaise: input.minRaise,
+    bigBlind: input.bigBlind,
+    preflopRaiseCount: input.preflopRaiseCount,
+  });
   const canRaise = input.opponentsCanRespond && !input.raiseLocked && maxTarget > input.highestBet;
   const pressure = decisionPressure(
     input.toCall,
@@ -621,7 +692,11 @@ function buildPreflopFrequencies(input: Parameters<typeof buildFallbackPreflopFr
     scenario: chartScenario,
     heroPosition: position,
     aggressorPosition: input.preflopOpenerPosition,
-    effectiveStackBb: input.effectiveStackBb,
+    // Solver/chart trees are selected by the effective stack at the start of
+    // the hand. Remaining contestable chips still drive pressure, SPR and jam
+    // ramps below, but must not silently turn a 100 BB tree into a 70 BB tree
+    // merely because chips have already entered the pot.
+    effectiveStackBb: input.startingDepthBb,
     facingSizeBb,
   };
   const chart = getPreflopStrategy(query);
@@ -688,7 +763,7 @@ function buildPreflopFrequencies(input: Parameters<typeof buildFallbackPreflopFr
   }
 
   const actionFrequencies = normalizeActionFrequencies(raw, input);
-  const summaryDepth = Math.round(input.effectiveStackBb / 5) * 5;
+  const summaryDepth = Math.round(input.startingDepthBb / 5) * 5;
   const summarySize = facingSizeBb === undefined ? "-" : (Math.round(facingSizeBb * 4) / 4).toFixed(2);
   const summaryKey = [chartScenario, position, input.preflopOpenerPosition ?? "-", summaryDepth, summarySize].join("|");
   let baselineRange = PREFLOP_RANGE_SUMMARY_CACHE.get(summaryKey);
@@ -764,6 +839,9 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
     highestBet: nonNegative(rawInput.highestBet),
     playerBet: nonNegative(rawInput.playerBet),
     playerStack: normalizedPlayerStack,
+    maxContestableTarget: rawInput.maxContestableTarget === undefined
+      ? nonNegative(rawInput.playerBet) + normalizedPlayerStack
+      : Math.max(nonNegative(rawInput.playerBet), nonNegative(rawInput.maxContestableTarget)),
     minRaise: nonNegative(rawInput.minRaise),
     squidPressure: clamp(rawInput.squidPressure, 0, 0.25),
     preflopPercentile: clamp(rawInput.preflopPercentile ?? rawInput.handStrength, 0, 1),
@@ -893,7 +971,18 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
   );
   let intendedBetFraction = sizeOptions[preferredSizeIndex];
   const sizingPot = input.pot + input.toCall;
-  const maxTarget = input.playerBet + input.playerStack;
+  const maxTarget = pokerSizingMaxTarget({
+    street: input.street,
+    pot: input.pot,
+    toCall: input.toCall,
+    highestBet: input.highestBet,
+    playerBet: input.playerBet,
+    playerStack: input.playerStack,
+    maxContestableTarget: input.maxContestableTarget,
+    minRaise: input.minRaise,
+    bigBlind,
+    preflopRaiseCount: input.preflopRaiseCount,
+  });
   const sizingUnit = Math.max(1, bigBlind / 2);
   let desiredTarget: number;
   if (input.street === "preflop") {
@@ -993,6 +1082,7 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
         highestBet: input.highestBet,
         playerBet: input.playerBet,
         playerStack: input.playerStack,
+        maxContestableTarget: input.maxContestableTarget,
         minRaise: input.minRaise,
         bigBlind,
         preflopRaiseCount: input.preflopRaiseCount,

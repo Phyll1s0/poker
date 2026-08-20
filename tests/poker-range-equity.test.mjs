@@ -160,6 +160,35 @@ test("range inference uses the latest raiser position after a three-bet", () => 
   assert.notEqual(expected, wrongOpeningRaiser);
 });
 
+test("range inference uses recorded hand-start effective depth", () => {
+  const fives = [c(5, "♠"), c(5, "♥")];
+  const facingThreeBet = action({
+    kind: "call",
+    amount: 65,
+    toCall: 65,
+    potBefore: 140,
+    raiseCountBefore: 2,
+    stackBefore: 1_975,
+    aggressorPositionBefore: "SB",
+  });
+  const evidence = {
+    positionFactor: 1,
+    position: "BTN",
+    openerPosition: "SB",
+    bigBlind: 10,
+  };
+  const shallow = opponentHoldingWeight(fives, [], {
+    ...evidence,
+    actions: [{ ...facingThreeBet, startingDepthBefore: 400 }],
+  });
+  const deep = opponentHoldingWeight(fives, [], {
+    ...evidence,
+    actions: [{ ...facingThreeBet, startingDepthBefore: 2_000 }],
+  });
+
+  assert.ok(deep > shallow, `${deep} should exceed ${shallow}`);
+});
+
 test("postflop betting is polarized between value and live bluffs", () => {
   const board = [c(13, "♠"), c(7, "♠"), c(2, "♦")];
   const evidence = {

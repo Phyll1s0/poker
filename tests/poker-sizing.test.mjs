@@ -7,6 +7,7 @@ import {
   legalPokerRaiseTarget,
   pokerRaiseFraction,
   pokerRaiseTargetForFraction,
+  pokerSizingMaxTarget,
   preferredPokerSizingRoute,
   scorePokerRaiseSize,
 } from "../lib/poker-sizing.ts";
@@ -69,6 +70,60 @@ test("clamps requested sizes to the legal minimum and stack cap", () => {
   const context = { ...postflop, highestBet: 40, toCall: 40, minRaise: 40, playerStack: 130 };
   assert.equal(legalPokerRaiseTarget(context, 45), 80);
   assert.equal(legalPokerRaiseTarget(context, 500), 130);
+});
+
+test("caps a deep player's sizes at the opponent's matchable target", () => {
+  const context = {
+    ...postflop,
+    playerBet: 100,
+    playerStack: 900,
+    highestBet: 120,
+    toCall: 20,
+    minRaise: 20,
+    maxContestableTarget: 500,
+  };
+  const routes = buildPokerSizingRoutes(context, 800, 0.4);
+
+  assert.equal(pokerSizingMaxTarget(context), 500);
+  assert.equal(legalPokerRaiseTarget(context, 800), 500);
+  assert.ok(routes.every((route) => route.target <= 500));
+  assert.ok(routes.every((route) => !route.allIn));
+  assert.ok(routes.every((route) => !formatPokerSizingRoute(context, route).startsWith("全下")));
+});
+
+test("announces the legal minimum when a shorter opponent cannot match it", () => {
+  const context = {
+    ...postflop,
+    playerStack: 500,
+    highestBet: 100,
+    toCall: 100,
+    minRaise: 100,
+    maxContestableTarget: 150,
+  };
+  const routes = buildPokerSizingRoutes(context, 150);
+
+  assert.equal(pokerSizingMaxTarget(context), 200);
+  assert.equal(legalPokerRaiseTarget(context, 150), 200);
+  assert.ok(routes.every((route) => route.allIn === false));
+  assert.match(formatPokerSizingRoute(context, routes[0]), /有效至 150/);
+});
+
+test("still permits a player's own under-minimum all-in", () => {
+  const context = {
+    ...postflop,
+    playerStack: 150,
+    highestBet: 100,
+    toCall: 100,
+    minRaise: 100,
+    maxContestableTarget: 500,
+  };
+  const routes = buildPokerSizingRoutes(context, 150);
+
+  assert.equal(pokerSizingMaxTarget(context), 150);
+  assert.equal(routes.length, 1);
+  assert.equal(routes[0].target, 150);
+  assert.equal(routes[0].allIn, true);
+  assert.match(formatPokerSizingRoute(context, routes[0]), /^全下至/);
 });
 
 test("includes an all-in branch when the policy mixes short-stack jams", () => {
