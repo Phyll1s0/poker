@@ -59,6 +59,7 @@ export type ClientPublicPlayer = {
   isOwner: boolean;
   isDealer: boolean;
   shown: boolean;
+  privatelyPeeked: boolean;
   holeCards?: ClientCard[];
   holeCardCount: number;
 };
@@ -90,6 +91,14 @@ export type ClientPublicGame = {
     occurredAt: number;
   }[];
   players: ClientPublicPlayer[];
+  privatePeekTargets: {
+    seat: number;
+    handle: string;
+    shown: boolean;
+    privatelyPeeked: boolean;
+    waitingForShowDecision: boolean;
+    holeCards?: ClientCard[];
+  }[];
   legalActions: {
     fold: boolean;
     check: boolean;
@@ -241,6 +250,12 @@ export function parseMultiplayerCommand(payload: Record<string, unknown>): Parse
     }
     return { ...base, type, handId, show: payload.show };
   }
+  if (type === "peek") {
+    if (!Number.isInteger(payload.targetSeat) || Number(payload.targetSeat) < 0 || Number(payload.targetSeat) >= 6) {
+      throw new MultiplayerGameError(400, "INVALID_COMMAND", "targetSeat 必须是有效座位编号。" );
+    }
+    return { ...base, type, handId, targetSeat: Number(payload.targetSeat) };
+  }
   if (type === "act") {
     const action = requiredString(payload.action, "action", 16);
     if (!ACTIONS.has(action)) {
@@ -385,6 +400,7 @@ function clientPlayers(table: OnlinePublicRoomState): ClientPublicPlayer[] {
       isOwner: seat.seat === table.ownerSeat,
       isDealer: seat.seat === table.hand?.dealerSeat,
       shown: seat.shown,
+      privatelyPeeked: seat.privatelyPeeked,
       ...(seat.holeCards ? { holeCards: seat.holeCards.map(clientCard) } : {}),
       holeCardCount: seat.holeCardCount,
     };
@@ -418,6 +434,7 @@ function clientGame(table: OnlinePublicRoomState, players: ClientPublicPlayer[])
             isOwner: false,
             isDealer: winner.seat === hand.dealerSeat,
             shown: Boolean(winner.holeCards),
+            privatelyPeeked: false,
             ...(winner.holeCards ? { holeCards: winner.holeCards.map(clientCard) } : {}),
             holeCardCount: 2,
           }];
@@ -486,6 +503,14 @@ function clientGame(table: OnlinePublicRoomState, players: ClientPublicPlayer[])
       occurredAt: event.occurredAt,
     })),
     players: gamePlayers,
+    privatePeekTargets: (hand.privatePeekTargets ?? []).map((target) => ({
+      seat: target.seat,
+      handle: target.displayName,
+      shown: target.shown,
+      privatelyPeeked: target.privatelyPeeked,
+      waitingForShowDecision: target.waitingForShowDecision,
+      ...(target.holeCards ? { holeCards: target.holeCards.map(clientCard) } : {}),
+    })),
     legalActions: legal
       ? {
           fold: legal.fold,

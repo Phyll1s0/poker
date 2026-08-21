@@ -144,6 +144,7 @@ type PublicPlayer = {
   isOwner: boolean;
   isDealer: boolean;
   shown: boolean;
+  privatelyPeeked: boolean;
   holeCards?: Card[];
   holeCardCount: number;
 };
@@ -184,6 +185,14 @@ type PublicGame = {
     occurredAt: number;
   }[];
   players: PublicPlayer[];
+  privatePeekTargets?: {
+    seat: number;
+    handle: string;
+    shown: boolean;
+    privatelyPeeked: boolean;
+    waitingForShowDecision: boolean;
+    holeCards?: Card[];
+  }[];
   legalActions: LegalActions | null;
   result: {
     summary: string;
@@ -263,6 +272,9 @@ type RoomSnapshot = {
     handHistory: HandHistoryEntry[];
     hand: {
       pendingShowSeat: number | null;
+      privatePeekLimit: number;
+      privatePeekRemaining: number;
+      privatePeekedSeats: number[];
       actionDeadlineAt: number | null;
       showDecisionDeadlineAt: number | null;
       nextHandAt: number | null;
@@ -296,6 +308,9 @@ const ERROR_MESSAGES: Record<string, string> = {
   CHECK_REQUIRED: "当前无需跟注，可以选择过牌。",
   RAISE_NOT_ALLOWED: "这次不足额全下没有重新开放加注权。",
   SHOW_NOT_ALLOWED: "现在不能执行秀牌操作。",
+  PEEK_NOT_ALLOWED: "只能在本手结算倒计时内偷看其他玩家的底牌。",
+  PEEK_LIMIT_REACHED: "本手的 5 次偷看机会已经用完。",
+  PEEK_ALREADY_VISIBLE: "这位玩家的底牌已经公开或已被你偷看。",
   TIME_BANK_EMPTY: "你本局的额外思考时间已经用完。",
   AI_ASSIST_DISABLED: "这个房间没有开启 AI 辅助。",
   AI_ASSIST_EMPTY: "你本局的 AI 辅助次数已经用完。",
@@ -566,7 +581,12 @@ function PlayerSeat({
             : tableMessage.content}
         </div>
       )}
-      <div className={styles.seatCards} aria-label={`${player.handle} 的手牌`}>
+      <div
+        className={styles.seatCards}
+        aria-label={player.privatelyPeeked
+          ? `你私密偷看的 ${player.handle} 底牌，仅你可见`
+          : `${player.handle} 的手牌`}
+      >
         {cards.map((card, index) => (
           <CardView
             key={`${cardKeyPrefix}-${card.rank}-${card.suit}-${index}`}
@@ -586,6 +606,9 @@ function PlayerSeat({
           );
         })}
       </div>
+      {player.privatelyPeeked && (
+        <span className={styles.seatPrivatePeek} aria-hidden="true">偷看 · 仅你可见</span>
+      )}
       <div className={styles.playerPanel}>
         <span className={styles.avatar}>{Array.from(player.handle)[0]?.toUpperCase() ?? "P"}</span>
         <div className={styles.seatIdentity}>
@@ -1306,6 +1329,86 @@ function ChatDock({
   );
 }
 
+function PrivatePeekOpportunity({
+  targets,
+  limit,
+  remaining,
+  nextHandCountdown,
+  busy,
+  onPeek,
+}: {
+  targets: NonNullable<PublicGame["privatePeekTargets"]>;
+  limit: number;
+  remaining: number;
+  nextHandCountdown: number | null;
+  busy: boolean;
+  onPeek: (targetSeat: number) => void;
+}) {
+  if (limit <= 0) return null;
+  const hiddenOpponents = targets.filter((player) => !player.shown);
+  if (hiddenOpponents.length === 0) return null;
+  const peekedOpponents = hiddenOpponents.filter((player) => player.privatelyPeeked);
+  const waitingOpponents = hiddenOpponents.filter((player) => (
+    !player.privatelyPeeked && player.waitingForShowDecision
+  ));
+  const availableOpponents = hiddenOpponents.filter((player) => (
+    !player.privatelyPeeked && !player.waitingForShowDecision
+  ));
+
+  return (
+    <section className={styles.privatePeek} aria-label="私密偷看对手底牌">
+      <div className={styles.privatePeekCopy}>
+        <span>PRIVATE PEEK · 仅你可见</span>
+        <strong>本手可偷看最多 {limit} 位对手</strong>
+        <small>
+          剩余 {remaining}/{limit} 次 · 只在本手结算的 {nextHandCountdown ?? "—"} 秒内有效，不会替对手公开底牌
+        </small>
+      </div>
+      <div className={styles.privatePeekTargets} aria-live="polite">
+        {peekedOpponents.map((player) => (
+          <div className={styles.privatePeekResult} key={`peeked-${player.seat}`}>
+            <span><b>{player.handle}</b><small>偷看所得 · 仅你可见</small></span>
+            <div role="img" aria-label={`${player.handle} 被你偷看的底牌，仅你可见`}>
+              {(player.holeCards ?? []).map((card, index) => (
+                <CardView key={`${player.seat}-${card.rank}-${card.suit}-${index}`} card={card} mini />
+              ))}
+            </div>
+          </div>
+        ))}
+        {waitingOpponents.map((player) => (
+          <button
+            className={styles.privatePeekTarget}
+            type="button"
+            key={`peek-waiting-${player.seat}`}
+            disabled
+          >
+            <span>等待亮牌决定</span>
+            <strong>{player.handle}</strong>
+          </button>
+        ))}
+        {remaining > 0 && availableOpponents.map((player) => (
+          <button
+            className={styles.privatePeekTarget}
+            type="button"
+            key={`peek-${player.seat}`}
+            disabled={busy}
+            onClick={() => onPeek(player.seat)}
+          >
+            <span>偷看</span>
+            <strong>{player.handle}</strong>
+          </button>
+        ))}
+        {remaining === 0 && availableOpponents.length > 0 && (
+          <p className={styles.privatePeekEmpty}>本手 5 次机会已经用完</p>
+        )}
+        {availableOpponents.length === 0 && waitingOpponents.length === 0 && peekedOpponents.length > 0 && (
+          <p className={styles.privatePeekEmpty}>本手可偷看的对手都已查看</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function WinningHands({ game }: { game: PublicGame }) {
   if (!game.result) return null;
   const winners = game.result.winners
@@ -1326,7 +1429,9 @@ function WinningHands({ game }: { game: PublicGame }) {
           const isBestFive = Boolean(winningHand && winningHand.cards.length === 5);
           const cards = isBestFive && winningHand
             ? orderFiveCardHandForDisplay(winningHand.cards)
-            : winningHand?.cards ?? player.holeCards ?? [];
+            : player.shown
+              ? winningHand?.cards ?? player.holeCards ?? []
+              : [];
           return (
             <article className={styles.winningHand} key={player.accountId}>
               <div className={styles.winningHandPlayer}>
@@ -2275,6 +2380,8 @@ export default function MultiplayerClient({
   const showDecisionDeadlineAt = snapshot?.table.hand?.showDecisionDeadlineAt ?? null;
   const nextHandAt = snapshot?.table.hand?.nextHandAt ?? null;
   const pendingShowSeat = snapshot?.table.hand?.pendingShowSeat ?? null;
+  const privatePeekLimit = snapshot?.table.hand?.privatePeekLimit ?? 0;
+  const privatePeekRemaining = snapshot?.table.hand?.privatePeekRemaining ?? 0;
   // The next-hand deadline remains the single overall pause. The shorter show
   // deadline lives inside it so the final seconds are reserved for reading the
   // revealed cards rather than deciding whether to reveal them.
@@ -3150,11 +3257,23 @@ export default function MultiplayerClient({
                       </div>
                       {phase === "between_hands" && !snapshot.table.finishRequested && !tournamentWinner && !selfPlayer?.ready && canRejoinNextHand && (
                         <button className={styles.primaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "ready", ready: true })}>
-                          {hasShownCards ? "准备下一手（展示结束后发牌）" : "立即准备"}
+                          准备下一手（等待结算倒计时）
                         </button>
                       )}
                     </div>
                   </div>
+                )}
+                {phase === "between_hands" && privatePeekLimit > 0 && nextHandMillisecondsLeft !== 0 && (
+                  <PrivatePeekOpportunity
+                    targets={game.privatePeekTargets ?? []}
+                    limit={privatePeekLimit}
+                    remaining={privatePeekRemaining}
+                    nextHandCountdown={nextHandCountdown}
+                    busy={busy}
+                    onPeek={(targetSeat) => {
+                      void sendCommand({ type: "peek", handId: game.handId, targetSeat });
+                    }}
+                  />
                 )}
                 {(phase === "showdown" || phase === "between_hands") && <WinningHands game={game} />}
               </div>

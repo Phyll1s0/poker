@@ -8,6 +8,7 @@ import {
   ONLINE_DEFAULT_AI_ASSIST_LIMIT,
   ONLINE_HAND_HISTORY_LIMIT,
   ONLINE_NEXT_HAND_DELAY_MS,
+  ONLINE_PRIVATE_PEEK_LIMIT,
   ONLINE_REVEALED_HAND_HOLD_MS,
   ONLINE_SHOW_DECISION_TIME_MS,
   ONLINE_STARTING_STACK,
@@ -89,6 +90,20 @@ function act(room, actor, action, options, raiseTo) {
     action,
     ...(raiseTo === undefined ? {} : { raiseTo }),
   }, options);
+}
+
+function foldUntilSettlement(room, options) {
+  let next = room;
+  let decisions = 0;
+  while (next.phase === "playing") {
+    assert.notEqual(next.hand?.currentSeat, null, "a live fold line must have an actor");
+    next = accepted(act(next, actors[next.hand.currentSeat], "fold", options));
+    decisions += 1;
+    assert.ok(decisions <= 6, "an uncontested fold line must settle within the table size");
+  }
+  assert.equal(next.phase, "between_hands");
+  assert.ok(next.hand?.result);
+  return next;
 }
 
 function card(rank, suit) {
@@ -436,6 +451,12 @@ test("AI assist allowances persist across hands, appear in the final report and 
   room = accepted(act(room, actors[0], "fold", options));
   room = accepted(command(room, actors[0], { type: "ready", ready: true }, options));
   room = accepted(command(room, actors[1], { type: "ready", ready: true }, options));
+
+  assert.equal(room.phase, "between_hands", "readiness cannot skip the private-peek window");
+  const firstHandId = room.hand.id;
+  const firstNextHandAt = room.hand.nextHandAt;
+  options.now = () => firstNextHandAt;
+  room = accepted(command(room, actors[0], { type: "timeout", handId: firstHandId }, options));
 
   assert.equal(room.phase, "playing");
   assert.equal(room.hand.number, 2);
@@ -1509,15 +1530,279 @@ test("manual show wins an optimistic race against a timeout without resolving tw
   assert.equal(timeoutLoser.state.hand.players.find((player) => player.seat === 1).shown, true);
 });
 
-test("all players readying early implicitly mucks an unanswered show choice", () => {
+test("private peeks are viewer-isolated, idempotent, reconnect-safe and absent from public history", () => {
+  const { room: started, options } = startRoom(3);
+  const targetHole = structuredClone(started.hand.players.find((player) => player.seat === 1).hole);
+  let room = accepted(act(started, actors[0], "fold", options));
+  room = accepted(act(room, actors[1], "fold", options));
+  assert.equal(room.phase, "between_hands");
+
+  const before = {
+    actionSeq: room.hand.actionSeq,
+    recentActions: structuredClone(room.hand.recentActions),
+    actionHistory: structuredClone(room.hand.actionHistory),
+    pendingShowSeat: room.hand.pendingShowSeat,
+    showDecisionDeadlineAt: room.hand.showDecisionDeadlineAt,
+    nextHandAt: room.hand.nextHandAt,
+    ready: room.seats.map((seat) => seat.ready),
+    shown: room.hand.players.map((player) => player.shown),
+    voluntaryShows: room.session.players.map((player) => player.voluntaryShows),
+  };
+  const initialViewer = projectRoomState(room, actors[0].accountId);
+  assert.equal(initialViewer.hand.privatePeekLimit, ONLINE_PRIVATE_PEEK_LIMIT);
+  assert.equal(initialViewer.hand.privatePeekRemaining, ONLINE_PRIVATE_PEEK_LIMIT);
+  assert.deepEqual(initialViewer.hand.privatePeekedSeats, []);
+  assert.equal(initialViewer.seats.find((seat) => seat.seat === 1).holeCards, null);
+
+  const payload = {
+    type: "peek",
+    handId: room.hand.id,
+    targetSeat: 1,
+    commandId: "private-peek-idempotent",
+    expectedRevision: room.revision,
+  };
+  const first = applyOnlinePokerCommand(room, actors[0], payload, options);
+  room = accepted(first);
+  assert.equal(room.revision, payload.expectedRevision + 1);
+  assert.deepEqual(room.hand.privatePeekedSeatsByAccountId, { [actors[0].accountId]: [1] });
+
+  const viewer = projectRoomState(room, actors[0].accountId);
+  const otherViewer = projectRoomState(room, actors[2].accountId);
+  const spectator = projectRoomState(room, null);
+  assert.deepEqual(viewer.seats.find((seat) => seat.seat === 1).holeCards, targetHole);
+  assert.equal(viewer.seats.find((seat) => seat.seat === 1).privatelyPeeked, true);
+  assert.equal(viewer.hand.privatePeekRemaining, ONLINE_PRIVATE_PEEK_LIMIT - 1);
+  assert.deepEqual(viewer.hand.privatePeekedSeats, [1]);
+  assert.equal(
+    viewer.handHistory[0].players.find((player) => player.seat === 1).holeCards,
+    null,
+    "a private peek must not unlock the public replay",
+  );
+  assert.equal(otherViewer.seats.find((seat) => seat.seat === 1).holeCards, null);
+  assert.equal(otherViewer.seats.find((seat) => seat.seat === 1).privatelyPeeked, false);
+  assert.equal(otherViewer.hand.privatePeekRemaining, ONLINE_PRIVATE_PEEK_LIMIT);
+  assert.deepEqual(otherViewer.hand.privatePeekedSeats, []);
+  assert.ok(spectator.seats.every((seat) => seat.holeCards === null));
+  assert.equal(spectator.hand.privatePeekLimit, 0);
+  assert.equal(spectator.hand.privatePeekRemaining, 0);
+  assert.deepEqual(spectator.hand.privatePeekedSeats, []);
+  assert.doesNotMatch(JSON.stringify(otherViewer), /privatePeekedSeatsByAccountId|user-[0-9]/);
+
+  assert.equal(room.hand.actionSeq, before.actionSeq);
+  assert.deepEqual(room.hand.recentActions, before.recentActions);
+  assert.deepEqual(room.hand.actionHistory, before.actionHistory);
+  assert.equal(room.hand.pendingShowSeat, before.pendingShowSeat);
+  assert.equal(room.hand.showDecisionDeadlineAt, before.showDecisionDeadlineAt);
+  assert.equal(room.hand.nextHandAt, before.nextHandAt);
+  assert.deepEqual(room.seats.map((seat) => seat.ready), before.ready);
+  assert.deepEqual(room.hand.players.map((player) => player.shown), before.shown);
+  assert.deepEqual(room.session.players.map((player) => player.voluntaryShows), before.voluntaryShows);
+
+  const duplicate = applyOnlinePokerCommand(room, actors[0], payload, options);
+  assert.equal(duplicate.ok, true);
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(duplicate.state.revision, room.revision);
+  assert.equal(projectRoomState(duplicate.state, actors[0].accountId).hand.privatePeekRemaining, 4);
+  rejected(applyOnlinePokerCommand(room, actors[0], {
+    ...payload,
+    targetSeat: 2,
+  }, options), "COMMAND_ID_CONFLICT");
+
+  room = setOnlinePlayerConnection(room, actors[0].accountId, false, 1_000_100);
+  assert.deepEqual(projectRoomState(room, actors[0].accountId).seats.find((seat) => seat.seat === 1).holeCards, targetHole);
+  room = setOnlinePlayerConnection(room, actors[0].accountId, true, 1_000_200);
+  assert.deepEqual(projectRoomState(room, actors[0].accountId).seats.find((seat) => seat.seat === 1).holeCards, targetHole);
+  assert.equal(projectRoomState(room, actors[0].accountId).hand.privatePeekRemaining, 4);
+});
+
+test("private peek validates phase, actor, hand and target without charging rejected requests", () => {
+  const options = deterministicOptions();
+  const lobby = createOnlineRoom({ roomId: "peek-errors-lobby", owner: actors[0], maxPlayers: 3 });
+  rejected(command(lobby, actors[0], { type: "peek", handId: "none", targetSeat: 1 }, options), "PEEK_NOT_ALLOWED");
+
+  const scenario = startRoom(3);
+  rejected(command(scenario.room, actors[0], {
+    type: "peek",
+    handId: scenario.room.hand.id,
+    targetSeat: 1,
+  }, scenario.options), "PEEK_NOT_ALLOWED");
+
+  let room = accepted(act(scenario.room, actors[0], "fold", scenario.options));
+  room = accepted(act(room, actors[1], "fold", scenario.options));
+  const revision = room.revision;
+  rejected(command(room, actors[0], { type: "peek", handId: "wrong-hand", targetSeat: 1 }, scenario.options), "WRONG_HAND");
+  rejected(command(room, actors[0], { type: "peek", handId: room.hand.id, targetSeat: 0 }, scenario.options), "PEEK_NOT_ALLOWED");
+  rejected(command(room, actors[0], { type: "peek", handId: room.hand.id, targetSeat: 4 }, scenario.options), "PEEK_NOT_ALLOWED");
+  rejected(command(room, actors[6], { type: "peek", handId: room.hand.id, targetSeat: 1 }, scenario.options), "NOT_A_MEMBER");
+  rejected(command(room, actors[0], { type: "peek", handId: room.hand.id, targetSeat: -1 }, scenario.options), "INVALID_COMMAND");
+  rejected(command(room, actors[0], { type: "peek", handId: room.hand.id, targetSeat: 6 }, scenario.options), "INVALID_COMMAND");
+  rejected(command(room, actors[0], { type: "peek", handId: room.hand.id, targetSeat: 1.5 }, scenario.options), "INVALID_COMMAND");
+  assert.equal(room.revision, revision);
+  assert.deepEqual(room.hand.privatePeekedSeatsByAccountId, {});
+
+  room = accepted(command(room, actors[0], { type: "peek", handId: room.hand.id, targetSeat: 1 }, scenario.options));
+  const afterFirstPeek = room;
+  const repeated = command(room, actors[0], { type: "peek", handId: room.hand.id, targetSeat: 1 }, scenario.options);
+  rejected(repeated, "PEEK_ALREADY_VISIBLE");
+  assert.equal(repeated.state, afterFirstPeek);
+  assert.equal(projectRoomState(room, actors[0].accountId).hand.privatePeekRemaining, 4);
+
+  rejected(command(room, actors[0], { type: "peek", handId: room.hand.id, targetSeat: 2 }, scenario.options), "PEEK_NOT_ALLOWED");
+  room = accepted(command(room, actors[2], {
+    type: "show",
+    handId: room.hand.id,
+    show: true,
+  }, scenario.options));
+  const ownerAfterPublicShow = projectRoomState(room, actors[0].accountId);
+  const otherAfterPublicShow = projectRoomState(room, actors[1].accountId);
+  assert.equal(ownerAfterPublicShow.seats.find((seat) => seat.seat === 2).privatelyPeeked, false);
+  assert.ok(ownerAfterPublicShow.seats.find((seat) => seat.seat === 2).holeCards);
+  assert.ok(otherAfterPublicShow.seats.find((seat) => seat.seat === 2).holeCards);
+  assert.ok(ownerAfterPublicShow.hand.result.winnerDetails.find((winner) => winner.seat === 2).holeCards);
+  assert.equal(ownerAfterPublicShow.hand.privatePeekRemaining, 4, "waiting for a show decision does not charge a peek");
+  rejected(command(room, actors[0], { type: "peek", handId: room.hand.id, targetSeat: 2 }, scenario.options), "PEEK_ALREADY_VISIBLE");
+});
+
+test("each player gets five private peeks per hand and readiness cannot shorten their deadline", () => {
+  const { room: started, options } = startRoom(6);
+  let room = foldUntilSettlement(started, options);
+  const pendingWinnerSeat = room.hand.pendingShowSeat;
+  assert.notEqual(pendingWinnerSeat, null);
+  room = accepted(command(room, actors[pendingWinnerSeat], {
+    type: "show",
+    handId: room.hand.id,
+    show: false,
+  }, options));
+  const completedHandId = room.hand.id;
+  const firstDeadline = room.hand.nextHandAt;
+  const hiddenHoles = new Map(room.hand.players.map((player) => [player.seat, structuredClone(player.hole)]));
+  assert.equal(projectRoomState(room, actors[0].accountId).hand.privatePeekRemaining, ONLINE_PRIVATE_PEEK_LIMIT);
+
+  for (const targetSeat of [1, 2, 3, 4]) {
+    room = accepted(command(room, actors[0], { type: "peek", handId: completedHandId, targetSeat }, options));
+  }
+  options.now = () => firstDeadline - 1;
+  room = accepted(command(room, actors[0], { type: "peek", handId: completedHandId, targetSeat: 5 }, options));
+
+  const privateView = projectRoomState(room, actors[0].accountId);
+  assert.equal(privateView.hand.privatePeekRemaining, 0);
+  assert.deepEqual(privateView.hand.privatePeekedSeats, [1, 2, 3, 4, 5]);
+  for (const targetSeat of [1, 2, 3, 4, 5]) {
+    assert.deepEqual(privateView.seats.find((seat) => seat.seat === targetSeat).holeCards, hiddenHoles.get(targetSeat));
+    assert.equal(privateView.seats.find((seat) => seat.seat === targetSeat).privatelyPeeked, true);
+  }
+  const sixth = command(room, actors[0], { type: "peek", handId: completedHandId, targetSeat: 5 }, options);
+  rejected(sixth, "PEEK_ALREADY_VISIBLE");
+  assert.equal(sixth.state, room);
+  assert.equal(projectRoomState(room, actors[0].accountId).hand.privatePeekRemaining, 0);
+  const otherPlayerView = projectRoomState(room, actors[1].accountId);
+  assert.deepEqual(otherPlayerView.hand.privatePeekedSeats, []);
+  assert.equal(otherPlayerView.hand.privatePeekRemaining, ONLINE_PRIVATE_PEEK_LIMIT);
+  assert.ok(otherPlayerView.seats.every((seat) => seat.seat === 1 || seat.holeCards === null));
+
+  for (const actor of actors.slice(0, 6)) {
+    room = accepted(command(room, actor, { type: "ready", ready: true }, options));
+  }
+  assert.equal(room.phase, "between_hands", "even all-ready cannot skip the private result window");
+  assert.equal(room.hand.id, completedHandId);
+  assert.equal(room.hand.nextHandAt, firstDeadline);
+
+  options.now = () => firstDeadline;
+  const expired = command(room, actors[0], { type: "peek", handId: completedHandId, targetSeat: 1 }, options);
+  rejected(expired, "PEEK_NOT_ALLOWED");
+  assert.equal(expired.state, room);
+  room = accepted(command(room, actors[0], { type: "timeout", handId: completedHandId }, options));
+  assert.equal(room.phase, "playing");
+  assert.equal(room.hand.number, 2);
+  assert.deepEqual(room.hand.privatePeekedSeatsByAccountId, {});
+
+  room = foldUntilSettlement(room, options);
+  const resetView = projectRoomState(room, actors[0].accountId);
+  assert.equal(resetView.hand.privatePeekLimit, ONLINE_PRIVATE_PEEK_LIMIT);
+  assert.equal(resetView.hand.privatePeekRemaining, ONLINE_PRIVATE_PEEK_LIMIT);
+  assert.deepEqual(resetView.hand.privatePeekedSeats, []);
+  assert.ok(resetView.seats.every((seat) => seat.seat === 0 || seat.holeCards === null));
+});
+
+test("a player who leaves during the hand remains a private-peek target for that result", () => {
+  const { room: started, options } = startRoom(3);
+  const departedHole = structuredClone(started.hand.players.find((player) => player.seat === 1).hole);
+  let room = accepted(command(started, actors[1], { type: "leave" }, options));
+  room = accepted(act(room, actors[0], "fold", options));
+  assert.equal(room.phase, "between_hands");
+  assert.equal(room.seats.some((seat) => seat.seat === 1), false);
+  const pendingWinnerSeat = room.hand.pendingShowSeat;
+  assert.notEqual(pendingWinnerSeat, null);
+  room = accepted(command(room, actors[pendingWinnerSeat], {
+    type: "show",
+    handId: room.hand.id,
+    show: false,
+  }, options));
+
+  const beforePeek = projectRoomState(room, actors[0].accountId);
+  const departedTarget = beforePeek.hand.privatePeekTargets.find((target) => target.seat === 1);
+  assert.equal(departedTarget.displayName, actors[1].displayName);
+  assert.equal(departedTarget.holeCards, null);
+
+  room = accepted(command(room, actors[0], {
+    type: "peek",
+    handId: room.hand.id,
+    targetSeat: 1,
+  }, options));
+  const afterPeek = projectRoomState(room, actors[0].accountId);
+  assert.deepEqual(
+    afterPeek.hand.privatePeekTargets.find((target) => target.seat === 1).holeCards,
+    departedHole,
+  );
+  assert.equal(
+    projectRoomState(room, actors[2].accountId).hand.privatePeekTargets.find((target) => target.seat === 1).holeCards,
+    null,
+  );
+});
+
+test("legacy or malformed private-peek grants are normalized and never reveal active or invalid targets", () => {
+  const active = startRoom(3);
+  const dirtyActive = structuredClone(active.room);
+  dirtyActive.hand.privatePeekedSeatsByAccountId = {
+    [actors[0].accountId]: [0, 1, 99],
+  };
+  const projectedActive = projectRoomState(dirtyActive, actors[0].accountId);
+  assert.deepEqual(projectedActive.hand.privatePeekedSeats, []);
+  assert.equal(projectedActive.seats.find((seat) => seat.seat === 1).holeCards, null);
+  const normalizedActive = setOnlinePlayerConnection(
+    dirtyActive,
+    actors[0].accountId,
+    false,
+    1_000_100,
+  );
+  assert.deepEqual(normalizedActive.hand.privatePeekedSeatsByAccountId, {});
+
+  let settled = foldUntilSettlement(active.room, active.options);
+  settled.hand.privatePeekedSeatsByAccountId = {
+    [actors[0].accountId]: [0, 1, 2, 99],
+  };
+  const defensiveView = projectRoomState(settled, actors[0].accountId);
+  assert.deepEqual(defensiveView.hand.privatePeekedSeats, [1]);
+  assert.equal(defensiveView.seats.find((seat) => seat.seat === 0).privatelyPeeked, false);
+  assert.equal(defensiveView.seats.find((seat) => seat.seat === 2).holeCards, null);
+});
+
+test("all players readying early preserve the full result window before auto-mucking", () => {
   const { room: started, options } = startRoom(2);
   let room = accepted(act(started, actors[0], "fold", options));
   const completedHandId = room.hand.id;
+  const nextHandAt = room.hand.nextHandAt;
   assert.equal(room.hand.pendingShowSeat, 1);
 
   room = accepted(command(room, actors[0], { type: "ready", ready: true }, options));
   room = accepted(command(room, actors[1], { type: "ready", ready: true }, options));
 
+  assert.equal(room.phase, "between_hands");
+  assert.equal(room.hand.id, completedHandId);
+  assert.equal(room.hand.pendingShowSeat, 1);
+
+  options.now = () => nextHandAt;
+  room = accepted(command(room, actors[0], { type: "timeout", handId: completedHandId }, options));
   assert.equal(room.phase, "playing");
   assert.equal(room.hand.number, 2);
   assert.notEqual(room.hand.id, completedHandId);
@@ -1633,6 +1918,12 @@ test("starting the next hand never silently tops up a short stack", () => {
   room = accepted(command(room, actors[0], { type: "ready", ready: true }, options));
   room = accepted(command(room, actors[1], { type: "ready", ready: true }, options));
 
+  assert.equal(room.phase, "between_hands", "readiness cannot skip the result window");
+  const completedHandId = room.hand.id;
+  const nextHandAt = room.hand.nextHandAt;
+  options.now = () => nextHandAt;
+  room = accepted(command(room, actors[0], { type: "timeout", handId: completedHandId }, options));
+
   assert.equal(room.phase, "between_hands");
   assert.deepEqual(room.hand.players.map((player) => player.contributed), [5, 5]);
   assert.equal(room.hand.result.totalPot, 10);
@@ -1650,16 +1941,19 @@ test("two stacks all-in from the blinds run out without requiring an actor", () 
 
 test("busted seats do not block funded players from readying the next hand", () => {
   const { room: active, options } = startRoom(3);
+  const settled = foldUntilSettlement(active, options);
   let room = {
-    ...active,
-    phase: "between_hands",
-    seats: active.seats.map((seat) => ({
+    ...settled,
+    seats: settled.seats.map((seat) => ({
       ...seat,
       stack: seat.seat === 0 ? 0 : 500,
       ready: false,
     })),
   };
   room = accepted(command(room, actors[1], { type: "ready", ready: true }, options));
+  assert.equal(room.phase, "between_hands");
+  const nextHandAt = room.hand.nextHandAt;
+  options.now = () => nextHandAt;
   room = accepted(command(room, actors[2], { type: "ready", ready: true }, options));
   assert.equal(room.phase, "playing");
   assert.deepEqual(room.hand.players.map((player) => player.seat), [1, 2]);

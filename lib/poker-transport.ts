@@ -9,6 +9,11 @@ import type { OnlinePublicRoomState } from "./online-poker";
 export type PokerCommand =
   | { type: "ready"; roomId: string; ready: boolean; requestId: string; expectedRevision: number }
   | { type: "start"; roomId: string; requestId: string; expectedRevision: number }
+  | { type: "finish"; roomId: string; requestId: string; expectedRevision: number }
+  | { type: "restart"; roomId: string; requestId: string; expectedRevision: number }
+  | { type: "use-time-bank"; roomId: string; handId: string; requestId: string; expectedRevision: number }
+  | { type: "use-ai-assist"; roomId: string; handId: string; requestId: string; expectedRevision: number }
+  | { type: "timeout"; roomId: string; handId: string; requestId: string; expectedRevision: number }
   | {
       type: "act";
       roomId: string;
@@ -19,6 +24,7 @@ export type PokerCommand =
       expectedRevision: number;
     }
   | { type: "show"; roomId: string; handId: string; show: boolean; requestId: string; expectedRevision: number }
+  | { type: "peek"; roomId: string; handId: string; targetSeat: number; requestId: string; expectedRevision: number }
   | { type: "leave"; roomId: string; requestId: string; expectedRevision: number };
 
 export type TableSnapshot = {

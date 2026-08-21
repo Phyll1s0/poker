@@ -193,6 +193,35 @@ test("multiplayer command parsing accepts one hand-scoped AI assist request", ()
   );
 });
 
+test("multiplayer command parsing accepts a seat-scoped private peek and rejects malformed targets", () => {
+  assert.deepEqual(parseMultiplayerCommand({
+    type: "peek",
+    handId: "hand-private-peek-1",
+    targetSeat: 4,
+    requestId: "private-peek-request-1",
+    expectedRevision: 12,
+  }), {
+    type: "peek",
+    handId: "hand-private-peek-1",
+    targetSeat: 4,
+    commandId: "private-peek-request-1",
+    expectedRevision: 12,
+  });
+
+  for (const targetSeat of [undefined, null, "1", -1, 6, 1.5]) {
+    assert.throws(
+      () => parseMultiplayerCommand({
+        type: "peek",
+        handId: "hand-private-peek-1",
+        targetSeat,
+        requestId: `bad-peek-target-${String(targetSeat)}`,
+        expectedRevision: 12,
+      }),
+      (error) => error instanceof MultiplayerGameError && error.code === "INVALID_COMMAND",
+    );
+  }
+});
+
 test("registration is idempotent and normalized handles stay unique", async (context) => {
   const { sqlite, store } = await testStore();
   context.after(() => sqlite.close());
@@ -498,6 +527,102 @@ test("D1 room state executes commands and never projects another player's hole c
       })),
       (error) => error instanceof MultiplayerGameError && error.code === "NOT_YOUR_TURN",
     );
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("D1 private peek persists for only its authenticated viewer and retries charge once", async () => {
+  const { sqlite, store } = await testStore();
+  try {
+    const owner = (await store.registerAccount("peek-d1-owner", "私窥房主")).account;
+    const target = (await store.registerAccount("peek-d1-target", "私窥目标")).account;
+    const other = (await store.registerAccount("peek-d1-other", "私窥旁观者")).account;
+    const room = await store.createRoom(owner.id, "私密偷看测试桌", 3);
+    await store.joinRoom(target.id, room.joinCode);
+    await store.joinRoom(other.id, room.joinCode);
+    const service = new MultiplayerGameService(new SqliteD1Database(sqlite));
+
+    let view = await service.getSnapshot(room.id, owner.id);
+    view = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
+      type: "ready",
+      ready: true,
+      requestId: "peek-ready-owner",
+      expectedRevision: view.room.revision,
+    }));
+    view = await service.applyCommand(room.id, target.id, parseMultiplayerCommand({
+      type: "ready",
+      ready: true,
+      requestId: "peek-ready-target",
+      expectedRevision: view.room.revision,
+    }));
+    view = await service.applyCommand(room.id, other.id, parseMultiplayerCommand({
+      type: "ready",
+      ready: true,
+      requestId: "peek-ready-other",
+      expectedRevision: view.room.revision,
+    }));
+    view = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
+      type: "start",
+      requestId: "peek-start-owner",
+      expectedRevision: view.room.revision,
+    }));
+    view = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
+      type: "act",
+      handId: view.game.handId,
+      action: "fold",
+      requestId: "peek-owner-folds",
+      expectedRevision: view.room.revision,
+    }));
+    view = await service.applyCommand(room.id, target.id, parseMultiplayerCommand({
+      type: "act",
+      handId: view.game.handId,
+      action: "fold",
+      requestId: "peek-target-folds",
+      expectedRevision: view.room.revision,
+    }));
+    assert.equal(view.table.phase, "between_hands");
+
+    const storedBefore = JSON.parse(sqlite.prepare("SELECT state_json FROM rooms WHERE id = ?").get(room.id).state_json);
+    const targetHole = storedBefore.hand.players.find((player) => player.seat === 1).hole;
+    const peekCommand = parseMultiplayerCommand({
+      type: "peek",
+      handId: view.game.handId,
+      targetSeat: 1,
+      requestId: "peek-owner-target-once",
+      expectedRevision: view.room.revision,
+    });
+    const revisionBeforePeek = view.room.revision;
+    const ownerView = await service.applyCommand(room.id, owner.id, peekCommand);
+    assert.equal(ownerView.room.revision, revisionBeforePeek + 1);
+    assert.deepEqual(ownerView.table.seats.find((seat) => seat.seat === 1).holeCards, targetHole);
+    assert.equal(ownerView.table.seats.find((seat) => seat.seat === 1).privatelyPeeked, true);
+    assert.equal(ownerView.players.find((player) => player.seat === 1).privatelyPeeked, true);
+    assert.deepEqual(
+      ownerView.game.privatePeekTargets.find((entry) => entry.seat === 1).holeCards,
+      ownerView.players.find((player) => player.seat === 1).holeCards,
+    );
+    assert.equal(ownerView.table.hand.privatePeekRemaining, 4);
+    assert.deepEqual(ownerView.table.hand.privatePeekedSeats, [1]);
+
+    const otherView = await service.getSnapshot(room.id, other.id);
+    assert.equal(otherView.table.seats.find((seat) => seat.seat === 1).holeCards, null);
+    assert.equal(otherView.table.seats.find((seat) => seat.seat === 1).privatelyPeeked, false);
+    assert.equal(otherView.players.find((player) => player.seat === 1).holeCards, undefined);
+    assert.equal(otherView.players.find((player) => player.seat === 1).privatelyPeeked, false);
+    assert.equal(otherView.game.privatePeekTargets.find((entry) => entry.seat === 1).holeCards, undefined);
+    assert.equal(otherView.table.hand.privatePeekRemaining, 5);
+    assert.deepEqual(otherView.table.hand.privatePeekedSeats, []);
+    assert.doesNotMatch(JSON.stringify(otherView), /privatePeekedSeatsByAccountId|peek-d1-owner/);
+
+    const retryView = await service.applyCommand(room.id, owner.id, peekCommand);
+    assert.equal(retryView.room.revision, ownerView.room.revision);
+    assert.equal(retryView.table.hand.privatePeekRemaining, 4);
+    assert.deepEqual(retryView.table.hand.privatePeekedSeats, [1]);
+    assert.deepEqual(retryView.table.seats.find((seat) => seat.seat === 1).holeCards, targetHole);
+    const storedAfter = JSON.parse(sqlite.prepare("SELECT state_json FROM rooms WHERE id = ?").get(room.id).state_json);
+    assert.deepEqual(storedAfter.hand.privatePeekedSeatsByAccountId, { [owner.id]: [1] });
+    assert.equal(storedAfter.revision, ownerView.room.revision);
   } finally {
     sqlite.close();
   }

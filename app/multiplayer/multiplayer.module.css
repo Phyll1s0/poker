@@ -3060,6 +3060,178 @@
   margin-right: auto;
 }
 
+.privatePeek {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: minmax(190px, 0.7fr) minmax(0, 1.3fr);
+  align-items: center;
+  gap: 12px;
+  border: 1px solid rgba(216, 183, 116, 0.2);
+  border-radius: 6px;
+  background: linear-gradient(135deg, rgba(216, 183, 116, 0.07), rgba(13, 17, 15, 0.42));
+}
+
+.privatePeekCopy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.privatePeekCopy > span {
+  color: var(--mp-gold);
+  font-size: 9px;
+  letter-spacing: 0.13em;
+}
+
+.privatePeekCopy > strong {
+  color: #e5e0d4;
+  font: 500 13px/1.25 Georgia, "Songti SC", serif;
+}
+
+.privatePeekCopy > small {
+  color: #858178;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.privatePeekTargets {
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 7px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.privatePeekTarget,
+.privatePeekResult {
+  flex: 0 0 auto;
+  min-height: 42px;
+  border: 1px solid rgba(216, 183, 116, 0.2);
+  border-radius: 5px;
+  background: rgba(10, 14, 12, 0.52);
+}
+
+.privatePeekTarget {
+  min-width: 94px;
+  padding: 7px 10px;
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  color: #d8d2c5;
+  cursor: pointer;
+}
+
+.privatePeekTarget:hover:not(:disabled) {
+  border-color: rgba(99, 196, 156, 0.48);
+  background: rgba(99, 196, 156, 0.08);
+}
+
+.privatePeekTarget:focus-visible {
+  outline: 2px solid rgba(99, 196, 156, 0.75);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px rgba(99, 196, 156, 0.12);
+}
+
+.privatePeekTarget:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
+.privatePeekTarget > span {
+  color: var(--mp-gold);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+
+.privatePeekTarget > strong {
+  max-width: 104px;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.privatePeekResult {
+  min-width: 152px;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  border-color: rgba(99, 196, 156, 0.26);
+  background: rgba(99, 196, 156, 0.055);
+}
+
+.privatePeekResult > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.privatePeekResult b {
+  max-width: 90px;
+  overflow: hidden;
+  color: #dcd7cc;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.privatePeekResult small {
+  color: #70b797;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.privatePeekResult > div {
+  display: flex;
+  gap: 3px;
+}
+
+.privatePeekResult .miniCard {
+  width: 27px;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.28);
+}
+
+.privatePeekEmpty {
+  margin: 0;
+  padding: 9px 10px;
+  align-self: center;
+  color: #7d827d;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.seatPrivatePeek {
+  position: absolute;
+  z-index: 10;
+  top: -72px;
+  right: 3px;
+  padding: 3px 6px;
+  border: 1px solid rgba(216, 183, 116, 0.3);
+  border-radius: 8px;
+  color: #e0c787;
+  background: rgba(20, 19, 15, 0.94);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.multiplayerPage .seat2 .seatPrivatePeek,
+.multiplayerPage .seat3 .seatPrivatePeek,
+.multiplayerPage .seat4 .seatPrivatePeek {
+  top: auto;
+  bottom: -72px;
+}
+
 .multiplayerPage .resultBanner,
 .multiplayerPage .winningHands {
   grid-column: 1 / -1;
@@ -3341,6 +3513,25 @@
 
   .nextHandWaitingPanel > button {
     width: 100%;
+  }
+
+  .privatePeek {
+    grid-template-columns: 1fr;
+  }
+
+  .privatePeekTargets {
+    justify-content: flex-start;
+    padding-bottom: 4px;
+    overscroll-behavior-inline: contain;
+  }
+
+  .privatePeekTarget {
+    flex-basis: 118px;
+    min-height: 44px;
+  }
+
+  .privatePeekEmpty {
+    white-space: normal;
   }
 
   .waitingControls .lobbyPlayers {

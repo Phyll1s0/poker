@@ -232,6 +232,15 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(globalsCss, /\.seat-0 \{ left: 50%; bottom: -100px/);
   assert.match(globalsCss, /\.seat-3 \{ left: 50%; top: -84px/);
   assert.match(multiplayerClient, /function WinningHands/);
+  assert.match(multiplayerClient, /function PrivatePeekOpportunity/);
+  assert.match(multiplayerClient, /PRIVATE PEEK · 仅你可见/);
+  assert.match(multiplayerClient, /本手可偷看最多 \{limit\} 位对手/);
+  assert.match(multiplayerClient, /type: "peek", handId: game\.handId, targetSeat/);
+  assert.match(multiplayerClient, /player\.privatelyPeeked/);
+  assert.match(multiplayerCss, /\.privatePeek\s*\{/);
+  assert.match(multiplayerCss, /\.seatPrivatePeek\s*\{/);
+  assert.match(edgeFunction, /if \(type === "peek"\)[\s\S]*?targetSeat/);
+  assert.match(transport, /type: "peek"; roomId: string; handId: string; targetSeat: number/);
   assert.match(multiplayerClient, /手牌未公开/);
   assert.match(multiplayerClient, /最佳五张/);
   assert.match(multiplayerClient, /winningHands\?\.find/);
@@ -277,6 +286,13 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
     multiplayerLiveSettlement.indexOf('<WinningHands game={game} />')
       > multiplayerLiveSettlement.indexOf('className={styles.handTransition}'),
     "多人最佳五张应位于下一手等待与亮盖选择之后",
+  );
+  assert.ok(
+    multiplayerLiveSettlement.indexOf('<PrivatePeekOpportunity')
+      > multiplayerLiveSettlement.indexOf('className={styles.handTransition}')
+      && multiplayerLiveSettlement.indexOf('<PrivatePeekOpportunity')
+        < multiplayerLiveSettlement.indexOf('<WinningHands game={game} />'),
+    "多人私密偷看应位于结算等待之后、赢家五张之前",
   );
   assert.ok(
     multiplayerCss.lastIndexOf(".multiplayerPage .tableControlsTransition")
@@ -340,7 +356,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /到点未选择会自动盖牌/);
   assert.match(multiplayerClient, /秒后生成整局结算/);
   assert.match(multiplayerClient, /已亮出的手牌会保留到倒计时结束；全员准备也不会提前跳过/);
-  assert.match(multiplayerClient, /准备下一手（展示结束后发牌）/);
+  assert.match(multiplayerClient, /准备下一手（等待结算倒计时）/);
   assert.match(multiplayerClient, /这是服务端统一倒计时/);
   assert.match(multiplayerClient, /styles\.nextHandWaitingPanel[\s\S]*?styles\.showDecisionInline[\s\S]*?styles\.autoNextHand/);
   assert.doesNotMatch(multiplayerClient, /styles\.showDecisionPanel|亮牌选择最长 8 秒/);

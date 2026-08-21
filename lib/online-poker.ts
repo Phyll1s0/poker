@@ -18,6 +18,8 @@ export const ONLINE_COMMAND_RECEIPT_LIMIT = 2_048;
 export const ONLINE_RECENT_ACTION_LIMIT = 128;
 /** A room keeps only the latest completed hands for visual replay. */
 export const ONLINE_HAND_HISTORY_LIMIT = 30;
+/** Viewer-private training reveals available to each participant after every hand. */
+export const ONLINE_PRIVATE_PEEK_LIMIT = 5;
 /** Shared server-side pause before any seated player may advance the table. */
 export const ONLINE_NEXT_HAND_DELAY_MS = 20_000;
 /** The final part of the shared pause is reserved for actually reading shown cards. */
@@ -162,6 +164,8 @@ export type OnlineHandState = {
   actionHistory: OnlineHandActionEvent[];
   result: OnlineHandResult | null;
   pendingShowSeat: number | null;
+  /** Server-private viewer account -> seats privately revealed during this hand. */
+  privatePeekedSeatsByAccountId: Record<string, number[]>;
   actionStartedAt: number | null;
   actionDeadlineAt: number | null;
   showDecisionDeadlineAt: number | null;
@@ -294,6 +298,7 @@ export type OnlinePokerCommand =
       raiseTo?: number;
     })
   | (CommandBase & { type: "show"; handId: string; show: boolean })
+  | (CommandBase & { type: "peek"; handId: string; targetSeat: number })
   | (CommandBase & { type: "leave" });
 
 export type OnlinePokerErrorCode =
@@ -315,6 +320,9 @@ export type OnlinePokerErrorCode =
   | "RAISE_NOT_ALLOWED"
   | "INVALID_RAISE"
   | "SHOW_NOT_ALLOWED"
+  | "PEEK_NOT_ALLOWED"
+  | "PEEK_LIMIT_REACHED"
+  | "PEEK_ALREADY_VISIBLE"
   | "TIME_BANK_EMPTY"
   | "AI_ASSIST_DISABLED"
   | "AI_ASSIST_EMPTY"
@@ -374,6 +382,17 @@ export type OnlinePublicSeat = {
   holeCardCount: number;
   holeCards: [OnlineCard, OnlineCard] | null;
   shown: boolean;
+  /** True only in the requesting viewer's projection. */
+  privatelyPeeked: boolean;
+};
+
+export type OnlinePublicPrivatePeekTarget = {
+  seat: number;
+  displayName: string;
+  shown: boolean;
+  privatelyPeeked: boolean;
+  waitingForShowDecision: boolean;
+  holeCards: [OnlineCard, OnlineCard] | null;
 };
 
 export type OnlinePublicHand = {
@@ -402,6 +421,12 @@ export type OnlinePublicHand = {
     }[];
   }) | null;
   pendingShowSeat: number | null;
+  /** Viewer-private allowance for this hand; zero for non-participants. */
+  privatePeekLimit: number;
+  privatePeekRemaining: number;
+  privatePeekedSeats: number[];
+  /** Viewer-specific current-hand targets, including opponents who left after acting. */
+  privatePeekTargets: OnlinePublicPrivatePeekTarget[];
   actionStartedAt: number | null;
   actionDeadlineAt: number | null;
   showDecisionDeadlineAt: number | null;
@@ -775,6 +800,12 @@ function cloneRoom(room: OnlineRoomState): OnlineRoomState {
           recentActions: (room.hand.recentActions ?? []).map(cloneHandActionEvent),
           actionHistory: (room.hand.actionHistory ?? room.hand.recentActions ?? []).map(cloneHandActionEvent),
           result: room.hand.result ? cloneHandResult(room.hand.result) : null,
+          privatePeekedSeatsByAccountId: Object.fromEntries(
+            Object.entries(room.hand.privatePeekedSeatsByAccountId ?? {}).map(([accountId, seats]) => [
+              accountId,
+              Array.isArray(seats) ? [...seats] : [],
+            ]),
+          ),
         }
       : null,
     handHistory: (room.handHistory ?? []).map(cloneHandHistoryEntry),
@@ -1012,6 +1043,28 @@ function normalizeStoredRoom(room: OnlineRoomState): void {
       room.hand.recentActions.at(-1)?.seq ?? 0,
       room.hand.actionHistory.at(-1)?.seq ?? 0,
     );
+    const handPlayerByAccountId = new Map(
+      room.hand.players.map((player) => [player.accountId, player] as const),
+    );
+    const validTargetSeats = new Set(room.hand.players.map((player) => player.seat));
+    const storedPrivatePeeks = room.hand.privatePeekedSeatsByAccountId;
+    room.hand.privatePeekedSeatsByAccountId = room.hand.result && storedPrivatePeeks
+      && typeof storedPrivatePeeks === "object"
+      && !Array.isArray(storedPrivatePeeks)
+      ? Object.fromEntries(
+          Object.entries(storedPrivatePeeks).flatMap(([viewerAccountId, seats]) => {
+            const viewer = handPlayerByAccountId.get(viewerAccountId);
+            if (!viewer || !Array.isArray(seats)) return [];
+            const normalizedSeats = [...new Set(seats.filter((seat): seat is number => (
+              Number.isInteger(seat)
+              && validTargetSeats.has(seat)
+              && seat !== viewer.seat
+              && seat !== room.hand?.pendingShowSeat
+            )))].slice(0, ONLINE_PRIVATE_PEEK_LIMIT);
+            return normalizedSeats.length ? [[viewerAccountId, normalizedSeats]] : [];
+          }),
+        )
+      : {};
     // Missing keys identify states stored before server-owned phase clocks were
     // introduced. synchronizePhaseClocks expires those legacy waits on first
     // command so an abandoned old room cannot acquire a fresh permanent stall.
@@ -1481,6 +1534,7 @@ function beginHand(room: OnlineRoomState, options: OnlineEngineOptions): void {
     actionHistory: [],
     result: null,
     pendingShowSeat: null,
+    privatePeekedSeatsByAccountId: {},
     actionStartedAt,
     actionDeadlineAt: actionStartedAt === null ? null : actionStartedAt + room.actionTimeMs,
     showDecisionDeadlineAt: null,
@@ -2208,10 +2262,6 @@ function nextHandWindowOpen(room: OnlineRoomState, now: number): boolean {
   );
 }
 
-function hasPublicShownCards(hand: OnlineHandState | null): boolean {
-  return Boolean(hand?.result && hand.players.some((player) => player.shown));
-}
-
 function nextHandSeats(room: OnlineRoomState): OnlineSeatState[] {
   const presentSeats = room.seats.filter((seat) => !seat.pendingLeave);
   return room.tableMode === "cash"
@@ -2230,6 +2280,10 @@ function firstEmptySeat(room: OnlineRoomState): number | null {
 function validateCommand(command: OnlinePokerCommand): string | null {
   if (!command.commandId.trim()) return "commandId 不能为空";
   if (!Number.isInteger(command.expectedRevision) || command.expectedRevision < 0) return "expectedRevision 必须是非负整数";
+  if (
+    command.type === "peek"
+    && (!Number.isInteger(command.targetSeat) || command.targetSeat < 0 || command.targetSeat >= ONLINE_MAX_PLAYERS)
+  ) return `targetSeat 必须在 0 到 ${ONLINE_MAX_PLAYERS - 1} 之间`;
   return null;
 }
 
@@ -2248,6 +2302,9 @@ function commandFingerprint(command: OnlinePokerCommand) {
   }
   if (command.type === "show") {
     return JSON.stringify([command.type, command.expectedRevision, command.handId, command.show]);
+  }
+  if (command.type === "peek") {
+    return JSON.stringify([command.type, command.expectedRevision, command.handId, command.targetSeat]);
   }
   if (command.type === "use-time-bank" || command.type === "use-ai-assist" || command.type === "timeout") {
     return JSON.stringify([command.type, command.expectedRevision, command.handId]);
@@ -2338,18 +2395,16 @@ export function applyOnlinePokerCommand(
     const eligibleSeats = nextHandSeats(next);
     const nextWindowIsOpen = nextHandWindowOpen(next, commandNow);
     const allPlayersReady = eligibleSeats.every((seat) => seat.ready);
-    const shownCardsStillOnDisplay = hasPublicShownCards(next.hand) && !nextWindowIsOpen;
     if (
       next.phase === "between_hands"
       && eligibleSeats.length >= ONLINE_MIN_PLAYERS
       && !next.session.finishRequestedByAccountId
-      && (
-        (allPlayersReady && !shownCardsStillOnDisplay)
-        || (command.ready && nextWindowIsOpen)
-      )
+      && command.ready
+      && allPlayersReady
+      && nextWindowIsOpen
     ) {
-      // Readying early may give up an unanswered optional reveal, but cards
-      // already shown to the table stay visible through the result window.
+      // The result window also contains each player's private-peek opportunity,
+      // so readiness never skips the shared twenty-second settlement pause.
       completeBetweenHandsWait(next);
       finalizePendingLeaves(next);
       beginHand(next, options);
@@ -2455,6 +2510,42 @@ export function applyOnlinePokerCommand(
     }
     hand.pendingShowSeat = null;
     hand.showDecisionDeadlineAt = null;
+  } else if (command.type === "peek") {
+    const hand = next.hand;
+    if (!hand || hand.id !== command.handId) {
+      return fail(room, hand && hand.id !== command.handId ? "WRONG_HAND" : "PEEK_NOT_ALLOWED", "当前没有可偷看的已结束手牌");
+    }
+    if (
+      next.phase !== "between_hands"
+      || !hand.result
+      || hand.betweenHandsWaitCompleted
+      || typeof hand.nextHandAt !== "number"
+      || commandNow >= hand.nextHandAt
+    ) {
+      return fail(room, "PEEK_NOT_ALLOWED", "只能在本手结算倒计时内偷看底牌");
+    }
+    const viewer = playerBySeat(hand, member.seat);
+    if (!viewer || viewer.accountId !== actor.accountId) {
+      return fail(room, "PEEK_NOT_ALLOWED", "只有本手参赛玩家可以偷看底牌");
+    }
+    const target = playerBySeat(hand, command.targetSeat);
+    if (!target || target.seat === viewer.seat || target.hole.length !== 2) {
+      return fail(room, "PEEK_NOT_ALLOWED", "请选择本手的另一位玩家");
+    }
+    if (hand.pendingShowSeat === target.seat) {
+      return fail(room, "PEEK_NOT_ALLOWED", "请先等待赢家完成亮牌或盖牌选择");
+    }
+    if (target.shown) {
+      return fail(room, "PEEK_ALREADY_VISIBLE", "这位玩家的底牌已经公开，不需要消耗偷看次数");
+    }
+    const peekedSeats = hand.privatePeekedSeatsByAccountId[actor.accountId] ?? [];
+    if (peekedSeats.includes(target.seat)) {
+      return fail(room, "PEEK_ALREADY_VISIBLE", "你已经偷看过这位玩家的底牌");
+    }
+    if (peekedSeats.length >= ONLINE_PRIVATE_PEEK_LIMIT) {
+      return fail(room, "PEEK_LIMIT_REACHED", "本手的 5 次偷看机会已经用完");
+    }
+    hand.privatePeekedSeatsByAccountId[actor.accountId] = [...peekedSeats, target.seat];
   } else if (command.type === "leave") {
     if (next.phase !== "finished") {
       const stats = ensureSessionPlayer(next, member);
@@ -2686,9 +2777,41 @@ export function projectRoomState(room: OnlineRoomState, viewerAccountId: string 
     && Array.isArray(room.session?.players)
     && room.session.players.some((player) => player.accountId === viewerAccountId);
   const mayUnlockFinishedHistory = room.phase === "finished" && viewerIsSessionParticipant;
+  const viewerIsCurrentHandParticipant = Boolean(
+    hand
+    && viewerAccountId
+    && hand.players.some((player) => player.accountId === viewerAccountId),
+  );
+  const viewerHandPlayer = viewerAccountId && hand
+    ? hand.players.find((player) => player.accountId === viewerAccountId) ?? null
+    : null;
+  const validPrivatePeekTargetSeats = new Set(
+    hand?.players
+      .filter((player) => (
+        player.seat !== viewerHandPlayer?.seat
+        && player.seat !== hand.pendingShowSeat
+      ))
+      .map((player) => player.seat) ?? [],
+  );
+  const viewerPrivatePeekedSeats = viewerIsCurrentHandParticipant && viewerAccountId && hand?.result
+    ? [...new Set(
+        (hand.privatePeekedSeatsByAccountId?.[viewerAccountId] ?? [])
+          .filter((seat) => Number.isInteger(seat) && validPrivatePeekTargetSeats.has(seat)),
+      )].slice(0, ONLINE_PRIVATE_PEEK_LIMIT)
+    : [];
+  const viewerPrivatePeekedSeatSet = new Set(viewerPrivatePeekedSeats);
   const publicSeats = room.seats.map((seat): OnlinePublicSeat => {
     const player = hand ? playerBySeat(hand, seat.seat) : undefined;
-    const maySeeHole = Boolean(player && (seat.accountId === viewerAccountId || player.shown));
+    const privatelyPeeked = Boolean(
+      player
+      && !player.shown
+      && viewerPrivatePeekedSeatSet.has(seat.seat),
+    );
+    const maySeeHole = Boolean(player && (
+      seat.accountId === viewerAccountId
+      || player.shown
+      || privatelyPeeked
+    ));
     return {
       seat: seat.seat,
       displayName: seat.displayName,
@@ -2708,6 +2831,7 @@ export function projectRoomState(room: OnlineRoomState, viewerAccountId: string 
         ? [cloneCard(player.hole[0]), cloneCard(player.hole[1])]
         : null,
       shown: player?.shown ?? false,
+      privatelyPeeked,
     };
   });
   return {
@@ -2765,6 +2889,38 @@ export function projectRoomState(room: OnlineRoomState, viewerAccountId: string 
               }
             : null,
           pendingShowSeat: hand.pendingShowSeat,
+          privatePeekLimit: viewerIsCurrentHandParticipant
+            && hand.result
+            && room.phase === "between_hands"
+            && !hand.betweenHandsWaitCompleted
+            && typeof hand.nextHandAt === "number"
+            ? ONLINE_PRIVATE_PEEK_LIMIT
+            : 0,
+          privatePeekRemaining: viewerIsCurrentHandParticipant
+            && hand.result
+            && room.phase === "between_hands"
+            && !hand.betweenHandsWaitCompleted
+            && typeof hand.nextHandAt === "number"
+            ? Math.max(0, ONLINE_PRIVATE_PEEK_LIMIT - viewerPrivatePeekedSeats.length)
+            : 0,
+          privatePeekedSeats: viewerPrivatePeekedSeats,
+          privatePeekTargets: viewerIsCurrentHandParticipant && hand.result
+            ? hand.players
+              .filter((player) => player.accountId !== viewerAccountId)
+              .map((player) => {
+                const privatelyPeeked = !player.shown && viewerPrivatePeekedSeatSet.has(player.seat);
+                return {
+                  seat: player.seat,
+                  displayName: player.displayName,
+                  shown: player.shown,
+                  privatelyPeeked,
+                  waitingForShowDecision: !player.shown && hand.pendingShowSeat === player.seat,
+                  holeCards: player.shown || privatelyPeeked
+                    ? [cloneCard(player.hole[0]), cloneCard(player.hole[1])]
+                    : null,
+                };
+              })
+            : [],
           actionStartedAt: typeof hand.actionStartedAt === "number" ? hand.actionStartedAt : null,
           actionDeadlineAt: typeof hand.actionDeadlineAt === "number" ? hand.actionDeadlineAt : null,
           showDecisionDeadlineAt: typeof hand.showDecisionDeadlineAt === "number"

@@ -120,6 +120,7 @@ type ClientPlayer = {
   isOwner: boolean;
   isDealer: boolean;
   shown: boolean;
+  privatelyPeeked: boolean;
   holeCards?: ClientCard[];
   holeCardCount: number;
 };
@@ -403,6 +404,7 @@ function clientPlayers(table: OnlinePublicRoomState): ClientPlayer[] {
       isOwner: seat.seat === table.ownerSeat,
       isDealer: seat.seat === table.hand?.dealerSeat,
       shown: seat.shown,
+      privatelyPeeked: seat.privatelyPeeked,
       ...(seat.holeCards ? { holeCards: seat.holeCards.map(clientCard) } : {}),
       holeCardCount: seat.holeCardCount,
     };
@@ -455,6 +457,7 @@ function makeSnapshot(row: RoomRow, state: OnlineRoomState, guestId: string) {
               isOwner: false,
               isDealer: winner.seat === hand.dealerSeat,
               shown: Boolean(winner.holeCards),
+              privatelyPeeked: false,
               ...(winner.holeCards ? { holeCards: winner.holeCards.map(clientCard) } : {}),
               holeCardCount: 2,
             }];
@@ -516,6 +519,14 @@ function makeSnapshot(row: RoomRow, state: OnlineRoomState, guestId: string) {
         occurredAt: event.occurredAt,
       })),
       players: gamePlayers,
+      privatePeekTargets: (hand.privatePeekTargets ?? []).map((target) => ({
+        seat: target.seat,
+        handle: target.displayName,
+        shown: target.shown,
+        privatelyPeeked: target.privatelyPeeked,
+        waitingForShowDecision: target.waitingForShowDecision,
+        ...(target.holeCards ? { holeCards: target.holeCards.map(clientCard) } : {}),
+      })),
       legalActions: table.legalActions ? {
         fold: table.legalActions.fold,
         check: table.legalActions.check,
@@ -840,6 +851,12 @@ function parseCommand(payload: JsonObject): Exclude<OnlinePokerCommand, { type: 
   if (type === "show") {
     if (typeof payload.show !== "boolean") throw new ApiError(400, "INVALID_COMMAND", "show 必须是布尔值。");
     return { ...base, type, handId, show: payload.show };
+  }
+  if (type === "peek") {
+    if (!Number.isInteger(payload.targetSeat) || Number(payload.targetSeat) < 0 || Number(payload.targetSeat) >= 6) {
+      throw new ApiError(400, "INVALID_COMMAND", "targetSeat 必须是有效座位编号。");
+    }
+    return { ...base, type, handId, targetSeat: Number(payload.targetSeat) };
   }
   if (type === "act") {
     const action = requiredString(payload.pokerAction, "pokerAction", 16);
