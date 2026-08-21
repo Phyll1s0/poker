@@ -194,6 +194,7 @@ type Review = {
   actionVerdict: string;
   score: number;
   note: string;
+  hintUsed: boolean;
 };
 
 type SessionHandResult = {
@@ -204,6 +205,7 @@ type SessionHandResult = {
   heroNet: number;
   score: number | null;
   decisions: number;
+  assistedDecisions: number;
   heroCards: string;
 };
 
@@ -1205,6 +1207,61 @@ function getAdvice(game: Game, player: Player, equity: number) {
   };
 }
 
+function AiDecisionHint({
+  enabled,
+  isHumanTurn,
+  advice,
+  revealed,
+  compact = false,
+  onReveal,
+}: {
+  enabled: boolean;
+  isHumanTurn: boolean;
+  advice: ReturnType<typeof getAdvice> | null;
+  revealed: boolean;
+  compact?: boolean;
+  onReveal: () => void;
+}) {
+  const ready = enabled && isHumanTurn && Boolean(advice);
+  return (
+    <section
+      className={`coach-callout coach-hint ${compact ? "coach-hint-compact" : ""} ${ready ? "visible" : "muted"} ${revealed ? "revealed" : "concealed"}`}
+      aria-live="polite"
+    >
+      <div className="coach-icon">◆</div>
+      <div className="coach-hint-copy">
+        <span>AI 决策提示 · 按需查看</span>
+        {!enabled ? (
+          <>
+            <h3>AI 提示已关闭</h3>
+            <p>在牌桌右上角开启“AI 提示”；关闭时仍会正常记录你的决策与赛后复盘。</p>
+          </>
+        ) : !isHumanTurn || !advice ? (
+          <>
+            <h3>等待你的下一个行动点</h3>
+            <p>轮到你时可以先独立判断，再按需查看当前节点的动作频率和下注尺寸。</p>
+          </>
+        ) : !revealed ? (
+          <>
+            <h3>需要一点思路吗？</h3>
+            <p>提示默认收起，只针对当前决策；行动后会自动隐藏，不会提前公开对手底牌或风格。</p>
+            <button className="coach-hint-button" type="button" onClick={onReveal}>查看本次 AI 提示</button>
+          </>
+        ) : (
+          <>
+            <div className="coach-hint-result-heading">
+              <h3>优先考虑 · {advice.recommendedLabel}</h3>
+              <b>已查看</b>
+            </div>
+            <p>{advice.mix}。{advice.sizingMix ? `进入加注分支后的尺寸混合：${advice.sizingMix}。` : ""}{advice.note}</p>
+            <small className="coach-hint-source">{advice.strategySource} · 仅使用公开行动与范围估算，不读取电脑暗牌</small>
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
 const ACTION_LABELS: Record<ActionKind, string> = { fold: "弃牌", check: "过牌", call: "跟注", raise: "加注" };
 
 function isSessionComplete(game: Game) {
@@ -1226,6 +1283,7 @@ function buildSessionHandResult(game: Game, review: Review[]): SessionHandResult
     heroNet: heroStack - heroCashInvested,
     score,
     decisions: decisions.length,
+    assistedDecisions: decisions.filter((item) => item.hintUsed).length,
     heroCards: game.players[0].hole.map(cardText).join(" "),
   };
 }
@@ -1711,7 +1769,7 @@ function LandingHome({
             }}
           >
             <span className="mode-index">01</span>
-            <div><small>LOCAL TRAINING</small><h3>单人训练</h3><p>浅筹、标准、深筹与血战鱿鱼；电脑风格每桌随机，支持逐手、整局与画像自适应无尽对局。</p></div>
+            <div><small>LOCAL TRAINING</small><h3>单人训练</h3><p>浅筹、标准、深筹与血战鱿鱼；电脑风格每桌随机，逐手、整局和无尽对局都可按需查看 AI 提示。</p></div>
             <strong>立即开始 <span>→</span></strong>
           </a>
           <a className="landing-mode-card multiplayer" href={multiplayerHref}>
@@ -1756,6 +1814,8 @@ function LandingHome({
 function SoloTrainer({ onExit }: { onExit: () => void }) {
   const [game, setGame] = useState<Game | null>(null);
   const [training, setTraining] = useState(true);
+  const [revealedHintKey, setRevealedHintKey] = useState<string | null>(null);
+  const [hintUseCount, setHintUseCount] = useState(0);
   const [raiseTo, setRaiseTo] = useState(30);
   const [review, setReview] = useState<Review[]>([]);
   const [feedback, setFeedback] = useState<Review | null>(null);
@@ -1777,6 +1837,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   const [replayPlaying, setReplayPlaying] = useState(false);
   const winSoundHand = useRef(0);
   const observedShowdownImageHand = useRef(0);
+  const hintedDecisionKeys = useRef<Set<string>>(new Set());
   const soundOnRef = useRef(isPokerAudioEnabled());
   const historyRunId = useRef(createSoloHistoryRunId());
 
@@ -1930,6 +1991,18 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   }, [game, human, isHumanTurn]);
 
   const advice = useMemo(() => (game && human && isHumanTurn ? getAdvice(game, human, equity) : null), [game, human, isHumanTurn, equity]);
+  const hintDecisionKey = game && human && isHumanTurn
+    ? `${game.handNo}:${game.street}:${game.actionHistory.length}:${game.highestBet}:${human.bet}`
+    : null;
+  const hintRevealed = Boolean(hintDecisionKey && revealedHintKey === hintDecisionKey);
+  const revealCurrentHint = useCallback(() => {
+    if (!hintDecisionKey) return;
+    if (!hintedDecisionKeys.current.has(hintDecisionKey)) {
+      hintedDecisionKeys.current.add(hintDecisionKey);
+      setHintUseCount((count) => count + 1);
+    }
+    setRevealedHintKey(hintDecisionKey);
+  }, [hintDecisionKey]);
 
   useEffect(() => {
     if (!game || dealing || game.status !== "playing" || game.current < 0) return;
@@ -1971,6 +2044,9 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   const resetRun = useCallback((nextMode: GameMode, nextPreset: TablePresetKey) => {
     setMode(nextMode);
     setTraining(nextMode === "per_hand");
+    setRevealedHintKey(null);
+    setHintUseCount(0);
+    hintedDecisionKeys.current.clear();
     setReview([]);
     setFeedback(null);
     setShowLog(false);
@@ -2072,6 +2148,9 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
           frequency: 1,
           allIn: actualRaiseTo === sizingContext.playerBet + sizingContext.playerStack,
         });
+    const hintUsedForDecision = Boolean(
+      hintDecisionKey && hintedDecisionKeys.current.has(hintDecisionKey),
+    );
     const entry: Review = {
       id: Date.now(),
       hand: game.handNo,
@@ -2114,6 +2193,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       actionVerdict,
       score,
       note: advice.note,
+      hintUsed: hintUsedForDecision,
     };
     setReview((items) => [entry, ...items].slice(0, POKER_RUN_DECISION_HISTORY_LIMIT));
     setRunDecisionStats((stats) => recordPokerRunDecision(stats, game.street, score));
@@ -2124,7 +2204,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       return updateHeroTableImage(image, { loose: looseSignal, aggressive: aggressionSignal });
     });
     setGame((current) => (current ? act(current, human.id, kind, actualRaiseTo ?? undefined) : current));
-  }, [game, human, isHumanTurn, advice, raiseTo, toCall, equity, soundOn, mode]);
+  }, [game, human, isHumanTurn, advice, raiseTo, toCall, equity, soundOn, mode, hintDecisionKey]);
 
   const toggleSound = useCallback(() => {
     const next = !soundOn;
@@ -2230,6 +2310,9 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     ? Math.round(runDecisionStats.scoreTotal / runDecisionStats.count)
     : "—";
   const handReview = review.filter((item) => item.hand === game.handNo);
+  const reportHintCount = mode === "per_hand"
+    ? handReview.filter((item) => item.hintUsed).length
+    : hintUseCount;
   const handScore = handReview.length ? Math.round(handReview.reduce((sum, item) => sum + item.score, 0) / handReview.length) : "—";
   const reviewUnlocked = historyReviewUnlocked;
   const reportReview = [...(mode === "per_hand" ? handReview : review)].reverse();
@@ -2294,14 +2377,16 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
             <span>{soundOn ? "♪" : "—"}</span><b>音效</b><em>{soundOn ? "ON" : "OFF"}</em>
           </button>
           <button
-            className={`training-toggle ${training && !isReviewRun ? "on" : ""}`}
-            onClick={() => setTraining((value) => !value)}
-            disabled={isReviewRun}
-            title={mode === "session"
-              ? game.presetKey === "squid" ? "鱿鱼整局在 9 条发完后统一点评" : "整局模式在第 20 手后统一点评"
-              : mode === "endless" ? "无尽对局在你主动结束后统一点评" : undefined}
+            className={`training-toggle ${training ? "on" : ""}`}
+            type="button"
+            onClick={() => {
+              if (training) setRevealedHintKey(null);
+              setTraining((value) => !value);
+            }}
+            aria-pressed={training}
+            title={training ? "关闭按需 AI 提示" : "开启按需 AI 提示；完整复盘与对手画像仍在结束后解锁"}
           >
-            <span>{isReviewRun ? "赛后点评" : "训练提示"}</span><b>{isReviewRun ? "LOCK" : training ? "ON" : "OFF"}</b>
+            <span>AI 提示</span><b>{training ? "ON" : "OFF"}</b>
           </button>
           <button className="icon-button" aria-label="查看德州扑克规则" title="德州扑克规则" onClick={() => setRulesOpen(true)}>?</button>
         </div>
@@ -2500,11 +2585,11 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                 <div className="lock-orbit">◇</div>
                 <span>SESSION REVIEW LOCKED</span>
                 <h3>{mode === "endless"
-                  ? "答案留到你主动结束之后"
-                  : game.presetKey === "squid" ? "答案留到 9 条鱿鱼发完之后" : "答案留到第 20 手之后"}</h3>
+                  ? "完整复盘留到你主动结束之后"
+                  : game.presetKey === "squid" ? "完整复盘留到 9 条鱿鱼发完之后" : "完整复盘留到第 20 手之后"}</h3>
                 <p>{mode === "endless"
-                  ? "无尽模式不显示实时胜率、推荐动作、决策分数和对手类型；电脑会持续学习你的公开行为，但具体画像只在结束后公开。"
-                  : "整局模式不显示实时胜率、推荐动作、决策分数和对手类型，避免答案影响你的下一次判断。"}</p>
+                  ? "无尽模式默认关闭提示；需要时可在右上角开启，并只查看当前节点。长期评分、完整决策路径和电脑画像仍在结束后公开。"
+                  : "整局模式默认关闭提示；卡住时可在右上角开启，并只查看当前节点。决策分数、完整路径和对手类型仍在整局结束后公开。"}</p>
                 {mode === "endless" ? (
                   <div className="session-progress-card endless-progress-card">
                     <div><b>{completedHands}</b><span>已完成</span></div>
@@ -2519,8 +2604,16 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                   </div>
                 )}
               </section>
+              <AiDecisionHint
+                compact
+                enabled={training}
+                isHumanTurn={isHumanTurn}
+                advice={advice}
+                revealed={hintRevealed}
+                onReveal={revealCurrentHint}
+              />
               <section className="public-state">
-                <div className="section-label"><span>公开牌局状态</span><small>不含策略提示</small></div>
+                <div className="section-label"><span>公开牌局状态</span><small>提示需主动查看</small></div>
                 <div className="metric-grid">
                   <div><span>当前底池</span><strong>{committedPot(game)}</strong></div>
                   <div><span>你的筹码</span><strong>{human.stack}</strong></div>
@@ -2554,20 +2647,17 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                   : "等待你的行动点后，系统才会生成不读取电脑暗牌的范围估算。"}</p>
               </section>
 
-              <section className={`coach-callout ${training && isHumanTurn ? "visible" : "muted"}`}>
-                <div className="coach-icon">◆</div>
-                <div>
-                  <span>近似 GTO 建议</span>
-                  <h3>{training && isHumanTurn && advice ? `优先考虑 · ${advice.recommendedLabel}` : training ? "等待你的行动点" : "训练提示已关闭"}</h3>
-                  <p>{training && isHumanTurn && advice
-                    ? `${advice.mix}。${advice.sizingMix ? `进入加注分支后的尺寸混合：${advice.sizingMix}。` : ""}${advice.note}`
-                    : training ? "AI 行动结束后，这里会给出范围、赔率、动作频率与加注尺寸参考。" : "关闭提示时仍会记录你的决策，方便牌后复盘。"}</p>
-                </div>
-              </section>
+              <AiDecisionHint
+                enabled={training}
+                isHumanTurn={isHumanTurn}
+                advice={advice}
+                revealed={hintRevealed}
+                onReveal={revealCurrentHint}
+              />
 
               {feedback ? (
                 <section className="last-decision">
-                  <div className="decision-top"><span>上一决策</span><b className={feedback.score >= 85 ? "good" : feedback.score >= 65 ? "ok" : "bad"}>{feedback.score} 分</b></div>
+                  <div className="decision-top"><span>上一决策{feedback.hintUsed ? " · 借助提示" : " · 独立完成"}</span><b className={feedback.score >= 85 ? "good" : feedback.score >= 65 ? "ok" : "bad"}>{feedback.score} 分</b></div>
                   <h3>{feedback.score >= 85 ? "线路漂亮，继续保持" : feedback.score >= 65 ? "可执行，但有更优选择" : "这里值得重点复盘"}</h3>
                   <p>你选择了{feedback.action}，属于{feedback.actionVerdict}（约 {Math.round(feedback.selectedFrequency * 100)}%）。参考混合：{feedback.mix}。{feedback.sizingMix ? `进入加注分支后的尺寸混合：${feedback.sizingMix}。` : ""}{feedback.sizeVerdict ? `${feedback.sizeVerdict}。` : ""}{feedback.note}</p>
                   <p className="range-note">来源：{feedback.strategySource}。分数表示与当前公开策略频率的匹配程度，不是求解器计算的 EV 损失。</p>
@@ -2595,7 +2685,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                   : mode === "endless" ? "完成本手后可主动结束并生成复盘" : "本手尚未结束"}</h3>
                 <p>{showDecisionPending
                   ? "完成本手的展示决策后再生成报告，避免复盘信息影响你的选择。"
-                  : isReviewRun ? mode === "endless" ? "继续对局，或在一手完整结算后点击“结束无尽局并复盘”。中途不公开答案、分数和对手类型。" : "整局结束后一次生成完整报告，不显示中途答案、分数和对手类型。"
+                  : isReviewRun ? mode === "endless" ? "继续对局，或在一手完整结算后点击“结束无尽局并复盘”。牌桌可按需查看当前提示；完整路径、分数和对手类型仍在结束后公开。" : "整局结束后一次生成完整报告；牌桌可按需查看当前提示，但不会提前公开完整路径、分数和对手类型。"
                   : "牌局结束后会自动生成这手牌的决策点评。"}</p>
                 <button onClick={() => setShowLog(false)}>回到牌桌</button>
               </section>
@@ -2609,7 +2699,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                     : mode === "endless" ? "无尽对局报告已生成" : "本手复盘已生成"}</span>
                   <h3>{TABLE_PRESETS[game.presetKey].shortLabel} · {isReviewRun ? `${completedHands} 手 · ${runDecisionStats.count} 个决策节点` : `第 ${game.handNo} 手 · ${STREET_LABELS[game.street]}`}</h3>
                 </div>
-                <strong>{reportScore}<small>{reportReview.length ? "策略匹配度" : "暂无决策"}</small></strong>
+                <strong>{reportScore}<small>{reportReview.length ? reportHintCount ? `策略匹配度 · 提示 ${reportHintCount}` : "策略匹配度 · 独立" : "暂无决策"}</small></strong>
               </div>
 
               {isReviewRun && (
@@ -2625,6 +2715,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                     <div><span>AI 眼中的风格</span><strong>{imageLabel(heroImage.aggressive, "偏被动", "均衡", "偏激进")}</strong></div>
                     <div><span>AI 眼中的欺骗性</span><strong>{imageLabel(heroImage.deceptive, "偏直白", "均衡", "难预测")}</strong></div>
                     <div><span>画像样本</span><strong>{heroImage.observations} 次</strong></div>
+                    <div><span>使用 AI 提示</span><strong>{hintUseCount} 次</strong></div>
                   </div>
                   <SquidScoreboard game={game} report />
                   <div className="session-hand-list">
@@ -2632,7 +2723,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                     {[...sessionResults].sort((a, b) => a.hand - b.hand).map((item) => (
                       <div key={item.hand}>
                         <span>{String(item.hand).padStart(2, "0")}</span>
-                        <p><b>{item.heroCards}</b><small>{item.result} · 桌面 {item.heroStack} / 投入 {item.heroCashInvested} / 净 {item.heroNet >= 0 ? "+" : ""}{item.heroNet}</small></p>
+                        <p><b>{item.heroCards}</b><small>{item.result} · 桌面 {item.heroStack} / 投入 {item.heroCashInvested} / 净 {item.heroNet >= 0 ? "+" : ""}{item.heroNet}{item.assistedDecisions ? ` · 提示 ${item.assistedDecisions}` : " · 独立"}</small></p>
                         <em>{item.score ?? "—"}<small>{item.decisions ? "分" : "无决策"}</small></em>
                       </div>
                     ))}
@@ -2652,7 +2743,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                     <div>
                       <b>{isReviewRun ? `第 ${item.hand} 手 · ` : ""}{item.street} · 手牌 {item.cards}</b>
                       <p>公共牌 {item.board} · 底池 {item.pot} · 面对 {item.toCall}</p>
-                      <p>你的选择：{item.action}（{item.actionVerdict}，约 {Math.round(item.selectedFrequency * 100)}%）；最高频线路：{item.recommended}</p>
+                      <p>你的选择：{item.action}（{item.actionVerdict}，约 {Math.round(item.selectedFrequency * 100)}%）；最高频线路：{item.recommended}；{item.hintUsed ? "本节点借助了 AI 提示" : "本节点独立完成"}</p>
                       <p>参考混合：{item.mix}</p>
                       <p>本手起始有效 {item.startingDepthBb.toFixed(1)} BB · 当前后手：你 {item.heroStackBb.toFixed(1)} BB / {item.opponentName} {item.opponentStackBb.toFixed(1)} BB · 本节点有效 {item.effectiveStackBb.toFixed(1)} BB{item.maxContestableBb > item.effectiveStackBb + 0.05 ? ` · 多人加注有效上限 ${item.maxContestableBb.toFixed(1)} BB` : ""}</p>
                       {item.sizingMix && <p>进入加注分支后的尺寸混合：{item.sizingMix}{item.sizeVerdict ? `；${item.sizeVerdict}` : ""}</p>}

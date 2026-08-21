@@ -2108,6 +2108,108 @@
   color: var(--mp-gold);
 }
 
+.navHintToggle {
+  min-height: 32px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(99, 196, 156, 0.18);
+  border-radius: 5px;
+  color: #9ea49f;
+  background: rgba(99, 196, 156, 0.035);
+  cursor: pointer;
+}
+
+.navHintToggle span {
+  color: var(--mp-green);
+  font: 11px/1 Georgia, serif;
+}
+
+.navHintToggle b {
+  font-size: 8px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+
+.navHintToggleOn {
+  border-color: rgba(99, 196, 156, 0.42);
+  color: #d8eee4;
+  background: rgba(99, 196, 156, 0.1);
+}
+
+.tableHintPanel {
+  width: min(360px, calc(100vw - 32px));
+  padding: 17px 18px 16px;
+  position: fixed;
+  z-index: 80;
+  top: 82px;
+  right: 20px;
+  border: 1px solid rgba(99, 196, 156, 0.24);
+  border-radius: 9px;
+  background: linear-gradient(145deg, rgba(24, 30, 27, 0.985), rgba(13, 17, 15, 0.985));
+  box-shadow: 0 22px 55px rgba(0, 0, 0, 0.46);
+  backdrop-filter: blur(16px);
+}
+
+.tableHintHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tableHintHeading > span {
+  color: var(--mp-green);
+  font-size: 7px;
+  letter-spacing: 0.16em;
+}
+
+.tableHintHeading > button {
+  width: 25px;
+  height: 25px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 50%;
+  color: #8c918c;
+  background: transparent;
+  cursor: pointer;
+}
+
+.tableHintPanel > strong {
+  display: block;
+  margin-top: 10px;
+  color: #e6e1d7;
+  font: 500 15px/1.35 Georgia, "Songti SC", serif;
+}
+
+.tableHintPanel > p {
+  margin: 8px 0 0;
+  color: #919690;
+  font-size: 9px;
+  line-height: 1.65;
+}
+
+.tableHintPanel ul {
+  margin: 12px 0 0;
+  padding: 11px 12px 11px 25px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 6px;
+  color: #b4b6af;
+  background: rgba(255, 255, 255, 0.018);
+  font-size: 8px;
+  line-height: 1.7;
+}
+
+.tableHintPanel > small {
+  display: block;
+  margin-top: 11px;
+  color: #646a65;
+  font-size: 7px;
+  line-height: 1.55;
+}
+
 .navHelpButton {
   width: 32px;
   height: 32px;
@@ -3612,6 +3714,24 @@
   }
 }
 
+@media (max-width: 760px) {
+  .navSoundToggle,
+  .navHintToggle,
+  .navChatToggle {
+    min-width: 32px;
+    padding: 0 7px;
+    justify-content: center;
+  }
+
+  .navSoundToggle b,
+  .navSoundToggle small,
+  .navHintToggle b,
+  .navChatToggle b,
+  .multiplayerPage .navRight > strong {
+    display: none;
+  }
+}
+
 @media (max-width: 600px) {
   .navSoundToggle {
     min-width: 32px;
@@ -3622,6 +3742,23 @@
   .navSoundToggle b,
   .navSoundToggle small {
     display: none;
+  }
+
+  .navHintToggle {
+    min-width: 32px;
+    padding: 0 8px;
+    justify-content: center;
+  }
+
+  .navHintToggle b {
+    display: none;
+  }
+
+  .tableHintPanel {
+    top: 72px;
+    right: 10px;
+    left: 10px;
+    width: auto;
   }
 
   .navChatToggle {

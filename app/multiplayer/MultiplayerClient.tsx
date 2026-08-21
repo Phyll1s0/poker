@@ -1396,6 +1396,7 @@ export default function MultiplayerClient({
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [chatError, setChatError] = useState<string | null>(null);
   const [rulesOpen, setRulesOpen] = useState(false);
+  const [tableHintOpen, setTableHintOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -1530,6 +1531,7 @@ export default function MultiplayerClient({
   const openChat = useCallback(() => {
     chatOpenRef.current = true;
     chatPinnedRef.current = true;
+    setTableHintOpen(false);
     setChatOpen(true);
     setUnreadChatCount(0);
   }, []);
@@ -2120,6 +2122,67 @@ export default function MultiplayerClient({
       && snapshot.table.viewerSeat !== null
       && pendingShowSeat === snapshot.table.viewerSeat,
   );
+  const tableHint = (() => {
+    if (!snapshot) {
+      return {
+        eyebrow: "LOBBY GUIDE",
+        title: "先取一个昵称，再创建或加入房间",
+        summary: "创建房间可以设置现金局/单桌淘汰、起始筹码和行动时间；加入房间只需要邀请码。",
+        details: ["邀请码可以直接粘贴", "进入房间后先准备，由房主开始牌局"],
+      };
+    }
+    if (phase === "finished") {
+      return {
+        eyebrow: "SESSION COMPLETE",
+        title: "整局已经结算",
+        summary: "现在可以查看所有人的本局分析和最近牌谱；完整底牌只向本局参与者开放。",
+        details: [isOwner ? "房主可以重新开局" : "等待房主重新开局", "离开房间不会删除已经生成的本局总结"],
+      };
+    }
+    if (phase === "lobby" || !game) {
+      return {
+        eyebrow: "ROOM GUIDE",
+        title: "等待全桌准备",
+        summary: `${tableModeLabel(snapshot.table.tableMode)} · 起始 ${tableDepthBb}BB · 每次行动 ${snapshot.table.actionTimeMs / 1_000}s。`,
+        details: [
+          "把顶栏邀请码复制给朋友",
+          isOwner ? "至少两人入座后，房主可以开始牌局" : "点“我已准备”，等待房主开局",
+        ],
+      };
+    }
+    if (phase === "showdown" || phase === "between_hands") {
+      return {
+        eyebrow: "BETWEEN HANDS",
+        title: mustChooseShow ? "请在倒计时内选择亮牌或盖牌" : "等待下一手",
+        summary: `亮牌选择和下一手共用同一个 ${nextHandCountdown ?? "—"}s 倒计时，不会额外拖长等待。`,
+        details: ["赢家未选择时会自动盖牌", "现金局筹码不足时会在下一手按房间规则补回"],
+      };
+    }
+    if (isMyTurn && legal) {
+      const actionLine = legal.check
+        ? "当前跟注额为 0，可以选择过牌；其他按钮仍严格按服务端合法动作显示。"
+        : legal.callAmount != null
+          ? `跟注需要再投入 ${legal.callAmount} 筹码。`
+          : "当前没有过牌或跟注路线。";
+      const raiseLine = canRaise && legal.minRaiseTo != null && legal.maxRaiseTo != null
+        ? legal.raiseAllInOnly
+          ? `当前只允许不足额全下到 ${legal.maxRaiseTo}。`
+          : `${raiseVerb}框填写的是本街累计总额，合法范围 ${legal.minRaiseTo}–${legal.maxRaiseTo}。`
+        : "当前节点没有合法加注路线。";
+      return {
+        eyebrow: "YOUR TURN",
+        title: `${STREET_LABELS[game.street]} · 还剩 ${actionSecondsLeft ?? "—"}s`,
+        summary: actionLine,
+        details: [raiseLine, selfPlayer?.timeBankMs ? `时间库还剩 ${Math.ceil(selfPlayer.timeBankMs / 1_000)}s，可主动使用时间牌。` : "当前没有可用时间牌。"],
+      };
+    }
+    return {
+      eyebrow: "TABLE STATUS",
+      title: `等待 ${actingPlayer?.handle ?? "牌桌"} 行动`,
+      summary: "你现在不需要操作；可以观察公开行动、打开聊天，或查看已经解锁的牌谱。",
+      details: ["牌桌会自动同步合法动作和倒计时", "朋友局提示只解释操作，不提供胜率或最佳策略"],
+    };
+  })();
 
   const temporarilyLeaveTable = () => {
     roomViewGeneration.current += 1;
@@ -2180,17 +2243,47 @@ export default function MultiplayerClient({
             <span>{soundOn ? "♪" : "—"}</span><b>音效</b><small>{soundOn ? "ON" : "OFF"}</small>
           </button>
           <button
+            className={`${styles.navHintToggle} ${tableHintOpen ? styles.navHintToggleOn : ""}`}
+            type="button"
+            onClick={() => {
+              if (!tableHintOpen) closeChat();
+              setTableHintOpen((open) => !open);
+            }}
+            aria-expanded={tableHintOpen}
+            aria-controls="multiplayer-table-hint"
+            aria-label={tableHintOpen ? "关闭牌桌操作提示" : "查看牌桌操作提示"}
+          >
+            <span>◇</span><b>提示</b>
+          </button>
+          <button
             className={styles.navHelpButton}
             type="button"
             aria-label="查看德州扑克规则"
             title="德州扑克规则"
-            onClick={() => setRulesOpen(true)}
+            onClick={() => {
+              closeChat();
+              setTableHintOpen(false);
+              setRulesOpen(true);
+            }}
           >?</button>
           <span>牌桌身份</span>
           <strong>{account?.handle ?? displayName}</strong>
           <a className={styles.signOut} href={signOutHref} onClick={onSignOut}>{signOutLabel}</a>
         </div>
       </nav>
+
+      {tableHintOpen && (
+        <aside className={styles.tableHintPanel} id="multiplayer-table-hint" aria-live="polite">
+          <div className={styles.tableHintHeading}>
+            <span>{tableHint.eyebrow}</span>
+            <button type="button" onClick={() => setTableHintOpen(false)} aria-label="关闭牌桌操作提示">×</button>
+          </div>
+          <strong>{tableHint.title}</strong>
+          <p>{tableHint.summary}</p>
+          <ul>{tableHint.details.map((detail) => <li key={detail}>{detail}</li>)}</ul>
+          <small>公平说明：朋友局只解释公开规则、合法金额和倒计时，不提供胜率、对手范围或推荐动作。</small>
+        </aside>
+      )}
 
       <main className={`${styles.main} ${snapshot ? styles.tableMain : ""}`}>
         {error && <p className={styles.errorBox} role="alert">{error}</p>}
