@@ -22,6 +22,7 @@ import {
   preflopStrength,
 } from "../lib/poker-evaluator";
 import { formatPokerFrequency, formatPokerFrequencyMix } from "../lib/poker-frequency";
+import { encodePreflopHandClass } from "../lib/poker-preflop";
 import {
   choosePokerPolicyAction,
   evaluatePokerPolicy,
@@ -263,6 +264,10 @@ const PREFLOP_SCENARIO_LABELS = {
   "vs-three-bet": "面对 3-bet",
   "vs-four-bet": "面对 4-bet 及以上",
 } as const;
+
+function preflopRaiseActionLabel(raiseCount: number) {
+  return raiseCount <= 0 ? "开池" : `${raiseCount + 2}-bet`;
+}
 
 function makeDeck(): Card[] {
   return SUITS.flatMap((suit) => RANKS.map((rank) => ({ rank, suit })));
@@ -1067,13 +1072,28 @@ function getAdvice(game: Game, player: Player, equity: number) {
     .reduce((best, candidate) => candidate[1] > best[1] ? candidate : best)[0];
   let note: string;
   if (game.street === "preflop") {
+    const handFeatures = preflopHandFeatures(player.hole)!;
+    const handClass = encodePreflopHandClass(
+      handFeatures.highRank,
+      handFeatures.lowRank,
+      handFeatures.suited,
+    );
+    const positionNode = policyInput.preflopOpenerPosition
+      ? `${policyPlan.preflopPosition} 对 ${policyInput.preflopOpenerPosition}`
+      : policyPlan.preflopPosition;
+    const facingSize = game.raiseCount > 0
+      ? ` · 面对 ${(game.highestBet / BIG_BLIND).toFixed(1)} BB`
+      : "";
     const rangePercent = Math.round(policyPlan.preflopTargetRange * 100);
     const enterPercent = Math.round(policyPlan.preflopEnterFrequency * 100);
-    note = `${policyPlan.preflopPosition} ${PREFLOP_SCENARIO_LABELS[policyPlan.preflopScenario]}节点：先按位置、前序行动、加注尺度和有效筹码构建约 ${rangePercent}% 的继续范围；这手牌当前进入范围的混合频率约 ${enterPercent}%。`;
-    if (action === "raise") note += ` 主路线为主动加注，尺寸按当前 ${game.raiseCount === 0 ? "开池" : game.raiseCount === 1 ? "3-bet" : game.raiseCount === 2 ? "4-bet" : "再加注"}节点计算。`;
+    note = `${handClass} · ${positionNode} · ${PREFLOP_SCENARIO_LABELS[policyPlan.preflopScenario]}${facingSize}：先按位置、前序行动、加注尺度和有效筹码构建约 ${rangePercent}% 的继续范围；这手牌当前进入范围的混合频率约 ${enterPercent}%。`;
+    if (action === "raise") note += ` 主路线为主动加注，尺寸按当前 ${preflopRaiseActionLabel(game.raiseCount)} 节点计算。`;
     else if (action === "call") note += ` 主路线为跟注，保留强牌和部分可实现权益的牌，避免把继续范围全部暴露为加注。`;
     else if (action === "check") note += ` 当前拥有免费过牌权，弱牌无需为了“主动”而制造不必要底池。`;
     else note += ` 当前牌型位于该位置与行动序列的范围外，弃牌来自翻前范围，而不是把翻后胜率公式硬套进来。混合策略既包含混频节点，也允许明显劣势组合采用纯线路；这里使用的是近似基准表，不冒充求解器精确解。`;
+    if (game.raiseCount >= 2) {
+      note += ` 当前若继续加注将是 ${preflopRaiseActionLabel(game.raiseCount)}，不是面对开池的 3-bet；不要把两个节点的 AT 频率直接比较。`;
+    }
   } else if (toCall > 0) {
     const directPrice = Math.round(potOdds * 100);
     const realizationPrice = Math.round(policyPlan.realizationThreshold * 100);
@@ -1145,7 +1165,10 @@ function getAdvice(game: Game, player: Player, equity: number) {
   if (policyInput.maxContestableBb > policyInput.effectiveStackBb + 0.05) {
     note += ` 多人底池中仍有更深对手，加注的有效上限按 ${policyInput.maxContestableBb.toFixed(1)} BB 计算。`;
   }
-  const labels: Record<ActionKind, string> = { fold: "弃牌", check: "过牌", call: "跟注", raise: "加注" };
+  const raiseActionLabel = game.street === "preflop"
+    ? preflopRaiseActionLabel(game.raiseCount)
+    : "加注";
+  const labels: Record<ActionKind, string> = { fold: "弃牌", check: "过牌", call: "跟注", raise: raiseActionLabel };
   const mix = formatPokerFrequencyMix(
     (Object.entries(frequencies) as [ActionKind, number][])
       .map(([kind, frequency]) => ({ label: labels[kind], frequency })),
@@ -1162,7 +1185,7 @@ function getAdvice(game: Game, player: Player, equity: number) {
   const recommendedBetFraction = preferredSizingRoute?.fraction ?? null;
   const recommendedLabel = action === "raise" && preferredSizingRoute
     ? formatPokerSizingRoute(sizingContext, preferredSizingRoute)
-    : ACTION_LABELS[action];
+    : action === "raise" ? raiseActionLabel : ACTION_LABELS[action];
   return {
     action,
     note,

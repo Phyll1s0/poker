@@ -138,6 +138,9 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /mode === "endless" \? 1\.5 : 0\.85/);
   assert.match(page, /heroActive: !game\.players\[0\]\.folded/);
   assert.match(page, /formatPokerFrequencyMix/);
+  assert.match(page, /encodePreflopHandClass/);
+  assert.match(page, /当前若继续加注将是/);
+  assert.match(page, /preflopRaiseActionLabel\(game\.raiseCount\)/);
   assert.match(page, /极低频路线/);
   assert.doesNotMatch(page, /items\.filter\(\(item\) => item\.frequency >= 0\.005\)/);
   assert.match(page, /pokerRunCanStartNextHand\(mode, sessionEnded/);
@@ -395,6 +398,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerCoach, /createPublicOpponentRanges/);
   assert.match(multiplayerCoach, /公开信息近似模型/);
   assert.match(multiplayerCoach, /不读取任何对手暗牌/);
+  assert.match(multiplayerCoach, /preflopOpenerPosition: lastRaise/);
+  assert.match(multiplayerCoach, /const inPosition = heroActsLastPostflop/);
   assert.doesNotMatch(multiplayerCoach, /\.filter\(\(\[, frequency\]\) => frequency >= 0\.005\)/);
   assert.match(multiplayerAudio, /MULTIPLAYER_AUDIO_EVENT_MAX_AGE_MS = 5_000/);
   assert.match(multiplayerAudio, /event\.seq > previous\.actionSeq/);
@@ -436,7 +441,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(selfPlay, /pokerCallClosesContestableLayers/);
   assert.match(selfPlay, /pokerContestablePotAtDecision/);
   assert.match(serviceWorker, /key\.startsWith\("rangecraft-"\)/);
-  assert.match(serviceWorker, /rangecraft-v7/);
+  assert.match(serviceWorker, /rangecraft-v8/);
   assert.match(serviceWorker, /request\.destination === "script" \|\| request\.destination === "style"/);
   assert.match(page, /updateViaCache: "none"/);
   assert.match(page, /controllerchange/);

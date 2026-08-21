@@ -402,6 +402,62 @@ test("preserves charted ace-five suited bluff branches", () => {
   assert.ok(facingThreeBet.actionFrequencies.raise >= 0.1);
 });
 
+test("gives ace-ten a position-aware three-bet branch without widening early defense", () => {
+  const aceTenOffsuit = { highRank: 14, lowRank: 10, pair: false, suited: false, gap: 4 };
+  const aceTenSuited = { ...aceTenOffsuit, suited: true };
+  const facingOpen = {
+    ...baseSpot,
+    profile: { aggression: 0.73, looseness: 0.3, bluff: 0.13 },
+    street: "preflop",
+    preflopRaiseCount: 1,
+    preflopPreviouslyRaised: false,
+    preflopLimpers: 0,
+    preflopColdCallers: 0,
+    pot: 40,
+    highestBet: 25,
+    minRaise: 15,
+    effectiveStackBb: 99,
+    startingDepthBb: 100,
+  };
+  const smallBlindOffsuit = evaluatePokerPolicy({
+    ...facingOpen,
+    preflopPosition: "SB",
+    preflopOpenerPosition: "BTN",
+    preflopHand: aceTenOffsuit,
+    playerBet: 5,
+    toCall: 20,
+    playerStack: 995,
+    inPosition: false,
+  });
+  const buttonSuited = evaluatePokerPolicy({
+    ...facingOpen,
+    preflopPosition: "BTN",
+    preflopOpenerPosition: "CO",
+    preflopHand: aceTenSuited,
+    playerBet: 0,
+    toCall: 25,
+    playerStack: 1_000,
+    inPosition: true,
+  });
+  const hijackOffsuit = evaluatePokerPolicy({
+    ...facingOpen,
+    preflopPosition: "HJ",
+    preflopOpenerPosition: "UTG",
+    preflopHand: aceTenOffsuit,
+    playerBet: 0,
+    toCall: 25,
+    playerStack: 1_000,
+    inPosition: true,
+  });
+
+  assert.equal(smallBlindOffsuit.preflopScenario, "vs-open");
+  assert.ok(smallBlindOffsuit.actionFrequencies.raise >= 0.4, JSON.stringify(smallBlindOffsuit.actionFrequencies));
+  assert.ok(smallBlindOffsuit.actionFrequencies.raise > smallBlindOffsuit.actionFrequencies.call);
+  assert.ok(buttonSuited.actionFrequencies.raise >= 0.4, JSON.stringify(buttonSuited.actionFrequencies));
+  assert.ok(hijackOffsuit.actionFrequencies.fold >= 0.8, JSON.stringify(hijackOffsuit.actionFrequencies));
+  assert.ok(hijackOffsuit.actionFrequencies.raise <= 0.04);
+});
+
 test("builds a separate four-bet and shallow-jam branch against a three-bet", () => {
   const aces = {
     highRank: 14,

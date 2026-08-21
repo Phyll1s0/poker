@@ -17,6 +17,7 @@ import {
   type PokerPolicyActionKind,
   type PokerPreflopPosition,
 } from "./poker-policy.ts";
+import { encodePreflopHandClass } from "./poker-preflop.ts";
 import {
   createPublicOpponentRanges,
   type PublicBettingAction,
@@ -434,9 +435,8 @@ export function analyzeMultiplayerDecision(input: MultiplayerAiCoachInput): Mult
     ? currentStreetActions.slice(firstRaiseIndex + 1).filter((action) => action.kind === "call").length
     : 0;
   const lastRaise = raises.at(-1);
-  const inPosition = input.street === "preflop"
-    ? heroPosition === "BTN" || heroPosition === "CO" || heroPosition === "BB"
-    : heroActsLastPostflop(hero.seat, input.dealerSeat, input.players);
+  const inPosition = heroActsLastPostflop(hero.seat, input.dealerSeat, input.players);
+  const heroPreflopHand = preflopHandFeatures(hole);
   const minimumRaiseIncrement = input.legalActions.minRaiseTo === null
     ? input.bigBlind
     : Math.max(input.bigBlind, input.legalActions.minRaiseTo - input.currentBet);
@@ -469,11 +469,11 @@ export function analyzeMultiplayerDecision(input: MultiplayerAiCoachInput): Mult
     preflopPositionFactor: POSITION_FACTORS[heroPosition],
     preflopRaiseCount: input.street === "preflop" ? raises.length : 0,
     preflopPosition: heroPosition,
-    preflopOpenerPosition: raises[0] ? positionForSeat(raises[0].playerId) : undefined,
+    preflopOpenerPosition: lastRaise ? positionForSeat(lastRaise.playerId) : undefined,
     preflopLimpers,
     preflopColdCallers,
     preflopPreviouslyRaised: raises.some((action) => action.playerId === hero.seat),
-    preflopHand: preflopHandFeatures(hole),
+    preflopHand: heroPreflopHand,
     boardWetness: texture.wetness,
     boardPairing: texture.pairedness,
     boardHighCard: texture.highCard,
@@ -523,8 +523,11 @@ export function analyzeMultiplayerDecision(input: MultiplayerAiCoachInput): Mult
   sizing.forEach((route) => { route.frequency /= Math.max(1e-9, sizingTotal); });
   const equityPercent = Math.round(equity * 100);
   const pricePercent = Math.round(potOdds * 100);
+  const preflopHandClass = heroPreflopHand
+    ? encodePreflopHandClass(heroPreflopHand.highRank, heroPreflopHand.lowRank, heroPreflopHand.suited)
+    : null;
   const summary = input.street === "preflop"
-    ? `${heroPosition} 翻前节点：结合起始有效筹码、公开加注线和行动尺度，当前主路线为${ACTION_LABELS[recommendedAction]}。`
+    ? `${preflopHandClass ?? "翻前手牌"} · ${heroPosition} 翻前节点：结合起始有效筹码、公开加注线和行动尺度，当前主路线为${ACTION_LABELS[recommendedAction]}。`
     : decisionPot.callCost > 0
       ? `对公开行动加权范围的估算胜率约 ${equityPercent}%，直接底池赔率为 ${pricePercent}%；当前主路线为${ACTION_LABELS[recommendedAction]}。`
       : `当前没有直接跟注价格；结合范围胜率、牌面纹理和 SPR，主路线为${ACTION_LABELS[recommendedAction]}。`;

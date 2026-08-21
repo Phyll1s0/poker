@@ -246,6 +246,53 @@ test("maps heads-up and full six-max occupied seats to poker positions", () => {
   );
 });
 
+test("uses actual postflop position for blind three-bet sizing", () => {
+  const analysis = analyzeMultiplayerDecision({
+    decisionId: "hand-20:preflop:1:hero",
+    heroAccountId: "hero",
+    heroCards: [
+      { rank: "A", suit: "s" },
+      { rank: "A", suit: "h" },
+    ],
+    board: [],
+    street: "preflop",
+    pot: 40,
+    currentBet: 25,
+    bigBlind: 10,
+    startingStack: 1_000,
+    dealerSeat: 5,
+    players: [
+      player("hero", 1, { stack: 990, committed: 10, streetCommitted: 10 }),
+      player("button", 5, { stack: 975, committed: 25, streetCommitted: 25 }),
+    ],
+    recentActions: [{
+      seq: 1,
+      accountId: "button",
+      seat: 5,
+      street: "preflop",
+      action: "raise",
+      amount: 25,
+      toAmount: 25,
+      raiseTo: 25,
+      potAfter: 40,
+      stackAfter: 975,
+    }],
+    legalActions: {
+      fold: true,
+      check: false,
+      callAmount: 15,
+      minRaiseTo: 40,
+      maxRaiseTo: 1_000,
+      raiseAllInOnly: false,
+    },
+    iterations: 80,
+  });
+
+  assert.equal(analysis.position, "BB");
+  assert.equal(analysis.inPosition, false, "BB 对 BTN 翻后应当无位置");
+  assert.ok(analysis.sizing.some(({ target }) => target >= 100), JSON.stringify(analysis.sizing));
+});
+
 test("ignores all-in seats when deciding who acts last postflop", () => {
   const analysis = analyzeMultiplayerDecision({
     ...checkedFlopInput(),

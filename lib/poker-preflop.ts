@@ -391,6 +391,46 @@ const AGGRESSOR_POSITION_FACTOR: Record<PreflopPosition, number> = {
   BB: 0.9,
 };
 
+// The aggregate vs-open chart sets total continue ranges, but its original
+// call/raise split is otherwise nearly identical in every position pair.
+// These late-position floors reshape only AT's conditional 3-bet share; they
+// never add continue frequency to a hand that should fold more often.
+type PositionPair = `${PreflopPosition}:${PreflopPosition}`;
+
+const ACE_TEN_VS_OPEN_RAISE_SHARE_FLOORS: Record<
+  "ATs" | "ATo",
+  Readonly<Partial<Record<PositionPair, number>>>
+> = {
+  ATs: {
+    "BTN:HJ": 0.35,
+    "BTN:CO": 0.42,
+    "SB:CO": 0.58,
+    "SB:BTN": 0.72,
+    "BB:CO": 0.27,
+    "BB:BTN": 0.3,
+    "BB:SB": 0.32,
+  },
+  ATo: {
+    "BTN:HJ": 0.2,
+    "BTN:CO": 0.3,
+    "SB:CO": 0.5,
+    "SB:BTN": 0.65,
+    "BB:CO": 0.16,
+    "BB:BTN": 0.2,
+    "BB:SB": 0.23,
+  },
+};
+
+function aceTenVsOpenRaiseShareFloor(query: PreflopStrategyQuery, depthShift: number) {
+  if (query.scenario !== "vs-open" || (query.hand !== "ATs" && query.hand !== "ATo")) return 0;
+  const positionPair: PositionPair = `${query.heroPosition}:${query.aggressorPosition ?? "CO"}`;
+  const standardFloor = ACE_TEN_VS_OPEN_RAISE_SHARE_FLOORS[query.hand][positionPair] ?? 0;
+  if (standardFloor <= 0) return 0;
+  const deepPenalty = Math.max(0, depthShift) * (query.hand === "ATo" ? 0.18 : 0.1);
+  const shallowBoost = Math.max(0, -depthShift) * (query.hand === "ATo" ? 0.08 : 0.04);
+  return clamp(standardFloor * (1 - deepPenalty + shallowBoost), 0, 0.9);
+}
+
 function adjustedReferenceFrequencies(query: PreflopStrategyQuery, base: PreflopFrequencies) {
   const handTraits = traits(query.hand);
   const depth = clamp(query.effectiveStackBb ?? 100, 10, 400);
@@ -417,6 +457,7 @@ function adjustedReferenceFrequencies(query: PreflopStrategyQuery, base: Preflop
   }
   if (query.heroPosition === "SB") raiseShare = clamp(raiseShare * 1.18, 0, 0.98);
   if (query.heroPosition === "BB") raiseShare = clamp(raiseShare * 0.78, 0, 0.98);
+  raiseShare = Math.max(raiseShare, aceTenVsOpenRaiseShareFloor(query, depthShift));
   // Do not impose a fixed floor on KK/QQ/AK: facing-size and effective-stack
   // pressure must still be allowed to move those hands at extreme nodes.
   // AA is the sole unconditional anchor below.

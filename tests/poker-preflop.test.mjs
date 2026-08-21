@@ -89,6 +89,47 @@ test("ace-five suited retains both three-bet and four-bet bluff branches", () =>
   assert.ok(fourBet.raiseFrequency >= 0.1, JSON.stringify(fourBet));
 });
 
+test("ace-ten shifts calls into three-bets only in late-position steal nodes", () => {
+  const strategy = (hand, heroPosition, aggressorPosition, effectiveStackBb = 100) => getPreflopStrategy({
+    hand,
+    scenario: "vs-open",
+    heroPosition,
+    aggressorPosition,
+    effectiveStackBb,
+    facingSizeBb: 2.5,
+  });
+
+  const earlyOffsuit = strategy("ATo", "HJ", "UTG");
+  const buttonOffsuit = strategy("ATo", "BTN", "CO");
+  const smallBlindOffsuit = strategy("ATo", "SB", "BTN");
+  const smallBlindSuited = strategy("ATs", "SB", "BTN");
+  const bigBlindSuited = strategy("ATs", "BB", "BTN");
+
+  assert.ok(earlyOffsuit.frequencies.fold >= 0.8, JSON.stringify(earlyOffsuit));
+  assert.ok(earlyOffsuit.raiseFrequency <= 0.04, JSON.stringify(earlyOffsuit));
+  assert.ok(buttonOffsuit.raiseFrequency >= 0.2, JSON.stringify(buttonOffsuit));
+  assert.ok(smallBlindOffsuit.raiseFrequency >= 0.4, JSON.stringify(smallBlindOffsuit));
+  assert.ok(smallBlindOffsuit.frequencies.raise > smallBlindOffsuit.frequencies.call);
+  assert.ok(smallBlindSuited.raiseFrequency >= 0.65, JSON.stringify(smallBlindSuited));
+  assert.ok(bigBlindSuited.raiseFrequency >= 0.27, JSON.stringify(bigBlindSuited));
+
+  const shallow = strategy("ATo", "SB", "BTN", 40);
+  const standard = strategy("ATo", "SB", "BTN", 100);
+  const deep = strategy("ATo", "SB", "BTN", 200);
+  assert.ok(shallow.raiseFrequency > standard.raiseFrequency);
+  assert.ok(standard.raiseFrequency > deep.raiseFrequency);
+
+  const facingFourBet = getPreflopStrategy({
+    hand: "ATo",
+    scenario: "vs-four-bet",
+    heroPosition: "BTN",
+    aggressorPosition: "SB",
+    effectiveStackBb: 100,
+    facingSizeBb: 22,
+  });
+  assert.equal(facingFourBet.frequencies.fold, 1, "正常 3-bet 节点的调整不得污染面对 4-bet 的纯弃牌");
+});
+
 test("aces always remain a high-frequency value raise", () => {
   for (const scenario of ["rfi", "vs-open", "vs-three-bet", "vs-four-bet"]) {
     for (const effectiveStackBb of [20, 40, 100, 200, 400]) {
