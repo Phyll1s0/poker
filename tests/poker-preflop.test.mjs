@@ -14,6 +14,34 @@ function total(frequencies) {
   return Object.values(frequencies).reduce((sum, value) => sum + value, 0);
 }
 
+function rfiWeightedThreeBetResponse(heroPosition, aggressorPosition, facingSizeBb = 9) {
+  const weighted = { fold: 0, check: 0, call: 0, raise: 0 };
+  let openingWeight = 0;
+  for (const hand of PREFLOP_HAND_CLASSES) {
+    const combos = preflopComboCount(hand);
+    const open = getPreflopStrategy({
+      hand,
+      scenario: "rfi",
+      heroPosition,
+      effectiveStackBb: 100,
+    }).frequencies.raise;
+    const weight = combos * open;
+    openingWeight += weight;
+    const response = getPreflopStrategy({
+      hand,
+      scenario: "vs-three-bet",
+      heroPosition,
+      aggressorPosition,
+      effectiveStackBb: 100,
+      facingSizeBb,
+    }).frequencies;
+    for (const action of Object.keys(weighted)) weighted[action] += weight * response[action];
+  }
+  return Object.fromEntries(
+    Object.entries(weighted).map(([action, value]) => [action, value / openingWeight]),
+  );
+}
+
 test("encodes all 169 hand classes with the correct 1,326 combo weights", () => {
   assert.equal(PREFLOP_HAND_CLASSES.length, 169);
   assert.equal(new Set(PREFLOP_HAND_CLASSES).size, 169);
@@ -202,6 +230,85 @@ test("combo-weighted range summaries are normalized and position ordered", () =>
   assert.ok(cutoff.enterFrequency < button.enterFrequency);
   assert.ok(utg.enterFrequency > 0.12 && utg.enterFrequency < 0.24);
   assert.ok(button.enterFrequency > 0.4 && button.enterFrequency < 0.65);
+});
+
+test("button opening range does not massively over-fold to a standard small-blind three-bet", () => {
+  const standard = rfiWeightedThreeBetResponse("BTN", "SB", 9);
+  assert.ok(standard.fold >= 0.5 && standard.fold <= 0.62, JSON.stringify(standard));
+  assert.ok(standard.call >= 0.27 && standard.call <= 0.42, JSON.stringify(standard));
+  assert.ok(standard.raise >= 0.08 && standard.raise <= 0.16, JSON.stringify(standard));
+  assert.ok(standard.call > standard.raise, JSON.stringify(standard));
+  assert.ok(Math.abs(total(standard) - 1) < 1e-12);
+
+  const larger = rfiWeightedThreeBetResponse("BTN", "SB", 12);
+  assert.ok(larger.fold > standard.fold + 0.015, `${standard.fold} -> ${larger.fold}`);
+
+  const cutoffOutOfPosition = rfiWeightedThreeBetResponse("CO", "BTN", 9);
+  const conditionalFourBet = cutoffOutOfPosition.raise
+    / (cutoffOutOfPosition.call + cutoffOutOfPosition.raise);
+  assert.ok(
+    cutoffOutOfPosition.fold >= 0.5 && cutoffOutOfPosition.fold <= 0.62,
+    JSON.stringify(cutoffOutOfPosition),
+  );
+  assert.ok(
+    conditionalFourBet >= 0.3 && conditionalFourBet <= 0.48,
+    JSON.stringify(cutoffOutOfPosition),
+  );
+});
+
+test("an oversized three-bet shove uses a stack-off range instead of the 9BB defense tree", () => {
+  const shoved = rfiWeightedThreeBetResponse("BTN", "SB", 100);
+  assert.ok(shoved.call + shoved.raise >= 0.03, JSON.stringify(shoved));
+  assert.ok(shoved.call + shoved.raise <= 0.065, JSON.stringify(shoved));
+
+  const sizes = [9, 12, 25, 50, 100].map((size) => {
+    const response = rfiWeightedThreeBetResponse("BTN", "SB", size);
+    return response.call + response.raise;
+  });
+  for (let index = 1; index < sizes.length; index += 1) {
+    assert.ok(sizes[index] < sizes[index - 1], sizes.join(", "));
+  }
+  const belowBoundary = rfiWeightedThreeBetResponse("BTN", "SB", 11.99);
+  const aboveBoundary = rfiWeightedThreeBetResponse("BTN", "SB", 12.01);
+  assert.ok(
+    Math.abs(
+      belowBoundary.call + belowBoundary.raise - aboveBoundary.call - aboveBoundary.raise,
+    ) < 0.002,
+  );
+
+  const enter = (hand) => getPreflopStrategy({
+    hand,
+    scenario: "vs-three-bet",
+    heroPosition: "BTN",
+    aggressorPosition: "SB",
+    effectiveStackBb: 100,
+    facingSizeBb: 100,
+  }).enterFrequency;
+  assert.equal(enter("AA"), 1);
+  assert.ok(enter("KK") >= 0.95);
+  assert.ok(enter("QQ") >= 0.5 && enter("QQ") <= 0.85);
+  assert.ok(enter("AKs") >= 0.8);
+  assert.ok(enter("AKo") >= 0.45 && enter("AKo") <= 0.8);
+  assert.ok(enter("JJ") <= 0.12);
+  assert.ok(enter("AQs") <= 0.12);
+  for (const hand of ["A5s", "KJs", "QJs", "JTs", "T9s"]) {
+    assert.ok(enter(hand) <= 0.02, `${hand}: ${enter(hand)}`);
+  }
+
+  const coreHands = new Set(["AA", "KK", "QQ", "AKs", "AKo"]);
+  let totalContinueWeight = 0;
+  let coreContinueWeight = 0;
+  for (const hand of PREFLOP_HAND_CLASSES) {
+    const openingWeight = preflopComboCount(hand) * getPreflopStrategy({
+      hand,
+      scenario: "rfi",
+      heroPosition: "BTN",
+    }).frequencies.raise;
+    const continueWeight = openingWeight * enter(hand);
+    totalContinueWeight += continueWeight;
+    if (coreHands.has(hand)) coreContinueWeight += continueWeight;
+  }
+  assert.ok(coreContinueWeight / totalContinueWeight >= 0.95);
 });
 
 test("uses position-paired no-rake defense ranges instead of one universally tight chart", () => {

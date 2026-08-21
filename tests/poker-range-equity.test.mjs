@@ -85,6 +85,34 @@ test("preflop raises narrow the range while retaining bluff candidates", () => {
   assert.ok(weightedMeanPreflopPercentile(largeRaise) > weightedMeanPreflopPercentile(smallRaise));
 });
 
+test("matching historical pressure widens the public raising range without reading cards", () => {
+  const baseline = {
+    actions: [action({ amount: 25 })],
+    positionFactor: 1.28,
+    position: "BTN",
+    bigBlind: 10,
+  };
+  const pressured = {
+    ...baseline,
+    tendency: {
+      preflopOpen: 0.7,
+      preflopReraise: 0,
+      postflopBet: 0,
+      postflopRaise: 0,
+      publicDeception: 0,
+    },
+  };
+  const aces = [c(14, "♠"), c(14, "♥")];
+  const sevenDeuce = [c(7, "♠"), c(2, "♥")];
+  const baselineRatio = opponentHoldingWeight(sevenDeuce, [], baseline)
+    / opponentHoldingWeight(aces, [], baseline);
+  const pressuredRatio = opponentHoldingWeight(sevenDeuce, [], pressured)
+    / opponentHoldingWeight(aces, [], pressured);
+
+  assert.ok(pressuredRatio > baselineRatio * 1.15, `${pressuredRatio} 应高于 ${baselineRatio}`);
+  assert.ok(opponentHoldingWeight(aces, [], pressured) > opponentHoldingWeight(sevenDeuce, [], pressured));
+});
+
 test("preflop range inference follows the same position chart as coaching", () => {
   const deuces = [c(2, "♠"), c(2, "♥")];
   const kingJackOff = [c(13, "♠"), c(11, "♥")];
@@ -125,7 +153,7 @@ test("range inference uses the latest raiser position after a three-bet", () => 
   const open = action({ playerId: 1, kind: "raise", amount: 25, toCall: 10, raiseCountBefore: 0 });
   const threeBet = action({ playerId: 2, kind: "raise", amount: 85, toCall: 20, potBefore: 55, raiseCountBefore: 1 });
   const callThreeBet = action({ playerId: 1, kind: "call", amount: 65, toCall: 65, potBefore: 140, raiseCountBefore: 2 });
-  const positions = new Map([[0, "BB"], [1, "BTN"], [2, "SB"]]);
+  const positions = new Map([[0, "BB"], [1, "CO"], [2, "SB"]]);
   const state = {
     players: [
       { id: 0, folded: false },
@@ -144,15 +172,15 @@ test("range inference uses the latest raiser position after a three-bet", () => 
   const expected = opponentHoldingWeight(candidate, [], {
     actions: [open, { ...callThreeBet, aggressorPositionBefore: "SB" }],
     positionFactor: 1,
-    position: "BTN",
-    openerPosition: "BTN",
+    position: "CO",
+    openerPosition: "CO",
     bigBlind: 10,
   });
   const wrongOpeningRaiser = opponentHoldingWeight(candidate, [], {
-    actions: [open, { ...callThreeBet, aggressorPositionBefore: "BTN" }],
+    actions: [open, { ...callThreeBet, aggressorPositionBefore: "CO" }],
     positionFactor: 1,
-    position: "BTN",
-    openerPosition: "BTN",
+    position: "CO",
+    openerPosition: "CO",
     bigBlind: 10,
   });
 
@@ -203,6 +231,34 @@ test("postflop betting is polarized between value and live bluffs", () => {
   assert.ok(value > flushDraw);
   assert.ok(flushDraw > air);
   assert.ok(air > 0, "pure bluffs must retain non-zero posterior mass");
+});
+
+test("public aggression and deception evidence increase air density in the matching postflop range", () => {
+  const board = [c(14, "♠"), c(9, "♥"), c(6, "♦"), c(3, "♣"), c(2, "♠")];
+  const baseline = {
+    actions: [action({ street: "river", amount: 100, toCall: 0, potBefore: 100, activeOpponents: 1 })],
+    positionFactor: 1,
+    bigBlind: 10,
+  };
+  const pressured = {
+    ...baseline,
+    tendency: {
+      preflopOpen: 0,
+      preflopReraise: 0,
+      postflopBet: 0.8,
+      postflopRaise: 0,
+      publicDeception: 0.7,
+    },
+  };
+  const value = [c(14, "♦"), c(13, "♦")];
+  const blockerAir = [c(13, "♠"), c(7, "♠")];
+  const baselineRatio = opponentHoldingWeight(blockerAir, board, baseline)
+    / opponentHoldingWeight(value, board, baseline);
+  const pressuredRatio = opponentHoldingWeight(blockerAir, board, pressured)
+    / opponentHoldingWeight(value, board, pressured);
+
+  assert.ok(pressuredRatio > baselineRatio * 3, `${pressuredRatio} 应显著高于 ${baselineRatio}`);
+  assert.ok(opponentHoldingWeight(value, board, pressured) > opponentHoldingWeight(blockerAir, board, pressured));
 });
 
 test("calling a larger wager concentrates the continuing range", () => {

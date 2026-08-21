@@ -4,8 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AI_PROFILES,
   adaptAiProfileToHeroImage,
+  heroNodePressure,
+  heroPublicRangeTendency,
   sampleAiLineup,
   updateHeroTableImage,
+  type HeroPressureNode,
   type HeroTableImage,
 } from "../lib/poker-ai";
 import { isPokerAudioEnabled, playPokerSound, setPokerAudioEnabled, unlockPokerAudio } from "../lib/poker-audio";
@@ -309,8 +312,9 @@ function seededSpotRandom(seed: string) {
   };
 }
 
-function currentEquity(game: Game, player: Player, iterations = 80): number {
+function currentEquity(game: Game, player: Player, iterations = 80, heroImage?: TableImage): number {
   const community = game.street === "preflop" ? [] : game.community;
+  const heroTendency = heroImage && player.id !== 0 ? heroPublicRangeTendency(heroImage) : undefined;
   const opponents = createPublicOpponentRanges({
     players: game.players,
     viewerId: player.id,
@@ -319,6 +323,9 @@ function currentEquity(game: Game, player: Player, iterations = 80): number {
     bigBlind: BIG_BLIND,
     positionFactor: (playerId) => sixMaxPreflopPositionFactor(playerId, game.dealer),
     position: (playerId) => sixMaxPreflopPosition(playerId, game.dealer),
+    tendency: heroTendency
+      ? (playerId) => playerId === 0 ? heroTendency : undefined
+      : undefined,
   });
   if (!opponents.length) return 1;
   const publicSeed = [
@@ -418,6 +425,16 @@ function canAnyOpponentRespond(game: Game, player: Player) {
   return game.players.some((candidate) => (
     candidate.id !== player.id && !candidate.folded && candidate.stack > 0
   ));
+}
+
+function heroDecisionPressureNode(game: Game, toCall: number): HeroPressureNode {
+  if (game.street === "preflop") return game.raiseCount === 0 ? "preflop_open" : "preflop_reraise";
+  return toCall === 0 ? "postflop_bet" : "postflop_raise";
+}
+
+function facingHeroPressureNode(game: Game): HeroPressureNode {
+  if (game.street === "preflop") return game.raiseCount <= 1 ? "preflop_open" : "preflop_reraise";
+  return game.raiseCount <= 1 ? "postflop_bet" : "postflop_raise";
 }
 
 function callClosesPlayerAction(game: Game, player: Player) {
@@ -1001,20 +1018,23 @@ function chooseAiAction(
   mode: GameMode,
 ): { kind: ActionKind; raiseTo?: number } {
   const styleKey = player.styleKey as keyof typeof AI_PROFILES;
-  const equity = currentEquity(game, player, game.street === "preflop" ? 300 : 600);
   const facingHero = game.lastAggressor === 0;
+  const equity = currentEquity(game, player, game.street === "preflop" ? 300 : 600, heroImage);
   const adapted = adaptAiProfileToHeroImage(styleKey, heroImage, {
     heroActive: !game.players[0].folded,
     facingHero,
-    intensity: mode === "endless" ? 1.5 : 0.85,
+    intensity: mode === "endless" ? 1.5 : 1.05,
+    pressureNode: facingHero ? facingHeroPressureNode(game) : undefined,
   });
   const profile: PokerPolicyProfile = {
     aggression: adapted.aggression,
     looseness: adapted.looseness,
     bluff: adapted.bluff,
   };
-  const effectiveEquity = clamp(equity + adapted.equityAdjustment, 0.02, 0.98);
-  return choosePokerPolicyAction(buildPokerPolicyInput(game, player, effectiveEquity, profile));
+  // The public hero tendency has already changed the sampled opponent range
+  // used by currentEquity. Reapplying the same read as a flat equity bonus
+  // would count one observation twice and distort multiway/side-pot decisions.
+  return choosePokerPolicyAction(buildPokerPolicyInput(game, player, equity, profile));
 }
 
 function setHeroShowChoice(game: Game, show: boolean): Game {
@@ -1836,7 +1856,13 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   const [sessionEnded, setSessionEnded] = useState(false);
   const [sessionResults, setSessionResults] = useState<SessionHandResult[]>([]);
   const [runDecisionStats, setRunDecisionStats] = useState(createPokerRunDecisionStats);
-  const [heroImage, setHeroImage] = useState<TableImage>({ loose: 0.5, aggressive: 0.5, deceptive: 0.5, observations: 0 });
+  const [heroImage, setHeroImage] = useState<TableImage>({
+    loose: 0.5,
+    aggressive: 0.5,
+    deceptive: 0.5,
+    observations: 0,
+    pressure: {},
+  });
   const [handHistory, setHandHistory] = useState<PokerHandHistoryEntry[]>([]);
   const [sealedRunHistory, setSealedRunHistory] = useState<PokerHandHistoryEntry[]>([]);
   const [historyHydrated, setHistoryHydrated] = useState(false);
@@ -2067,7 +2093,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     setReplayPlaying(false);
     setReplayStep(0);
     setRunDecisionStats(createPokerRunDecisionStats());
-    setHeroImage({ loose: 0.5, aggressive: 0.5, deceptive: 0.5, observations: 0 });
+    setHeroImage({ loose: 0.5, aggressive: 0.5, deceptive: 0.5, observations: 0, pressure: {} });
     setDealing(false);
     setRaiseTo(BIG_BLIND * 3);
     winSoundHand.current = 0;
@@ -2212,10 +2238,16 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     setHeroImage((image) => {
       const looseSignal = kind === "fold" ? 0.18 : kind === "check" ? 0.4 : kind === "call" ? 0.68 : 0.78;
       const aggressionSignal = kind === "raise" ? 0.9 : kind === "fold" ? 0.34 : 0.24;
-      return updateHeroTableImage(image, { loose: looseSignal, aggressive: aggressionSignal });
+      return updateHeroTableImage(
+        image,
+        { loose: looseSignal, aggressive: aggressionSignal },
+        raiseDisabled
+          ? undefined
+          : { node: heroDecisionPressureNode(game, toCall), aggressive: kind === "raise" },
+      );
     });
     setGame((current) => (current ? act(current, human.id, kind, actualRaiseTo ?? undefined) : current));
-  }, [game, human, isHumanTurn, advice, raiseTo, toCall, equity, soundOn, mode, hintDecisionKey]);
+  }, [game, human, isHumanTurn, advice, raiseTo, toCall, equity, soundOn, mode, hintDecisionKey, raiseDisabled]);
 
   const toggleSound = useCallback(() => {
     const next = !soundOn;
@@ -2344,6 +2376,12 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   const heroBbPer100 = pokerRunBbPer100(heroNet, BIG_BLIND, completedHands);
   const showDecisionPending = handFinished && game.endedUncontested && game.winnerIds[0] === 0 && !game.showChoiceMade;
   const imageLabel = (value: number, low: string, middle: string, high: string) => value < 0.42 ? low : value > 0.58 ? high : middle;
+  const heroCounterPressure = Math.max(
+    heroNodePressure(heroImage, "preflop_open"),
+    heroNodePressure(heroImage, "preflop_reraise"),
+    heroNodePressure(heroImage, "postflop_bet"),
+    heroNodePressure(heroImage, "postflop_raise"),
+  );
   const streetScores = (["翻牌前", "翻牌", "转牌", "河牌"] as const).map((street) => {
     const streetKey = ({ 翻牌前: "preflop", 翻牌: "flop", 转牌: "turn", 河牌: "river" } as const)[street];
     const aggregate = runDecisionStats.byStreet[streetKey];
@@ -2744,7 +2782,9 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                     <div><span>AI 眼中的松紧</span><strong>{imageLabel(heroImage.loose, "偏紧", "均衡", "偏松")}</strong></div>
                     <div><span>AI 眼中的风格</span><strong>{imageLabel(heroImage.aggressive, "偏被动", "均衡", "偏激进")}</strong></div>
                     <div><span>AI 眼中的欺骗性</span><strong>{imageLabel(heroImage.deceptive, "偏直白", "均衡", "难预测")}</strong></div>
+                    <div><span>近期施压反应</span><strong>{heroCounterPressure > 0.48 ? "强反制" : heroCounterPressure > 0.2 ? "已警觉" : "观察中"}</strong></div>
                     <div><span>画像样本</span><strong>{heroImage.observations} 次</strong></div>
+                    <div><span>画像信息边界</span><strong>仅公开行动与亮牌</strong></div>
                     <div><span>使用 AI 提示</span><strong>{hintUseCount} 次</strong></div>
                   </div>
                   <SquidScoreboard game={game} report />

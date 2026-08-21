@@ -43,6 +43,14 @@ const RANK_VALUE: Record<string, number> = Object.fromEntries(
 );
 
 type MutableChart = Map<PreflopHandClass, PreflopFrequencies>;
+type PositionPair = `${PreflopPosition}:${PreflopPosition}`;
+
+type VsThreeBetTarget = {
+  /** Share of this position's RFI range that continues against the reference 9BB size. */
+  retain: number;
+  /** Conditional 4-bet share after the continue branch has been selected. */
+  fourBetShare: number;
+};
 
 function clamp(value: number, minimum = 0, maximum = 1) {
   return Math.max(minimum, Math.min(maximum, Number.isFinite(value) ? value : minimum));
@@ -331,6 +339,178 @@ function buildVsThreeBetReference() {
   return chart;
 }
 
+// 100BB, no-rake guardrails at the 9BB reference size. The base chart below
+// still decides which hands prefer calls or 4-bets; these targets only stop a
+// single all-position chart from defending the same absolute number of combos
+// after a 16% UTG open and a 47% BTN open.
+const VS_THREE_BET_DEFAULT_TARGETS: Record<PreflopPosition, VsThreeBetTarget> = {
+  UTG: { retain: 0.48, fourBetShare: 0.4 },
+  HJ: { retain: 0.46, fourBetShare: 0.39 },
+  CO: { retain: 0.45, fourBetShare: 0.4 },
+  BTN: { retain: 0.45, fourBetShare: 0.24 },
+  SB: { retain: 0.42, fourBetShare: 0.36 },
+  BB: { retain: 0.42, fourBetShare: 0.28 },
+};
+
+const VS_THREE_BET_TARGET_OVERRIDES: Readonly<Partial<Record<PositionPair, VsThreeBetTarget>>> = {
+  // An opener who will have position against a blind 3-bettor can retain more
+  // hands as calls and needs a smaller conditional 4-bet share.
+  "UTG:SB": { retain: 0.5, fourBetShare: 0.3 },
+  "UTG:BB": { retain: 0.52, fourBetShare: 0.29 },
+  "HJ:SB": { retain: 0.48, fourBetShare: 0.29 },
+  "HJ:BB": { retain: 0.5, fourBetShare: 0.28 },
+  "CO:SB": { retain: 0.49, fourBetShare: 0.25 },
+  "CO:BB": { retain: 0.47, fourBetShare: 0.24 },
+  "BTN:SB": { retain: 0.45, fourBetShare: 0.24 },
+  "BTN:BB": { retain: 0.47, fourBetShare: 0.23 },
+  "SB:BB": { retain: 0.42, fourBetShare: 0.36 },
+};
+
+function vsThreeBetTarget(heroPosition: PreflopPosition, aggressorPosition: PreflopPosition) {
+  return VS_THREE_BET_TARGET_OVERRIDES[`${heroPosition}:${aggressorPosition}`]
+    ?? VS_THREE_BET_DEFAULT_TARGETS[heroPosition];
+}
+
+function conditionalRfiWeight(rfi: MutableChart, hand: PreflopHandClass) {
+  return preflopComboCount(hand) * rfi.get(hand)!.raise;
+}
+
+/**
+ * The reference chart has enough support for an early-position open, but only
+ * covers about 39% of the BTN's much wider RFI range. Add the best missing RFI
+ * hands before calibration; multiplying odds alone can never revive a zero.
+ */
+function addVsThreeBetSupport(chart: MutableChart, rfi: MutableChart, targetSupport: number) {
+  const openingWeight = PREFLOP_HAND_CLASSES.reduce(
+    (sum, hand) => sum + conditionalRfiWeight(rfi, hand),
+    0,
+  );
+  if (openingWeight <= 0) return;
+  let supportedWeight = PREFLOP_HAND_CLASSES.reduce((sum, hand) => {
+    const frequencies = chart.get(hand)!;
+    return sum + (frequencies.call + frequencies.raise > 0 ? conditionalRfiWeight(rfi, hand) : 0);
+  }, 0);
+  const requiredWeight = openingWeight * clamp(targetSupport);
+  if (supportedWeight >= requiredWeight) return;
+
+  const candidates = PREFLOP_HAND_CLASSES
+    .filter((hand) => {
+      const frequencies = chart.get(hand)!;
+      return rfi.get(hand)!.raise > 0 && frequencies.call + frequencies.raise === 0 && hand !== "72o";
+    })
+    .map((hand) => ({ hand, score: blindDefenseScore(hand) }))
+    .sort((left, right) => right.score - left.score || left.hand.localeCompare(right.hand));
+  const selected: typeof candidates = [];
+  for (const candidate of candidates) {
+    if (supportedWeight >= requiredWeight) break;
+    selected.push(candidate);
+    supportedWeight += conditionalRfiWeight(rfi, candidate.hand);
+  }
+  const bestScore = selected[0]?.score ?? 1;
+  const edgeScore = selected.at(-1)?.score ?? bestScore;
+  for (const candidate of selected) {
+    const quality = clamp((candidate.score - edgeScore) / Math.max(1, bestScore - edgeScore));
+    const enter = 0.05 + quality * 0.28;
+    const handTraits = traits(candidate.hand);
+    const raiseShare = handTraits.high === 14 && handTraits.suited
+      ? 0.08
+      : handTraits.high === 13 && handTraits.suited
+        ? 0.025
+        : 0.01;
+    chart.set(candidate.hand, normalized({
+      fold: 1 - enter,
+      call: enter * (1 - raiseShare),
+      raise: enter * raiseShare,
+    }));
+  }
+}
+
+function calibrateConditionalRfiEnter(chart: MutableChart, rfi: MutableChart, targetRetain: number) {
+  const openingWeight = PREFLOP_HAND_CLASSES.reduce(
+    (sum, hand) => sum + conditionalRfiWeight(rfi, hand),
+    0,
+  );
+  if (openingWeight <= 0) return;
+  const retainAtFactor = (factor: number) => PREFLOP_HAND_CLASSES.reduce((sum, hand) => {
+    const frequencies = chart.get(hand)!;
+    const enter = scaleProbability(frequencies.call + frequencies.raise, factor);
+    return sum + conditionalRfiWeight(rfi, hand) * enter;
+  }, 0) / openingWeight;
+  let lower = 0.001;
+  let upper = 100_000;
+  for (let iteration = 0; iteration < 72; iteration += 1) {
+    const middle = (lower + upper) / 2;
+    if (retainAtFactor(middle) < targetRetain) lower = middle;
+    else upper = middle;
+  }
+  const factor = (lower + upper) / 2;
+  for (const hand of PREFLOP_HAND_CLASSES) {
+    const frequencies = chart.get(hand)!;
+    const enter = frequencies.call + frequencies.raise;
+    if (enter <= 0) continue;
+    const adjustedEnter = scaleProbability(enter, factor);
+    const raiseShare = frequencies.raise / enter;
+    chart.set(hand, normalized({
+      fold: 1 - adjustedEnter,
+      call: adjustedEnter * (1 - raiseShare),
+      raise: adjustedEnter * raiseShare,
+    }));
+  }
+}
+
+function calibrateConditionalFourBetShare(chart: MutableChart, rfi: MutableChart, targetShare: number) {
+  const continuingWeight = PREFLOP_HAND_CLASSES.reduce((sum, hand) => {
+    const frequencies = chart.get(hand)!;
+    return sum + conditionalRfiWeight(rfi, hand) * (frequencies.call + frequencies.raise);
+  }, 0);
+  if (continuingWeight <= 0) return;
+  const shareAtFactor = (factor: number) => PREFLOP_HAND_CLASSES.reduce((sum, hand) => {
+    const frequencies = chart.get(hand)!;
+    const enter = frequencies.call + frequencies.raise;
+    if (enter <= 0) return sum;
+    const currentShare = frequencies.raise / enter;
+    const raiseShare = hand === "AA" ? 0.9 : scaleProbability(currentShare, factor);
+    return sum + conditionalRfiWeight(rfi, hand) * enter * raiseShare;
+  }, 0) / continuingWeight;
+  let lower = 0.001;
+  let upper = 1_000;
+  for (let iteration = 0; iteration < 72; iteration += 1) {
+    const middle = (lower + upper) / 2;
+    if (shareAtFactor(middle) < targetShare) lower = middle;
+    else upper = middle;
+  }
+  const factor = (lower + upper) / 2;
+  for (const hand of PREFLOP_HAND_CLASSES) {
+    const frequencies = chart.get(hand)!;
+    const enter = frequencies.call + frequencies.raise;
+    if (enter <= 0) continue;
+    const currentShare = frequencies.raise / enter;
+    const raiseShare = hand === "AA" ? 0.9 : scaleProbability(currentShare, factor);
+    chart.set(hand, normalized({
+      fold: 1 - enter,
+      call: enter * (1 - raiseShare),
+      raise: enter * raiseShare,
+    }));
+  }
+}
+
+function buildVsThreeBetCharts(base: MutableChart, rfiCharts: Record<PreflopPosition, MutableChart>) {
+  const charts = {} as Record<PreflopPosition, Record<PreflopPosition, MutableChart>>;
+  for (const heroPosition of PREFLOP_POSITIONS) {
+    charts[heroPosition] = {} as Record<PreflopPosition, MutableChart>;
+    for (const aggressorPosition of PREFLOP_POSITIONS) {
+      const target = vsThreeBetTarget(heroPosition, aggressorPosition);
+      const chart = cloneChart(base);
+      const rfi = rfiCharts[heroPosition];
+      addVsThreeBetSupport(chart, rfi, Math.min(0.78, target.retain + 0.12));
+      calibrateConditionalRfiEnter(chart, rfi, target.retain);
+      calibrateConditionalFourBetShare(chart, rfi, target.fourBetShare);
+      charts[heroPosition][aggressorPosition] = chart;
+    }
+  }
+  return charts;
+}
+
 function buildVsFourBetReference() {
   const chart = emptyChart();
   setMix(chart, ["AA"], 0.06, 0.94);
@@ -348,7 +528,7 @@ function buildVsFourBetReference() {
 
 const RFI = buildRfiCharts();
 const VS_OPEN = buildVsOpenCharts(buildVsOpenReference());
-const VS_THREE_BET = buildVsThreeBetReference();
+const VS_THREE_BET = buildVsThreeBetCharts(buildVsThreeBetReference(), RFI);
 const VS_FOUR_BET = buildVsFourBetReference();
 
 function traits(hand: PreflopHandClass) {
@@ -395,8 +575,6 @@ const AGGRESSOR_POSITION_FACTOR: Record<PreflopPosition, number> = {
 // call/raise split is otherwise nearly identical in every position pair.
 // These late-position floors reshape only AT's conditional 3-bet share; they
 // never add continue frequency to a hand that should fold more often.
-type PositionPair = `${PreflopPosition}:${PreflopPosition}`;
-
 const ACE_TEN_VS_OPEN_RAISE_SHARE_FLOORS: Record<
   "ATs" | "ATo",
   Readonly<Partial<Record<PositionPair, number>>>
@@ -431,6 +609,24 @@ function aceTenVsOpenRaiseShareFloor(query: PreflopStrategyQuery, depthShift: nu
   return clamp(standardFloor * (1 - deepPenalty + shallowBoost), 0, 0.9);
 }
 
+const VS_THREE_BET_SHOVE_ENTER: Readonly<Partial<Record<PreflopHandClass, number>>> = {
+  AA: 1,
+  KK: 0.98,
+  AKs: 0.95,
+  QQ: 0.72,
+  AKo: 0.65,
+  JJ: 0.08,
+  AQs: 0.08,
+};
+
+function threeBetShoveBlend(query: PreflopStrategyQuery, depth: number, facingSize: number) {
+  if (query.scenario !== "vs-three-bet") return 0;
+  const start = Math.min(12, depth * 0.3);
+  const full = Math.max(start + 1, depth * 0.82);
+  const progress = clamp((facingSize - start) / (full - start));
+  return progress * progress * (3 - 2 * progress);
+}
+
 function adjustedReferenceFrequencies(query: PreflopStrategyQuery, base: PreflopFrequencies) {
   const handTraits = traits(query.hand);
   const depth = clamp(query.effectiveStackBb ?? 100, 10, 400);
@@ -444,19 +640,29 @@ function adjustedReferenceFrequencies(query: PreflopStrategyQuery, base: Preflop
   const sizeFactor = Math.exp(-sizeElasticity * sizeLogRatio);
   const positionFactor = query.scenario === "vs-open"
     ? 1
-    : HERO_POSITION_FACTOR[query.heroPosition]
-      * AGGRESSOR_POSITION_FACTOR[query.aggressorPosition ?? "CO"];
+    : query.scenario === "vs-three-bet"
+      ? 1
+      : HERO_POSITION_FACTOR[query.heroPosition]
+        * AGGRESSOR_POSITION_FACTOR[query.aggressorPosition ?? "CO"];
   const speculationFactor = handTraits.smallPair || handTraits.suited && handTraits.connected
     ? 1 + depthShift * 0.24
     : 1 - Math.max(0, depthShift) * 0.04;
   const totalEnter = base.call + base.raise;
   let adjustedEnter = scaleProbability(totalEnter, positionFactor * sizeFactor * speculationFactor);
+  const shoveBlend = threeBetShoveBlend(query, depth, facingSize);
+  if (shoveBlend > 0) {
+    const shoveEnter = VS_THREE_BET_SHOVE_ENTER[query.hand] ?? 0;
+    adjustedEnter = adjustedEnter * (1 - shoveBlend) + shoveEnter * shoveBlend;
+  }
   let raiseShare = totalEnter > 0 ? base.raise / totalEnter : 0;
   if (handTraits.wheelAce) {
-    raiseShare = clamp(raiseShare * (1.08 + Math.max(0, -depthShift) * 0.08), 0, 0.92);
+    const referenceBoost = query.scenario === "vs-three-bet" ? 1 : 1.08;
+    raiseShare = clamp(raiseShare * (referenceBoost + Math.max(0, -depthShift) * 0.08), 0, 0.92);
   }
-  if (query.heroPosition === "SB") raiseShare = clamp(raiseShare * 1.18, 0, 0.98);
-  if (query.heroPosition === "BB") raiseShare = clamp(raiseShare * 0.78, 0, 0.98);
+  if (query.scenario !== "vs-three-bet") {
+    if (query.heroPosition === "SB") raiseShare = clamp(raiseShare * 1.18, 0, 0.98);
+    if (query.heroPosition === "BB") raiseShare = clamp(raiseShare * 0.78, 0, 0.98);
+  }
   raiseShare = Math.max(raiseShare, aceTenVsOpenRaiseShareFloor(query, depthShift));
   // Do not impose a fixed floor on KK/QQ/AK: facing-size and effective-stack
   // pressure must still be allowed to move those hands at extreme nodes.
@@ -479,7 +685,7 @@ export function getPreflopStrategy(query: PreflopStrategyQuery): PreflopStrategy
     const chart = query.scenario === "vs-open"
       ? VS_OPEN[query.heroPosition][query.aggressorPosition ?? "CO"]
       : query.scenario === "vs-three-bet"
-        ? VS_THREE_BET
+        ? VS_THREE_BET[query.heroPosition][query.aggressorPosition ?? "CO"]
         : VS_FOUR_BET;
     frequencies = adjustedReferenceFrequencies(query, chart.get(query.hand)!);
   }

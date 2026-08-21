@@ -115,6 +115,12 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /hintUsed: hintUsedForDecision/);
   assert.match(page, /hintedDecisionKeys\.current\.has\(hintDecisionKey\)/);
   assert.match(page, /使用 AI 提示/);
+  assert.match(page, /heroPublicRangeTendency/);
+  assert.match(page, /buildPokerPolicyInput\(game, player, equity, profile\)/);
+  assert.doesNotMatch(page, /adapted\.equityAdjustment \* heroLayerShare/);
+  assert.match(page, /raiseDisabled[\s\S]*?\? undefined[\s\S]*?heroDecisionPressureNode/);
+  assert.match(page, /近期施压反应/);
+  assert.match(page, /仅公开行动与亮牌/);
   assert.match(page, /<AiDecisionHint[\s\S]*?compact[\s\S]*?enabled=\{training\}/);
   assert.match(page, /pokerRaiseTargetForFraction/);
   assert.match(page, /resetStacks: false/);
@@ -135,7 +141,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /结束无尽局并生成点评/);
   assert.match(page, /function pokerRunBbPer100|pokerRunBbPer100/);
   assert.match(page, /BB \/ 100/);
-  assert.match(page, /mode === "endless" \? 1\.5 : 0\.85/);
+  assert.match(page, /mode === "endless" \? 1\.5 : 1\.05/);
   assert.match(page, /heroActive: !game\.players\[0\]\.folded/);
   assert.match(page, /formatPokerFrequencyMix/);
   assert.match(page, /encodePreflopHandClass/);
@@ -441,7 +447,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(selfPlay, /pokerCallClosesContestableLayers/);
   assert.match(selfPlay, /pokerContestablePotAtDecision/);
   assert.match(serviceWorker, /key\.startsWith\("rangecraft-"\)/);
-  assert.match(serviceWorker, /rangecraft-v8/);
+  assert.match(serviceWorker, /rangecraft-v9/);
   assert.match(serviceWorker, /request\.destination === "script" \|\| request\.destination === "style"/);
   assert.match(page, /updateViaCache: "none"/);
   assert.match(page, /controllerchange/);

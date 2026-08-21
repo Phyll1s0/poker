@@ -44,6 +44,16 @@ export type OpponentRangeEvidence = {
   bigBlind: number;
   position?: PreflopPosition;
   openerPosition?: PreflopPosition;
+  tendency?: PublicRangeTendency;
+};
+
+export type PublicRangeTendency = {
+  preflopOpen: number;
+  preflopReraise: number;
+  postflopBet: number;
+  postflopRaise: number;
+  /** Public show/muck and revealed-action evidence; never private cards. */
+  publicDeception: number;
 };
 
 export type PublicRangePlayer = {
@@ -59,6 +69,8 @@ export type PublicRangeState = {
   bigBlind: number;
   positionFactor: (playerId: number) => number;
   position?: (playerId: number) => PreflopPosition;
+  /** Historical public-action reads only; never real hole-card information. */
+  tendency?: (playerId: number) => PublicRangeTendency | undefined;
 };
 
 const BOARD_CARDS: Record<PublicActionStreet, number> = {
@@ -119,6 +131,11 @@ function preflopActionLikelihood(
   const wager = Math.max(0, action.amount - action.toCall);
   const raiseFraction = wager / Math.max(bigBlind, action.potBefore + action.toCall);
   const premium = sigmoid((percentile - 0.91) * 34);
+  const historicalPressure = action.kind === "raise"
+    ? action.raiseCountBefore === 0
+      ? clamp(evidence.tendency?.preflopOpen ?? 0)
+      : clamp(evidence.tendency?.preflopReraise ?? 0)
+    : 0;
 
   if (action.kind === "check") {
     return clamp(0.78 - percentile * 0.42 + premium * 0.16, 0.08, 1.15);
@@ -151,9 +168,22 @@ function preflopActionLikelihood(
       ) / Math.max(1, bigBlind),
       facingSizeBb: chartScenario === "rfi" ? undefined : observedTargetBb,
     });
-    const chartFrequency = action.kind === "raise"
+    let chartFrequency = action.kind === "raise"
       ? strategy.frequencies.raise
       : strategy.frequencies.call;
+    if (action.kind === "raise" && historicalPressure > 0) {
+      // A player who repeatedly attacks this exact node is assigned a wider
+      // public range. Fringe suited/blocker hands gain likelihood, while value
+      // hands already present in the chart remain the strongest candidates.
+      const expansionCenter = action.raiseCountBefore === 0 ? 0.54 : 0.72;
+      const fringe = clamp(
+        sigmoid((percentile - expansionCenter) * 12) * 0.58
+          + preflopBluffShape(hole) * 0.42,
+      );
+      chartFrequency = clamp(
+        chartFrequency + historicalPressure * fringe * (1 - chartFrequency) * 0.62,
+      );
+    }
     const sizePolarization = action.kind === "raise"
       ? 1 + Math.max(0, raiseFraction - 0.65) * premium * 0.22
       : 1;
@@ -181,7 +211,11 @@ function preflopActionLikelihood(
     const bluff = preflopBluffShape(hole)
       * (action.raiseCountBefore > 0 ? 0.12 : 0.18)
       * clamp(1.15 - raiseFraction * 0.18, 0.42, 1);
-    return clamp(0.006 + value * (0.92 + raiseFraction * 0.16) + bluff, 0.006, 1.65);
+    const historicalExpansion = historicalPressure
+      * clamp(sigmoid((percentile - (action.raiseCountBefore > 0 ? 0.7 : 0.52)) * 12) * 0.55
+        + preflopBluffShape(hole) * 0.45)
+      * 0.42;
+    return clamp(0.006 + value * (0.92 + raiseFraction * 0.16) + bluff + historicalExpansion, 0.006, 1.65);
   }
   return 0.001;
 }
@@ -190,6 +224,7 @@ function postflopActionLikelihood(
   hole: readonly [PokerCard, PokerCard],
   board: readonly PokerCard[],
   action: PublicBettingAction,
+  tendency?: PublicRangeTendency,
 ) {
   const made = madeHandStrength(hole, board);
   const draw = clamp(drawPotential(hole, board) / 0.18);
@@ -216,7 +251,17 @@ function postflopActionLikelihood(
     const value = sigmoid((made - valueThreshold) * 16);
     const semiBluff = draw * clamp(0.34 - betFraction * 0.07, 0.13, 0.34);
     const blockerBluff = blockers * clamp(0.11 - betFraction * 0.025, 0.035, 0.11);
-    return clamp(0.008 + value * (0.9 + betFraction * 0.25) + semiBluff + blockerBluff, 0.008, 1.75);
+    const nodePressure = clamp(action.toCall > 0 ? tendency?.postflopRaise ?? 0 : tendency?.postflopBet ?? 0);
+    const publicDeception = clamp(tendency?.publicDeception ?? 0);
+    const airShape = (1 - made)
+      * clamp(0.08 + blockers * 0.34 + draw * (action.street === "river" ? 0 : 0.22))
+      * clamp(1.08 - Math.max(0, betFraction - 1) * 0.22, 0.62, 1.08);
+    const historicalBluff = airShape * (nodePressure * 0.5 + publicDeception * 0.58);
+    return clamp(
+      0.008 + value * (0.9 + betFraction * 0.25) + semiBluff + blockerBluff + historicalBluff,
+      0.008,
+      1.75,
+    );
   }
   return 0.001;
 }
@@ -236,7 +281,7 @@ export function opponentHoldingWeight(
     const likelihood = action.street === "preflop"
       ? preflopActionLikelihood(hole, action, evidence)
       : board.length >= 3
-        ? postflopActionLikelihood(hole, board, action)
+        ? postflopActionLikelihood(hole, board, action, evidence.tendency)
         : 1;
     logWeight += Math.log(Math.max(0.001, likelihood));
   }
@@ -274,6 +319,7 @@ export function createPublicOpponentRanges(state: PublicRangeState) {
         bigBlind: state.bigBlind,
         position: state.position?.(player.id),
         openerPosition: openingRaise ? state.position?.(openingRaise.playerId) : undefined,
+        tendency: state.tendency?.(player.id),
       }),
     }));
 }

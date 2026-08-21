@@ -5,6 +5,8 @@ import {
   AI_PROFILES,
   adaptAiProfileToHeroImage,
   heroImageConfidence,
+  heroNodePressure,
+  heroPublicRangeTendency,
   sampleAiLineup,
   updateHeroTableImage,
 } from "../lib/poker-ai.ts";
@@ -59,7 +61,7 @@ test("all endless opponents adapt without losing their base archetype", () => {
     });
     assert.ok(adapted.aggression > AI_PROFILES[styleKey].aggression);
     assert.ok(adapted.bluff > AI_PROFILES[styleKey].bluff);
-    assert.equal(adapted.equityAdjustment, 0);
+    assert.equal(adapted.pressureResponse, 0);
   }
 
   const lag = adaptAiProfileToHeroImage("lag", tightPassive, { heroActive: true, facingHero: true, intensity: 1.25 });
@@ -69,7 +71,7 @@ test("all endless opponents adapt without losing their base archetype", () => {
   assert.ok(lag.bluff > nit.bluff);
 });
 
-test("ignores the hero after they fold and bounds direct counter-adjustments", () => {
+test("ignores the hero after they fold and bounds profile counter-adjustments", () => {
   const looseAggressive = { loose: 0.9, aggressive: 0.92, deceptive: 0.82, observations: 200 };
   const inactive = adaptAiProfileToHeroImage("adaptive", looseAggressive, {
     heroActive: false,
@@ -80,15 +82,13 @@ test("ignores the hero after they fold and bounds direct counter-adjustments", (
     { aggression: inactive.aggression, looseness: inactive.looseness, bluff: inactive.bluff },
     AI_PROFILES.adaptive,
   );
-  assert.equal(inactive.equityAdjustment, 0);
+  assert.equal(inactive.pressureResponse, 0);
 
   const active = adaptAiProfileToHeroImage("adaptive", looseAggressive, {
     heroActive: true,
     facingHero: true,
     intensity: 1.25,
   });
-  assert.ok(active.equityAdjustment > 0);
-  assert.ok(active.equityAdjustment <= 0.075);
   assert.ok(active.looseness > AI_PROFILES.adaptive.looseness);
   assert.ok(active.aggression > AI_PROFILES.adaptive.aggression);
   for (const value of [active.aggression, active.looseness, active.bluff, active.confidence]) {
@@ -113,7 +113,6 @@ test("repeated hero raises trigger wider defense instead of teaching every AI to
     });
     assert.ok(adapted.looseness > AI_PROFILES[styleKey].looseness, `${styleKey} 应扩大防守范围`);
     assert.ok(adapted.aggression > AI_PROFILES[styleKey].aggression, `${styleKey} 应增加反加注压力`);
-    assert.ok(adapted.equityAdjustment > 0, `${styleKey} 应降低对加注范围强度的先验判断`);
   }
 
   const counter = adaptAiProfileToHeroImage("adaptive", image, {
@@ -173,4 +172,61 @@ test("repeated hero raises trigger wider defense instead of teaching every AI to
   const counterContinue = counterPlan.actionFrequencies.call + counterPlan.actionFrequencies.raise;
   assert.ok(counterContinue > baselineContinue + 0.04);
   assert.ok(counterPlan.actionFrequencies.raise > baselinePlan.actionFrequencies.raise);
+});
+
+test("reacts quickly to repeated pressure in the matching public node only", () => {
+  let image = { loose: 0.5, aggressive: 0.5, deceptive: 0.5, observations: 0, pressure: {} };
+  for (let index = 0; index < 5; index += 1) {
+    image = updateHeroTableImage(
+      image,
+      { loose: 0.78, aggressive: 0.9 },
+      { node: "preflop_open", aggressive: true },
+    );
+  }
+
+  const openPressure = heroNodePressure(image, "preflop_open");
+  assert.ok(openPressure > 0.4, `${openPressure} 应在五次连续开池后进入明显反制区`);
+  assert.equal(heroNodePressure(image, "preflop_reraise"), 0);
+  assert.equal(heroNodePressure(image, "postflop_bet"), 0);
+
+  const adapted = adaptAiProfileToHeroImage("adaptive", image, {
+    heroActive: true,
+    facingHero: true,
+    intensity: 1.05,
+    pressureNode: "preflop_open",
+  });
+  const unrelated = adaptAiProfileToHeroImage("adaptive", image, {
+    heroActive: true,
+    facingHero: true,
+    intensity: 1.05,
+    pressureNode: "postflop_raise",
+  });
+  assert.ok(adapted.pressureResponse > 0.4);
+  assert.ok(adapted.pressureResponse > unrelated.pressureResponse + 0.4);
+  assert.ok(adapted.looseness > unrelated.looseness);
+  assert.ok(adapted.aggression > unrelated.aggression);
+
+  const tendency = heroPublicRangeTendency(image);
+  assert.equal(tendency.preflopOpen, openPressure);
+  assert.equal(tendency.preflopReraise, 0);
+
+  const forcedDecision = updateHeroTableImage(
+    image,
+    { loose: 0.4, aggressive: 0.24 },
+  );
+  assert.equal(
+    heroNodePressure(forcedDecision, "preflop_open"),
+    openPressure,
+    "没有合法加注权的强制决定不能冷却该节点",
+  );
+
+  let cooled = image;
+  for (let index = 0; index < 3; index += 1) {
+    cooled = updateHeroTableImage(
+      cooled,
+      { loose: 0.4, aggressive: 0.24 },
+      { node: "preflop_open", aggressive: false },
+    );
+  }
+  assert.ok(heroNodePressure(cooled, "preflop_open") < openPressure * 0.25);
 });
