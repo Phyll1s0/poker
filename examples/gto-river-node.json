@@ -1,0 +1,49 @@
+{
+  "board": [
+    { "rank": 14, "suit": "clubs" },
+    { "rank": 13, "suit": "diamonds" },
+    { "rank": 7, "suit": "spades" },
+    { "rank": 4, "suit": "hearts" },
+    { "rank": 2, "suit": "clubs" }
+  ],
+  "oopRange": [
+    {
+      "cards": [
+        { "rank": 14, "suit": "spades" },
+        { "rank": 14, "suit": "diamonds" }
+      ],
+      "weight": 1
+    },
+    {
+      "cards": [
+        { "rank": 12, "suit": "spades" },
+        { "rank": 11, "suit": "spades" }
+      ],
+      "weight": 1
+    }
+  ],
+  "ipRange": [
+    {
+      "cards": [
+        { "rank": 13, "suit": "spades" },
+        { "rank": 13, "suit": "clubs" }
+      ],
+      "weight": 1
+    },
+    {
+      "cards": [
+        { "rank": 10, "suit": "hearts" },
+        { "rank": 9, "suit": "hearts" }
+      ],
+      "weight": 1
+    }
+  ],
+  "potBb": 10,
+  "effectiveStackBb": 10,
+  "bettingTree": {
+    "betPotFractions": [1],
+    "raisePotAfterCallFractions": [1],
+    "maxRaises": 0,
+    "allInAlwaysAvailable": false
+  }
+}

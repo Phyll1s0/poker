@@ -37,9 +37,12 @@
 - Supabase Postgres 持久化匿名牌手、房间和牌局状态，以 revision + 幂等请求防止重复行动和并发覆盖
 - Supabase Edge Function 执行洗牌和全部行动；数据库表拒绝浏览器直接访问，访客令牌只在本机保存
 - `PokerTransport` 保留 polling 与未来 WebSocket 实现的统一契约
-- 为预计算 GTO 数据库或远程求解器预留的 `PokerStrategyProvider` 接口
+- 为预计算 GTO 数据库或远程求解器提供 V2 安全节点键、精确/回退 provenance 与同步缓存 / 异步加载 Provider 协议
+- RangeCraft Standard v1 固定 100BB、无抽水 cEV、2.5BB 开池和完整离散下注树，并用稳定哈希阻止不同配置误命中
+- 通用两人零和 CFR+ 核心通过 Kuhn Poker 已知均衡值和精确 exploitability 回归
+- 可离线求解带权范围对范围的真实 1v1 河牌子博弈，并用 scalable best response 报告 NashConv / exploitability
 
-> 当前 AI 是本地运行的近似 GTO 混合频率策略，并非完整求解器。任意 6 人动态牌局的精确 GTO 需要预计算下注树与策略数据库，或连接外部求解服务。界面中的评分是策略匹配度，不是精确 EV 损失。
+> 当前牌桌 AI 与实时教练仍主要使用本地近似 GTO 混合频率策略，并非完整求解器。仓库已经加入可验证的 CFR+ 与 1v1 河牌求解链，但尚未覆盖任意 6 人动态节点；未命中解库前，界面中的评分仍是策略匹配度，不是精确 EV 损失。
 
 ## 两种训练模式
 
@@ -105,6 +108,21 @@ npm run ai:benchmark -- --hands 100000 --seed my-run --stack-bb 200 --equity-ite
 
 发牌、阵容、权益采样和动作混频使用相互独立的固定种子随机流，便于重复运行和对比策略修改。最新基准与解读见 [`SELF_PLAY_BENCHMARK.md`](SELF_PLAY_BENCHMARK.md)。它用于发现策略漏洞和回归强度，不等同于 CFR/GTO 求解或正式的可利用度证明。
 
+## GTO 求解基线
+
+完整设计、商业对标边界、1v1 / 1v2 / 翻前实施顺序和验收门槛见 [`GTO_SOLVER_ROADMAP.md`](GTO_SOLVER_ROADMAP.md)。
+
+仓库内置一个小型真实河牌范围节点，可直接运行 CFR+：
+
+```bash
+npm run gto:river -- \
+  --input examples/gto-river-node.json \
+  --iterations 50000 \
+  --output river-solution.json
+```
+
+输出会包含覆盖完整牌面/范围/权重/底池/筹码的 `spotId`、规则 `gameSpecId`、河牌树 `treeId`、solver 版本、每个组合在各公开行动线的混合频率，以及通过 best response 计算的树内 exploitability。这个命令用于离线生成和审计策略；完整范围的大规模节点后续应由原生并行求解任务预计算，浏览器只加载策略分片。
+
 ## 操作
 
 - `F`：弃牌
@@ -118,4 +136,8 @@ npm run ai:benchmark -- --hands 100000 --seed my-run --stack-bb 200 --equity-ite
 
 [`lib/poker-transport.ts`](lib/poker-transport.ts) 定义了带身份、幂等键和版本号的牌桌命令、脱敏状态快照与传输层契约。当前多人版通过 Supabase Edge Function 短轮询同步；后续可以在不重写牌桌 UI 的情况下替换为 Realtime / WebSocket 通道。
 
-[`lib/poker-strategy.ts`](lib/poker-strategy.ts) 定义了可序列化牌局节点、混合动作频率与策略来源契约。后续接入预计算 GTO 树或远程 solver 时，可以替换策略提供方，而不需要重写训练界面。
+[`lib/poker-strategy.ts`](lib/poker-strategy.ts) 保留 V1 兼容接口，并新增 V2 完整配置、稳定节点键、合法尺寸、动作 EV、误差/许可来源与精确/回退判别联合。筹码、抽水、树、尺度或行动线只要不同就不会误命中同一解；玩家重连 ID 改变但位置和局面相同则不会产生假 miss。
+
+[`lib/gto-standard.ts`](lib/gto-standard.ts) 锁定首个可复现牌局/下注树规范与策略结果 schema；[`lib/gto-cfr.ts`](lib/gto-cfr.ts) 提供通用 CFR+ 核心；[`lib/gto-river.ts`](lib/gto-river.ts) 将该核心接到真实德州扑克河牌范围子博弈。
+
+[`lib/gto-benchmark.ts`](lib/gto-benchmark.ts) 只比较用户合法提供、且 `gameSpecId/treeId` 完全相同的参考结果，报告 reach 覆盖率、频率 total variation、最大单动作误差和参考动作 EV 下的 regret；它不会联网或抓取商业策略数据。

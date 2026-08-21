@@ -47,6 +47,7 @@ test("server-renders the RangeCraft landing page before mounting a poker table",
   assert.match(html, /免注册入桌/);
   assert.match(html, /开始之前，先知道这里能练什么/);
   assert.match(html, /完整 GTO 的边界/);
+  assert.match(html, /真实 1v1 河牌子博弈/);
   assert.match(html, /安装成应用/);
   const landingHeader = html.match(/<header class="landing-nav"[\s\S]*?<\/header>/)?.[0] ?? "";
   assert.match(landingHeader, /aria-label="把 RangeCraft 安装到桌面"/);
@@ -86,6 +87,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
 
   assert.match(page, /function settleShowdown/);
   assert.match(page, /function chooseAiAction/);
+  assert.match(page, /本地近似 · 六人桌 169 手牌基准表/);
+  assert.match(page, /本地近似 · 行动加权范围启发式模型/);
   assert.match(page, /function LandingHome/);
   assert.match(page, /LANDING_GUIDE_ITEMS/);
   assert.match(page, /id="about-range-craft"/);
@@ -447,7 +450,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(selfPlay, /pokerCallClosesContestableLayers/);
   assert.match(selfPlay, /pokerContestablePotAtDecision/);
   assert.match(serviceWorker, /key\.startsWith\("rangecraft-"\)/);
-  assert.match(serviceWorker, /rangecraft-v10/);
+  assert.match(serviceWorker, /rangecraft-v11/);
   assert.match(serviceWorker, /request\.destination === "script" \|\| request\.destination === "style"/);
   assert.match(page, /updateViaCache: "none"/);
   assert.match(page, /controllerchange/);

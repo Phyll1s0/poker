@@ -1223,7 +1223,9 @@ function getAdvice(game: Game, player: Player, equity: number) {
     startingDepthBb: policyInput.startingDepthBb,
     maxContestableBb: policyInput.maxContestableBb,
     spr: policyPlan.spr,
-    strategySource: game.street === "preflop" ? "六人桌 169 手牌基准表" : "行动加权范围启发式模型",
+    strategySource: game.street === "preflop"
+      ? "本地近似 · 六人桌 169 手牌基准表"
+      : "本地近似 · 行动加权范围启发式模型",
     preflopPosition: policyPlan.preflopPosition,
     preflopScenario: PREFLOP_SCENARIO_LABELS[policyPlan.preflopScenario],
     preflopTargetRange: policyPlan.preflopTargetRange,
@@ -1681,7 +1683,7 @@ const LANDING_GUIDE_ITEMS = [
     index: "04",
     eyebrow: "STRATEGY BOUNDARY",
     title: "完整 GTO 的边界",
-    text: "当前是 169 手牌基准表、行动加权范围与连续混频构成的本地近似策略，不冒充求解器精确解。任意六人动态牌局仍需要预计算策略库或外部求解服务。",
+    text: "已加入经过均衡值与可利用度验证的 CFR+ 核心和真实 1v1 河牌子博弈；牌桌未命中已求解节点时仍明确使用本地近似，不把六人动态策略冒充精确解。",
   },
   {
     index: "05",
@@ -1837,7 +1839,7 @@ function LandingHome({
 
       <footer className="landing-footer">
         <span>RANGECRAFT · DECISION FIRST</span>
-        <p>近似 GTO 训练工具，不代表求解器给出的精确 EV。</p>
+        <p>离线求解结果附误差与来源；当前牌桌策略仍明确标为本地近似。</p>
       </footer>
     </main>
   );
