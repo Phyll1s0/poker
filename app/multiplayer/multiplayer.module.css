@@ -5133,3 +5133,390 @@
   max-height: min(420px, calc(100% - 126px));
   overflow-y: auto;
 }
+
+/* Table talk v2: make reactions and messages explicit, readable and easy to
+   reach without changing the server's stable emoji-only wire protocol. */
+.navChatToggle {
+  min-width: 68px;
+  min-height: 36px;
+  padding: 0 11px;
+  gap: 7px;
+  border-radius: 7px;
+}
+
+.navChatToggle span {
+  font-size: 15px;
+}
+
+.navChatToggle b {
+  font-size: 9px;
+}
+
+.navReactionToggle span {
+  color: #d8b774;
+}
+
+.chatDock {
+  width: min(360px, calc(100% - 36px));
+  height: min(530px, calc(100% - 218px));
+  min-height: 390px;
+  top: 82px;
+  grid-template-rows: auto minmax(96px, 1fr) auto auto;
+  border-radius: 12px;
+  background: rgba(15, 20, 17, 0.985);
+  box-shadow: 0 26px 74px rgba(0, 0, 0, 0.62);
+}
+
+.chatHeader {
+  min-height: 64px;
+  padding: 11px 12px 10px 15px;
+}
+
+.chatHeader > div {
+  gap: 3px;
+}
+
+.chatHeader span {
+  font-size: 8px;
+}
+
+.chatHeader strong {
+  font-size: 15px;
+}
+
+.chatHeader small {
+  color: #69716b;
+  font-size: 9px;
+  letter-spacing: 0.03em;
+}
+
+.chatHeader button {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+}
+
+.chatLog {
+  padding: 12px 13px;
+  gap: 9px;
+}
+
+.chatEmpty {
+  font-size: 11px;
+}
+
+.chatMessage {
+  max-width: 92%;
+  padding: 9px 10px;
+  border-radius: 4px 10px 10px 10px;
+}
+
+.chatMessageSelf {
+  border-radius: 10px 4px 10px 10px;
+}
+
+.chatMessage > div {
+  margin-bottom: 6px;
+}
+
+.chatMessage strong,
+.chatMessage time {
+  font-size: 9px;
+}
+
+.chatMessage p {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.chatReaction p {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.reactionContent {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.reactionContentEmoji {
+  flex: none;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.reactionContentLabel {
+  color: #e4e2dc;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.reactionContentCompact {
+  gap: 5px;
+}
+
+.reactionContentCompact .reactionContentEmoji {
+  font-size: 18px;
+}
+
+.reactionContentCompact .reactionContentLabel {
+  font-size: 10px;
+}
+
+.quickReactionSection {
+  padding: 10px 11px 11px;
+  border-top: 1px solid var(--mp-line);
+  background: rgba(255, 255, 255, 0.012);
+}
+
+.quickReactionHeader {
+  margin-bottom: 8px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.quickReactionHeader > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.quickReactionHeader span {
+  color: #81765e;
+  font-size: 7px;
+  letter-spacing: 0.13em;
+}
+
+.quickReactionHeader strong {
+  color: #d8d5cc;
+  font-size: 11px;
+}
+
+.quickReactionHeader > small {
+  color: #5f6761;
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.quickReactions {
+  padding: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  border-top: 0;
+}
+
+.quickReactions button {
+  min-height: 50px;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.quickReactions button:hover:not(:disabled),
+.quickReactions button:focus-visible {
+  border-color: rgba(99, 196, 156, 0.38);
+  outline: none;
+  background: rgba(99, 196, 156, 0.07);
+  box-shadow: 0 0 0 2px rgba(99, 196, 156, 0.06);
+}
+
+.quickReactionEmoji {
+  width: 26px;
+  flex: 0 0 26px;
+  font-size: 21px;
+  line-height: 1;
+  text-align: center;
+}
+
+.quickReactionCopy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.quickReactionCopy strong {
+  overflow: hidden;
+  color: #dbded9;
+  font-size: 11px;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quickReactionCopy small {
+  color: #69716b;
+  font-size: 8px;
+  letter-spacing: 0.06em;
+}
+
+.quickReactions button[data-tone="praise"] .quickReactionCopy small,
+.quickReactions button[data-tone="lucky"] .quickReactionCopy small {
+  color: #8dbca7;
+}
+
+.quickReactions button[data-tone="frustrated"] .quickReactionCopy small,
+.quickReactions button[data-tone="taunt"] .quickReactionCopy small {
+  color: #c89478;
+}
+
+.quickReactions button[data-tone="surprised"] .quickReactionCopy small,
+.quickReactions button[data-tone="thinking"] .quickReactionCopy small {
+  color: #899fbd;
+}
+
+.chatComposer {
+  padding: 9px 11px 11px;
+  gap: 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.chatComposerMeta {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #687069;
+  font-size: 8px;
+}
+
+.multiplayerPage .chatComposer input {
+  min-height: 42px;
+  font-size: 12px;
+}
+
+.chatComposer button {
+  min-height: 42px;
+  min-width: 58px;
+  font-size: 10px;
+}
+
+.chatNewMessages {
+  bottom: 257px;
+  font-size: 9px;
+}
+
+.seatMessageBubble {
+  max-width: 188px;
+  max-height: 3.2em;
+  padding: 8px 10px;
+  font-size: 11px;
+}
+
+.seatReactionBubble {
+  max-height: none;
+  padding: 8px 10px;
+  font-size: 11px;
+}
+
+@media (max-width: 860px) {
+  .chatDock {
+    width: 100%;
+    height: min(620px, 70dvh);
+    min-height: min(390px, 70dvh);
+    max-height: 100dvh;
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 16px 16px 0 0;
+  }
+
+  .chatComposer {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+
+  .chatDockMessageFocus .quickReactionSection {
+    padding: 7px 10px;
+  }
+
+  .chatDockMessageFocus .quickReactionHeader {
+    display: none;
+  }
+
+  .chatDockMessageFocus .quickReactions {
+    display: flex;
+    gap: 7px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .chatDockMessageFocus .quickReactions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .chatDockMessageFocus .quickReactions button {
+    min-width: 46px;
+    min-height: 44px;
+    padding: 5px;
+    flex: 0 0 46px;
+    justify-content: center;
+  }
+
+  .chatDockMessageFocus .quickReactionEmoji {
+    width: auto;
+    flex-basis: auto;
+  }
+
+  .chatDockMessageFocus .quickReactionCopy {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .navChatToggle {
+    min-width: 39px;
+    min-height: 36px;
+    padding: 0 8px;
+  }
+
+  .navChatToggle span {
+    font-size: 17px;
+  }
+}
+
+@media (max-width: 700px) {
+  .multiplayerPage .seatMessageBubble {
+    max-width: 170px;
+    scale: 1.25;
+    transform-origin: center;
+  }
+}
+
+@media (max-width: 600px) {
+  .chatDock {
+    height: min(650px, 74dvh);
+    min-height: min(390px, 74dvh);
+  }
+
+  .chatHeader {
+    min-height: 60px;
+  }
+
+  .chatLog {
+    min-height: 112px;
+  }
+
+  .quickReactionHeader > small {
+    display: none;
+  }
+
+  .quickReactions button {
+    min-height: 48px;
+  }
+
+  .multiplayerPage .chatComposer input {
+    font-size: 16px;
+  }
+}

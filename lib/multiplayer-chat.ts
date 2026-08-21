@@ -1,8 +1,41 @@
 export const MULTIPLAYER_CHAT_MESSAGE_LIMIT = 50;
 export const MULTIPLAYER_CHAT_MAX_LENGTH = 120;
-export const MULTIPLAYER_CHAT_REACTIONS = ["👍", "😂", "😮", "😅", "🔥", "🤔"] as const;
 
-export type MultiplayerChatReaction = (typeof MULTIPLAYER_CHAT_REACTIONS)[number];
+export type MultiplayerChatReactionTone =
+  | "praise"
+  | "lucky"
+  | "frustrated"
+  | "taunt"
+  | "surprised"
+  | "thinking";
+
+export type MultiplayerChatReactionOption = {
+  readonly id: string;
+  readonly emoji: string;
+  readonly label: string;
+  readonly tone: MultiplayerChatReactionTone;
+};
+
+/**
+ * Keep the wire value as the original emoji. Supabase stores reactions in a
+ * strict emoji allow-list, so labels remain presentation metadata and older
+ * clients can continue to send and display the same payloads.
+ */
+export const MULTIPLAYER_CHAT_REACTION_CATALOG = Object.freeze([
+  Object.freeze({ id: "nice-hand", emoji: "👍", label: "打得漂亮", tone: "praise" }),
+  Object.freeze({ id: "lucky-me", emoji: "😂", label: "我真幸运", tone: "lucky" }),
+  Object.freeze({ id: "bad-cards", emoji: "😅", label: "牌太差了", tone: "frustrated" }),
+  Object.freeze({ id: "come-on", emoji: "🔥", label: "敢跟吗？", tone: "taunt" }),
+  Object.freeze({ id: "no-way", emoji: "😮", label: "这也能中？", tone: "surprised" }),
+  Object.freeze({ id: "thinking", emoji: "🤔", label: "让我想想", tone: "thinking" }),
+] as const satisfies readonly MultiplayerChatReactionOption[]);
+
+export type MultiplayerChatReaction = (typeof MULTIPLAYER_CHAT_REACTION_CATALOG)[number]["emoji"];
+
+/** @deprecated Prefer MULTIPLAYER_CHAT_REACTION_CATALOG for new UI. */
+export const MULTIPLAYER_CHAT_REACTIONS = Object.freeze(
+  MULTIPLAYER_CHAT_REACTION_CATALOG.map((reaction) => reaction.emoji),
+) as readonly MultiplayerChatReaction[];
 export type MultiplayerChatKind = "text" | "reaction";
 
 export type MultiplayerChatMessage = {
@@ -30,6 +63,15 @@ export class MultiplayerChatValidationError extends Error {
 const INVISIBLE_CHARACTERS = /[\p{Cc}\p{Cf}]/gu;
 const WHITESPACE = /\s+/gu;
 const REACTION_SET = new Set<string>(MULTIPLAYER_CHAT_REACTIONS);
+const REACTION_BY_EMOJI = new Map<string, (typeof MULTIPLAYER_CHAT_REACTION_CATALOG)[number]>(
+  MULTIPLAYER_CHAT_REACTION_CATALOG.map((reaction) => [reaction.emoji, reaction]),
+);
+
+export function getMultiplayerChatReaction(
+  content: string,
+): (typeof MULTIPLAYER_CHAT_REACTION_CATALOG)[number] | undefined {
+  return REACTION_BY_EMOJI.get(content);
+}
 
 export function normalizeMultiplayerChatMessage(
   kind: unknown,

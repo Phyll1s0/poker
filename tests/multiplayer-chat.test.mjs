@@ -4,7 +4,10 @@ import test from "node:test";
 import {
   MULTIPLAYER_CHAT_MAX_LENGTH,
   MULTIPLAYER_CHAT_MESSAGE_LIMIT,
+  MULTIPLAYER_CHAT_REACTION_CATALOG,
+  MULTIPLAYER_CHAT_REACTIONS,
   compareMultiplayerChatMessageIds,
+  getMultiplayerChatReaction,
   mergeMultiplayerChatMessages,
   normalizeMultiplayerChatMessage,
 } from "../lib/multiplayer-chat.ts";
@@ -31,6 +34,42 @@ test("chat normalization removes invisible characters and collapses whitespace",
   });
 });
 
+test("reaction catalog covers the intended table-talk tones without changing wire payloads", () => {
+  assert.deepEqual(
+    MULTIPLAYER_CHAT_REACTION_CATALOG.map(({ tone }) => tone),
+    ["praise", "lucky", "frustrated", "taunt", "surprised", "thinking"],
+  );
+  assert.deepEqual(
+    MULTIPLAYER_CHAT_REACTION_CATALOG.map(({ label }) => label),
+    ["打得漂亮", "我真幸运", "牌太差了", "敢跟吗？", "这也能中？", "让我想想"],
+  );
+  assert.deepEqual(
+    MULTIPLAYER_CHAT_REACTIONS,
+    ["👍", "😂", "😅", "🔥", "😮", "🤔"],
+  );
+  assert.equal(new Set(MULTIPLAYER_CHAT_REACTION_CATALOG.map(({ id }) => id)).size, 6);
+  assert.equal(new Set(MULTIPLAYER_CHAT_REACTIONS).size, 6);
+  assert.ok(Object.isFrozen(MULTIPLAYER_CHAT_REACTION_CATALOG));
+  assert.ok(MULTIPLAYER_CHAT_REACTION_CATALOG.every((reaction) => Object.isFrozen(reaction)));
+});
+
+test("reaction lookup enriches both current and legacy emoji-only messages", () => {
+  assert.deepEqual(getMultiplayerChatReaction("👍"), {
+    id: "nice-hand",
+    emoji: "👍",
+    label: "打得漂亮",
+    tone: "praise",
+  });
+  assert.equal(getMultiplayerChatReaction("🧨"), undefined);
+
+  for (const reaction of MULTIPLAYER_CHAT_REACTION_CATALOG) {
+    assert.deepEqual(normalizeMultiplayerChatMessage("reaction", reaction.emoji), {
+      kind: "reaction",
+      content: reaction.emoji,
+    });
+  }
+});
+
 test("chat rejects empty, oversized, and arbitrary reaction payloads", () => {
   assert.throws(() => normalizeMultiplayerChatMessage("text", "\u200b\n"), /不能为空/);
   assert.throws(
@@ -38,6 +77,7 @@ test("chat rejects empty, oversized, and arbitrary reaction payloads", () => {
     /不能超过/,
   );
   assert.throws(() => normalizeMultiplayerChatMessage("reaction", "<img src=x>"), /不可用/);
+  assert.throws(() => normalizeMultiplayerChatMessage("reaction", "👍 打得漂亮"), /不可用/);
   assert.throws(() => normalizeMultiplayerChatMessage("html", "hello"), /类型不合法/);
 });
 
@@ -77,7 +117,10 @@ test("hosted chat is isolated from poker revision and protects server-owned iden
   assert.match(migration, /revoke all on sequence public\.poker_room_messages_id_seq/i);
   assert.match(migration, /order by stale\.id desc[\s\S]*?offset 200/i);
   assert.match(client, /role="log"/);
-  assert.match(client, /MULTIPLAYER_CHAT_REACTIONS\.map/);
+  assert.match(client, /MULTIPLAYER_CHAT_REACTION_CATALOG\.map/);
+  assert.match(client, /getMultiplayerChatReaction/);
+  assert.match(client, /tableMessage\.kind === "reaction"[\s\S]*?<ReactionContent/);
+  assert.match(client, /message\.kind === "reaction"[\s\S]*?<ReactionContent/);
   assert.match(client, /document\.visibilityState === "hidden"/);
   assert.match(client, /chatSendingRef/);
   assert.match(adapter, /action: "room-messages"/);

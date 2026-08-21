@@ -28,11 +28,14 @@ import {
 import { orderFiveCardHandForDisplay } from "../../lib/poker-evaluator";
 import {
   MULTIPLAYER_CHAT_MAX_LENGTH,
-  MULTIPLAYER_CHAT_REACTIONS,
+  MULTIPLAYER_CHAT_REACTION_CATALOG,
   compareMultiplayerChatMessageIds,
+  getMultiplayerChatReaction,
   mergeMultiplayerChatMessages,
   type MultiplayerChatKind,
   type MultiplayerChatMessage,
+  type MultiplayerChatReaction,
+  type MultiplayerChatReactionTone,
   type MultiplayerChatSnapshot,
 } from "../../lib/multiplayer-chat";
 import { PokerRulesModal } from "../PokerRulesModal";
@@ -437,6 +440,17 @@ const STREET_LABELS: Record<PublicGame["street"], string> = {
 const ONLINE_BIG_BLIND = 10;
 const BOARD_DEAL_STAGGER_MS = 300;
 
+type ChatFocusTarget = "reactions" | "message";
+
+const CHAT_REACTION_TONE_LABELS: Record<MultiplayerChatReactionTone, string> = {
+  praise: "赞扬",
+  lucky: "幸运",
+  frustrated: "吐槽",
+  taunt: "嘲讽",
+  surprised: "震惊",
+  thinking: "思考",
+};
+
 const TABLE_MODE_OPTIONS = [
   {
     key: "cash" as const,
@@ -479,6 +493,17 @@ function stackInBigBlinds(stack: number, bigBlind = ONLINE_BIG_BLIND) {
   return Math.round(stack / Math.max(1, bigBlind));
 }
 
+function ReactionContent({ content, compact = false }: { content: string; compact?: boolean }) {
+  const reaction = getMultiplayerChatReaction(content);
+  if (!reaction) return <>{content}</>;
+  return (
+    <span className={`${styles.reactionContent} ${compact ? styles.reactionContentCompact : ""}`}>
+      <span className={styles.reactionContentEmoji} aria-hidden="true">{reaction.emoji}</span>
+      <span className={styles.reactionContentLabel}>{reaction.label}</span>
+    </span>
+  );
+}
+
 function PlayerSeat({
   player,
   selfAccountId,
@@ -513,7 +538,9 @@ function PlayerSeat({
           className={`${styles.seatMessageBubble} ${tableMessage.kind === "reaction" ? styles.seatReactionBubble : ""}`}
           aria-hidden="true"
         >
-          {tableMessage.content}
+          {tableMessage.kind === "reaction"
+            ? <ReactionContent content={tableMessage.content} compact />
+            : tableMessage.content}
         </div>
       )}
       <div className={styles.seatCards} aria-label={`${player.handle} 的手牌`}>
@@ -1046,6 +1073,7 @@ function ChatDock({
   selfSeat,
   draft,
   sending,
+  focusTarget,
   unreadCount,
   error,
   onDraftChange,
@@ -1059,6 +1087,7 @@ function ChatDock({
   selfSeat: number | null;
   draft: string;
   sending: boolean;
+  focusTarget: ChatFocusTarget;
   unreadCount: number;
   error: string | null;
   onDraftChange: (value: string) => void;
@@ -1066,9 +1095,11 @@ function ChatDock({
   onPinnedChange: (pinned: boolean) => void;
   onReadLatest: () => void;
   onSendText: () => Promise<void>;
-  onSendReaction: (reaction: string) => Promise<void>;
+  onSendReaction: (reaction: MultiplayerChatReaction) => Promise<void>;
 }) {
   const logRef = useRef<HTMLDivElement | null>(null);
+  const firstReactionRef = useRef<HTMLButtonElement | null>(null);
+  const messageInputRef = useRef<HTMLInputElement | null>(null);
   const stickToBottom = useRef(true);
   const composing = useRef(false);
   const latestMessageId = messages.at(-1)?.id ?? null;
@@ -1103,14 +1134,30 @@ function ChatDock({
     return () => window.removeEventListener("keydown", handleEscape);
   }, [onClose]);
 
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      if (focusTarget === "reactions") {
+        firstReactionRef.current?.focus({ preventScroll: true });
+      } else {
+        messageInputRef.current?.focus({ preventScroll: true });
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [focusTarget]);
+
   return (
-    <aside className={styles.chatDock} id="multiplayer-chat" aria-label="牌桌聊天">
+    <aside
+      className={`${styles.chatDock} ${focusTarget === "message" ? styles.chatDockMessageFocus : styles.chatDockReactionFocus}`}
+      id="multiplayer-chat"
+      aria-label="桌边互动"
+    >
       <header className={styles.chatHeader}>
         <div>
           <span>TABLE TALK</span>
-          <strong>牌桌聊天</strong>
+          <strong>桌边互动</strong>
+          <small>快捷表情 · 牌桌消息</small>
         </div>
-        <button type="button" onClick={onClose} aria-label="关闭聊天">×</button>
+        <button type="button" onClick={onClose} aria-label="关闭桌边互动">×</button>
       </header>
 
       <div
@@ -1140,7 +1187,9 @@ function ChatDock({
                 {new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
               </time>
             </div>
-            <p>{message.content}</p>
+            <p>{message.kind === "reaction"
+              ? <ReactionContent content={message.content} />
+              : message.content}</p>
           </article>
         ))}
       </div>
@@ -1151,19 +1200,34 @@ function ChatDock({
         </button>
       )}
 
-      <div className={styles.quickReactions} aria-label="快捷表情">
-        {MULTIPLAYER_CHAT_REACTIONS.map((reaction) => (
-          <button
-            type="button"
-            key={reaction}
-            onClick={() => void onSendReaction(reaction)}
-            disabled={sending}
-            aria-label={`发送表情 ${reaction}`}
-          >
-            {reaction}
-          </button>
-        ))}
-      </div>
+      <section className={styles.quickReactionSection} aria-labelledby="quick-reaction-title">
+        <header className={styles.quickReactionHeader}>
+          <div>
+            <span>QUICK REACTIONS</span>
+            <strong id="quick-reaction-title">快捷表情</strong>
+          </div>
+          <small>发送后会在座位旁显示 5 秒</small>
+        </header>
+        <div className={styles.quickReactions} aria-label="快捷表情">
+          {MULTIPLAYER_CHAT_REACTION_CATALOG.map((reaction, index) => (
+            <button
+              type="button"
+              key={reaction.id}
+              ref={index === 0 ? firstReactionRef : undefined}
+              data-tone={reaction.tone}
+              onClick={() => void onSendReaction(reaction.emoji)}
+              disabled={sending}
+              aria-label={`发送快捷表情：${reaction.label}`}
+            >
+              <span className={styles.quickReactionEmoji} aria-hidden="true">{reaction.emoji}</span>
+              <span className={styles.quickReactionCopy}>
+                <strong>{reaction.label}</strong>
+                <small>{CHAT_REACTION_TONE_LABELS[reaction.tone]}</small>
+              </span>
+            </button>
+          ))}
+        </div>
+      </section>
 
       <form
         className={styles.chatComposer}
@@ -1174,7 +1238,12 @@ function ChatDock({
         }}
       >
         {error && <p className={styles.chatError} role="alert">{error}</p>}
+        <div className={styles.chatComposerMeta}>
+          <span>牌桌消息</span>
+          <span>{Array.from(draft).length}/{MULTIPLAYER_CHAT_MAX_LENGTH}</span>
+        </div>
         <input
+          ref={messageInputRef}
           value={draft}
           onChange={(event) => onDraftChange(event.target.value)}
           onCompositionStart={() => { composing.current = true; }}
@@ -1497,6 +1566,7 @@ export default function MultiplayerClient({
   const [raiseDraft, setRaiseDraft] = useState<{ turnKey: string; value: number } | null>(null);
   const [chatMessages, setChatMessages] = useState<MultiplayerChatMessage[]>([]);
   const [chatOpen, setChatOpen] = useState(false);
+  const [chatFocusTarget, setChatFocusTarget] = useState<ChatFocusTarget>("message");
   const [chatDraft, setChatDraft] = useState("");
   const [chatSending, setChatSending] = useState(false);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
@@ -1594,6 +1664,7 @@ export default function MultiplayerClient({
     setBoardDeal(null);
     setChatMessages([]);
     setChatOpen(false);
+    setChatFocusTarget("message");
     setChatDraft("");
     setChatSending(false);
     setUnreadChatCount(0);
@@ -1642,10 +1713,11 @@ export default function MultiplayerClient({
     setChatOpen(false);
   }, []);
 
-  const openChat = useCallback(() => {
+  const openChat = useCallback((focusTarget: ChatFocusTarget = "message") => {
     chatOpenRef.current = true;
     chatPinnedRef.current = true;
     setTableHintOpen(false);
+    setChatFocusTarget(focusTarget);
     setChatOpen(true);
     setUnreadChatCount(0);
   }, []);
@@ -1688,6 +1760,7 @@ export default function MultiplayerClient({
       setLeaving(false);
       setChatMessages([]);
       setChatOpen(false);
+      setChatFocusTarget("message");
       setChatDraft("");
       setChatSending(false);
       setUnreadChatCount(0);
@@ -1938,7 +2011,7 @@ export default function MultiplayerClient({
     }
   }, [chatDraft, sendChatContent]);
 
-  const sendChatReaction = useCallback(async (reaction: string) => {
+  const sendChatReaction = useCallback(async (reaction: MultiplayerChatReaction) => {
     await sendChatContent("reaction", reaction);
   }, [sendChatContent]);
 
@@ -2359,8 +2432,8 @@ export default function MultiplayerClient({
     return {
       eyebrow: "TABLE STATUS",
       title: `等待 ${actingPlayer?.handle ?? "牌桌"} 行动`,
-      summary: "你现在不需要操作；可以观察公开行动、打开聊天，或查看已经解锁的牌谱。",
-      details: ["牌桌会自动同步合法动作和倒计时", "朋友局提示只解释操作，不提供胜率或最佳策略"],
+      summary: "你现在不需要操作；可以观察公开行动，用顶栏“表情 / 消息”互动，或查看已经解锁的牌谱。",
+      details: ["快捷表情会在座位旁显示 5 秒", "牌桌会自动同步合法动作和倒计时"],
     };
   })();
 
@@ -2402,14 +2475,32 @@ export default function MultiplayerClient({
           )}
           {snapshot && (
             <button
-              className={`${styles.navChatToggle} ${chatOpen ? styles.navChatToggleOn : ""}`}
+              className={`${styles.navChatToggle} ${styles.navReactionToggle} ${chatOpen && chatFocusTarget === "reactions" ? styles.navChatToggleOn : ""}`}
               type="button"
-              onClick={chatOpen ? closeChat : openChat}
+              onClick={() => {
+                if (chatOpen && chatFocusTarget === "reactions") closeChat();
+                else openChat("reactions");
+              }}
               aria-expanded={chatOpen}
               aria-controls="multiplayer-chat"
-              aria-label={chatOpen ? "关闭牌桌聊天" : `打开牌桌聊天${unreadChatCount ? `，${unreadChatCount} 条未读` : ""}`}
+              aria-label={chatOpen && chatFocusTarget === "reactions" ? "关闭快捷表情" : "打开快捷表情"}
             >
-              <span aria-hidden="true">◌</span><b>聊天</b>
+              <span aria-hidden="true">☺</span><b>表情</b>
+            </button>
+          )}
+          {snapshot && (
+            <button
+              className={`${styles.navChatToggle} ${chatOpen && chatFocusTarget === "message" ? styles.navChatToggleOn : ""}`}
+              type="button"
+              onClick={() => {
+                if (chatOpen && chatFocusTarget === "message") closeChat();
+                else openChat("message");
+              }}
+              aria-expanded={chatOpen}
+              aria-controls="multiplayer-chat"
+              aria-label={chatOpen && chatFocusTarget === "message" ? "关闭牌桌消息" : `打开牌桌消息${unreadChatCount ? `，${unreadChatCount} 条未读` : ""}`}
+            >
+              <span aria-hidden="true">✉</span><b>消息</b>
               {unreadChatCount > 0 && <small>{unreadChatCount > 9 ? "9+" : unreadChatCount}</small>}
             </button>
           )}
@@ -2697,6 +2788,7 @@ export default function MultiplayerClient({
                   selfSeat={snapshot.table.viewerSeat}
                   draft={chatDraft}
                   sending={chatSending}
+                  focusTarget={chatFocusTarget}
                   unreadCount={unreadChatCount}
                   error={chatError}
                   onDraftChange={setChatDraft}
