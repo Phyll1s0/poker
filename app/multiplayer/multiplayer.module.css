@@ -5520,3 +5520,156 @@
     font-size: 16px;
   }
 }
+
+/* Hero/action-dock safe zone
+   The desktop dock used to grow vertically when both the time bank and AI
+   assist were available, while remaining absolutely positioned above the
+   hero seat. Flatten the persistent controls, then fall back to document flow
+   on short desktop viewports so cards and controls can never cover each other. */
+@media (min-width: 861px) {
+  .multiplayerPage .tableControls:not(.tableControlsTransition) {
+    min-height: 0;
+    padding: 10px 12px;
+    grid-template-columns: 200px minmax(310px, 1fr) 260px;
+    gap: 8px 12px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .controlSummary {
+    min-height: 0;
+    padding-right: 10px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-content: center;
+    align-items: center;
+    gap: 4px 7px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .turnLabel,
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .controlSummary > span:last-of-type,
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .decisionResourceButtons {
+    grid-column: 1 / -1;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .controlSummary > strong {
+    font-size: 16px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .actionClockSummary {
+    justify-self: end;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .actionClockSummary b {
+    font-size: 18px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .actionClockSummary small {
+    display: none;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .controlSummary > span:last-of-type {
+    overflow: hidden;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .decisionResourceButtons {
+    margin-top: 1px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .timeBankButton,
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .aiAssistButton {
+    height: 28px;
+    min-height: 28px;
+    margin: 0;
+    padding: 3px 5px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    white-space: nowrap;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .timeBankButton strong,
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .aiAssistButton strong {
+    overflow: hidden;
+    font-size: 8px;
+    text-overflow: ellipsis;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .timeBankButton small,
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .aiAssistButton small {
+    display: none;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .primaryActions .actionButton {
+    height: 42px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .raiseControl {
+    gap: 4px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .raiseControl .raiseInputs {
+    gap: 5px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .raiseControl .raisePresets {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 3px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .raiseControl .raisePresets button {
+    min-height: 21px;
+    padding: 2px;
+    gap: 2px;
+    font-size: 7px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .raiseControl .raisePresets button small {
+    font-size: 7px;
+  }
+
+  .multiplayerPage .seat0 {
+    bottom: -84px;
+  }
+}
+
+@media (min-width: 861px) and (max-width: 1100px) {
+  .multiplayerPage .tableControls:not(.tableControlsTransition) {
+    grid-template-columns: 190px minmax(300px, 1fr) 235px;
+  }
+}
+
+@media (min-width: 861px) and (max-height: 900px) {
+  .tableStage,
+  .multiplayerPage .tableStage {
+    height: auto;
+    min-height: calc(100svh - 72px);
+    padding: 92px 58px 24px;
+    justify-content: flex-start;
+    overflow-x: hidden;
+    overflow-y: visible;
+  }
+
+  .multiplayerPage .pokerTable {
+    margin: 84px 0 146px;
+    transform: none;
+  }
+
+  .multiplayerPage .tableControls {
+    margin-top: 0;
+    position: relative;
+    left: auto;
+    bottom: auto;
+    transform: none;
+  }
+}
+/* End hero/action-dock safe zone */
+
+/* Keep the between-hands settlement dock on its dedicated single-column
+   layout after the short-viewport positioning guard above. */
+.multiplayerPage .tableControlsTransition {
+  grid-template-columns: minmax(0, 1fr);
+}

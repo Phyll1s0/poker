@@ -371,6 +371,20 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerCss, /\[data-suit-tone="black"\][\s\S]*?-webkit-text-fill-color:\s*#171b19/);
   assert.match(multiplayerCss, /width: min\(800px, 78%, calc\(82dvh - 59px\)\)/);
   assert.match(multiplayerCss, /grid-template-columns: 150px minmax\(330px, 1fr\) 270px/);
+  const heroDockGuardStart = multiplayerCss.indexOf("/* Hero/action-dock safe zone");
+  assert.ok(heroDockGuardStart > multiplayerCss.lastIndexOf(".multiplayerPage .seatSelf .seatCards", heroDockGuardStart - 1));
+  assert.ok(heroDockGuardStart > multiplayerCss.lastIndexOf(".multiplayerPage .tableControls {", heroDockGuardStart - 1));
+  const heroDockGuard = sourceBetween(
+    multiplayerCss,
+    "/* Hero/action-dock safe zone",
+    "/* End hero/action-dock safe zone */",
+  );
+  assert.match(heroDockGuard, /@media \(min-width: 861px\)[\s\S]*?\.tableControls:not\(\.tableControlsTransition\)[\s\S]*?min-height:\s*0/);
+  assert.match(heroDockGuard, /\.decisionResourceButtons\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(heroDockGuard, /\.raiseControl \.raisePresets\s*\{[\s\S]*?grid-template-columns:\s*repeat\(5, minmax\(0, 1fr\)\)/);
+  assert.match(heroDockGuard, /\.multiplayerPage \.seat0\s*\{\s*bottom:\s*-84px/);
+  assert.match(heroDockGuard, /@media \(min-width: 861px\) and \(max-height: 900px\)[\s\S]*?\.multiplayerPage \.tableControls\s*\{[\s\S]*?position:\s*relative;[\s\S]*?bottom:\s*auto/);
+  assert.doesNotMatch(heroDockGuard, /\.seatSelf[^}]*z-index:\s*(?:2[1-9]|[3-9]\d+)/);
   assert.match(multiplayerCss, /\.handTransition\s*\{[\s\S]*?grid-column: 1 \/ -1/);
   assert.match(multiplayerCss, /\.showDecisionInline\s*\{[\s\S]*?border-bottom:/);
   assert.match(multiplayerCss, /\.nextHandWaitingPanel\s*\{[\s\S]*?display:\s*grid/);
