@@ -90,8 +90,7 @@ test("normalizes action frequencies and only exposes executable actions and sizi
     analysis.sizing.reduce((sum, route) => sum + route.frequency, 0) - 1,
   ) < 1e-12);
 
-  // Tiny mixed routes may be hidden from the display, but the routes that
-  // remain visible must still form a complete, normalized recommendation.
+  // Tiny mixed routes remain visible and retain their original probability.
   const filteredMix = analyzeMultiplayerDecision({
     ...checkedFlopInput(),
     decisionId: "hand-17:flop:1:hero",

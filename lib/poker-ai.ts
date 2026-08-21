@@ -1,9 +1,9 @@
 export const AI_PROFILES = {
-  gto: { aggression: 0.7, looseness: 0.27, bluff: 0.12 },
-  lag: { aggression: 0.9, looseness: 0.34, bluff: 0.18 },
-  tag: { aggression: 0.74, looseness: 0.22, bluff: 0.06 },
-  adaptive: { aggression: 0.72, looseness: 0.28, bluff: 0.15 },
-  nit: { aggression: 0.48, looseness: 0.16, bluff: 0.025 },
+  gto: { aggression: 0.73, looseness: 0.3, bluff: 0.13 },
+  lag: { aggression: 0.94, looseness: 0.47, bluff: 0.25 },
+  tag: { aggression: 0.78, looseness: 0.25, bluff: 0.08 },
+  adaptive: { aggression: 0.78, looseness: 0.34, bluff: 0.18 },
+  nit: { aggression: 0.5, looseness: 0.15, bluff: 0.03 },
 } as const;
 
 export type AiStyleKey = keyof typeof AI_PROFILES;
@@ -74,33 +74,48 @@ export function adaptAiProfileToHeroImage(
 
   const requestedIntensity = options.intensity ?? 1;
   const intensity = Number.isFinite(requestedIntensity)
-    ? Math.max(0, Math.min(1.25, requestedIntensity))
+    ? Math.max(0, Math.min(1.6, requestedIntensity))
     : 0;
-  const confidence = heroImageConfidence(image) * AI_IMAGE_SENSITIVITY[styleKey] * intensity;
+  const confidence = clamp01(heroImageConfidence(image) * AI_IMAGE_SENSITIVITY[styleKey] * intensity);
+  const heroLooseness = clamp01(image.loose) - 0.5;
+  const heroAggression = clamp01(image.aggressive) - 0.5;
   const heroTightness = 0.5 - clamp01(image.loose);
   const heroPassivity = 0.5 - clamp01(image.aggressive);
   const deceptivePressure = clamp01(image.deceptive) - 0.5;
   const equityAdjustment = options.facingHero
-    ? Math.max(-0.04, Math.min(0.04, confidence * (
-        (clamp01(image.loose) - 0.5) * 0.04
-        + (clamp01(image.aggressive) - 0.5) * 0.045
-        + deceptivePressure * 0.025
+    ? Math.max(-0.07, Math.min(0.075, confidence * (
+        heroLooseness * 0.1
+        + heroAggression * 0.12
+        + deceptivePressure * 0.02
       )))
     : 0;
-  const aggressionDelta = Math.max(-0.08, Math.min(0.08, confidence * (
-    heroTightness * 0.14 + heroPassivity * 0.14 - deceptivePressure * 0.04
-  )));
-  const loosenessDelta = Math.max(-0.05, Math.min(0.05, confidence * (
-    heroTightness * 0.1 + heroPassivity * 0.035 - deceptivePressure * 0.03
-  )));
-  const bluffDelta = Math.max(-0.06, Math.min(0.06, confidence * (
-    heroTightness * 0.2 + heroPassivity * 0.08 - deceptivePressure * 0.1
-  )));
+  const aggressionDelta = options.facingHero
+    ? Math.max(-0.12, Math.min(0.13, confidence * (
+        heroLooseness * 0.22 + heroAggression * 0.25 - deceptivePressure * 0.035
+      )))
+    : Math.max(-0.08, Math.min(0.08, confidence * (
+        heroTightness * 0.14 + heroPassivity * 0.14 - deceptivePressure * 0.04
+      )));
+  const loosenessDelta = options.facingHero
+    ? Math.max(-0.14, Math.min(0.14, confidence * (
+        heroLooseness * 0.34 + heroAggression * 0.38 - deceptivePressure * 0.02
+      )))
+    : Math.max(-0.05, Math.min(0.05, confidence * (
+        heroTightness * 0.1 + heroPassivity * 0.035 - deceptivePressure * 0.03
+      )));
+  const bluffDelta = options.facingHero
+    ? Math.max(-0.07, Math.min(0.07, confidence * (
+        heroLooseness * 0.08 - heroAggression * 0.04 - deceptivePressure * 0.08
+      )))
+    : Math.max(-0.06, Math.min(0.06, confidence * (
+        heroTightness * 0.2 + heroPassivity * 0.08 - deceptivePressure * 0.1
+      )));
 
   return {
-    // Tight/passive opponents are pressured more; loose/aggressive opponents
-    // receive a more linear, lower-bluff response. Deltas stay deliberately
-    // bounded so each computer retains its underlying archetype.
+    // Tight/passive opponents are pressured more. When the hero is the latest
+    // aggressor, loose/aggressive reads instead widen defense and value raises;
+    // this prevents repeated auto-raises from making every opponent tighter.
+    // Deltas stay bounded so each computer retains its base archetype.
     aggression: clamp01(baseline.aggression + aggressionDelta),
     looseness: clamp01(baseline.looseness + loosenessDelta),
     bluff: clamp01(baseline.bluff + bluffDelta),
@@ -117,9 +132,22 @@ export const AI_STYLE_OPTIONS: { style: string; styleKey: AiStyleKey }[] = [
   { style: "稳健保守", styleKey: "nit" },
 ];
 
+const AI_STYLE_WEIGHTS: Record<AiStyleKey, number> = {
+  gto: 0.26,
+  lag: 0.24,
+  tag: 0.2,
+  adaptive: 0.24,
+  nit: 0.06,
+};
+
 export function sampleAiStyle(random = Math.random) {
-  const index = Math.min(AI_STYLE_OPTIONS.length - 1, Math.floor(random() * AI_STYLE_OPTIONS.length));
-  return { ...AI_STYLE_OPTIONS[index] };
+  const roll = clamp01(random());
+  let cumulative = 0;
+  for (const option of AI_STYLE_OPTIONS) {
+    cumulative += AI_STYLE_WEIGHTS[option.styleKey];
+    if (roll < cumulative) return { ...option };
+  }
+  return { ...AI_STYLE_OPTIONS[AI_STYLE_OPTIONS.length - 1] };
 }
 
 export function sampleAiLineup(count: number, random = Math.random) {

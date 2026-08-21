@@ -162,3 +162,47 @@ test("combo-weighted range summaries are normalized and position ordered", () =>
   assert.ok(utg.enterFrequency > 0.12 && utg.enterFrequency < 0.24);
   assert.ok(button.enterFrequency > 0.4 && button.enterFrequency < 0.65);
 });
+
+test("uses position-paired no-rake defense ranges instead of one universally tight chart", () => {
+  const summary = (heroPosition, aggressorPosition, facingSizeBb = 2.5) => summarizePreflopRange({
+    scenario: "vs-open",
+    heroPosition,
+    aggressorPosition,
+    effectiveStackBb: 100,
+    facingSizeBb,
+  });
+  const bbUtg = summary("BB", "UTG");
+  const bbCo = summary("BB", "CO");
+  const bbBtn = summary("BB", "BTN");
+  const sbBtn = summary("SB", "BTN");
+
+  assert.ok(bbUtg.enterFrequency >= 0.26 && bbUtg.enterFrequency <= 0.35);
+  assert.ok(bbCo.enterFrequency >= 0.38 && bbCo.enterFrequency <= 0.48);
+  assert.ok(bbBtn.enterFrequency >= 0.45 && bbBtn.enterFrequency <= 0.56);
+  assert.ok(sbBtn.enterFrequency >= 0.18 && sbBtn.enterFrequency <= 0.28);
+  assert.ok(bbUtg.enterFrequency < bbCo.enterFrequency);
+  assert.ok(bbCo.enterFrequency < bbBtn.enterFrequency);
+  assert.ok(bbBtn.enterFrequency - sbBtn.enterFrequency >= 0.18);
+  assert.ok(bbBtn.enterFrequency - summary("BB", "BTN", 4).enterFrequency >= 0.07);
+  assert.ok(summary("BB", "BTN", 6).enterFrequency < 0.28);
+  assert.ok(summary("BB", "SB", 6).enterFrequency < 0.3);
+
+  const strategy = (hand, aggressorPosition = "BTN") => getPreflopStrategy({
+    hand,
+    scenario: "vs-open",
+    heroPosition: "BB",
+    aggressorPosition,
+    effectiveStackBb: 100,
+    facingSizeBb: 2.5,
+  });
+  assert.ok(strategy("K7o").enterFrequency > 0);
+  assert.ok(strategy("86o").enterFrequency > 0);
+  assert.ok(strategy("K7o").enterFrequency > strategy("K7o", "UTG").enterFrequency);
+  assert.equal(strategy("T7o", "UTG").enterFrequency, 0);
+  assert.equal(strategy("86o", "UTG").enterFrequency, 0);
+  assert.ok(strategy("Q4s").enterFrequency > strategy("86o").enterFrequency);
+  assert.ok(strategy("Q4s").enterFrequency > strategy("54o").enterFrequency);
+  assert.ok(strategy("55").enterFrequency >= strategy("22").enterFrequency);
+  assert.equal(strategy("72o").enterFrequency, 0);
+  assert.equal(strategy("AA").enterFrequency, 1);
+});

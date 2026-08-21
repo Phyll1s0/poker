@@ -20,6 +20,7 @@ import {
   preflopPercentile,
   preflopStrength,
 } from "../lib/poker-evaluator";
+import { formatPokerFrequency, formatPokerFrequencyMix } from "../lib/poker-frequency";
 import {
   choosePokerPolicyAction,
   evaluatePokerPolicy,
@@ -999,7 +1000,7 @@ function chooseAiAction(
   const adapted = adaptAiProfileToHeroImage(styleKey, heroImage, {
     heroActive: !game.players[0].folded,
     facingHero,
-    intensity: mode === "endless" ? 1.25 : 0.7,
+    intensity: mode === "endless" ? 1.5 : 0.85,
   });
   const profile: PokerPolicyProfile = {
     aggression: adapted.aggression,
@@ -1041,22 +1042,6 @@ function privatelyPeekOpponent(game: Game, playerId: number): Game {
   };
 }
 
-function formatFrequencyMix(items: Array<{ label: string; frequency: number }>) {
-  const visible = items.filter((item) => item.frequency >= 0.005);
-  if (!visible.length) return "";
-  const total = visible.reduce((sum, item) => sum + item.frequency, 0);
-  const exact = visible.map((item) => item.frequency / total * 100);
-  const percentages = exact.map(Math.floor);
-  let remainder = 100 - percentages.reduce((sum, value) => sum + value, 0);
-  const order = exact
-    .map((value, index) => ({ index, fraction: value - percentages[index] }))
-    .sort((left, right) => right.fraction - left.fraction);
-  for (let cursor = 0; remainder > 0; cursor += 1, remainder -= 1) {
-    percentages[order[cursor % order.length].index] += 1;
-  }
-  return visible.map((item, index) => `${item.label} ${percentages[index]}%`).join(" · ");
-}
-
 function getAdvice(game: Game, player: Player, equity: number) {
   const toCall = Math.max(0, game.highestBet - player.bet);
   const decisionPot = pokerContestablePotAtDecision(
@@ -1087,7 +1072,7 @@ function getAdvice(game: Game, player: Player, equity: number) {
     if (action === "raise") note += ` 主路线为主动加注，尺寸按当前 ${game.raiseCount === 0 ? "开池" : game.raiseCount === 1 ? "3-bet" : game.raiseCount === 2 ? "4-bet" : "再加注"}节点计算。`;
     else if (action === "call") note += ` 主路线为跟注，保留强牌和部分可实现权益的牌，避免把继续范围全部暴露为加注。`;
     else if (action === "check") note += ` 当前拥有免费过牌权，弱牌无需为了“主动”而制造不必要底池。`;
-    else note += ` 当前牌型位于该位置与行动序列的范围外，弃牌来自翻前范围，而不是把翻后胜率公式硬套进来。`;
+    else note += ` 当前牌型位于该位置与行动序列的范围外，弃牌来自翻前范围，而不是把翻后胜率公式硬套进来。混合策略既包含混频节点，也允许明显劣势组合采用纯线路；这里使用的是近似基准表，不冒充求解器精确解。`;
   } else if (toCall > 0) {
     const directPrice = Math.round(potOdds * 100);
     const realizationPrice = Math.round(policyPlan.realizationThreshold * 100);
@@ -1160,14 +1145,14 @@ function getAdvice(game: Game, player: Player, equity: number) {
     note += ` 多人底池中仍有更深对手，加注的有效上限按 ${policyInput.maxContestableBb.toFixed(1)} BB 计算。`;
   }
   const labels: Record<ActionKind, string> = { fold: "弃牌", check: "过牌", call: "跟注", raise: "加注" };
-  const mix = formatFrequencyMix(
+  const mix = formatPokerFrequencyMix(
     (Object.entries(frequencies) as [ActionKind, number][])
       .map(([kind, frequency]) => ({ label: labels[kind], frequency })),
   );
   const sizingRoutes = frequencies.raise >= 0.005 && !player.raiseLocked
     ? policyPlan.sizingRoutes
     : [];
-  const sizingMix = formatFrequencyMix(sizingRoutes.map((route) => ({
+  const sizingMix = formatPokerFrequencyMix(sizingRoutes.map((route) => ({
     label: formatPokerSizingRoute(sizingContext, route),
     frequency: route.frequency,
   })));
@@ -1254,7 +1239,7 @@ function AiDecisionHint({
               <b>已查看</b>
             </div>
             <p>{advice.mix}。{advice.sizingMix ? `进入加注分支后的尺寸混合：${advice.sizingMix}。` : ""}{advice.note}</p>
-            <small className="coach-hint-source">{advice.strategySource} · 仅使用公开行动与范围估算，不读取电脑暗牌</small>
+            <small className="coach-hint-source">{advice.strategySource} · 保留原始混合频率；仅使用公开行动与范围估算，不读取电脑暗牌</small>
           </>
         )}
       </div>
@@ -1655,7 +1640,7 @@ const LANDING_GUIDE_ITEMS = [
     index: "05",
     eyebrow: "TABLE IMAGE",
     title: "形象与适应",
-    text: "你和电脑都可以选择亮牌或盖牌。电脑会从公开行动形成对你松紧、侵略性与欺骗性的判断；无尽模式会随样本增加持续调整反制。",
+    text: "你和电脑都可以选择亮牌或盖牌。电脑实战动作按策略频率随机抽样，并从公开行动形成对你松紧、侵略性与欺骗性的判断；持续过度加注会触发更宽防守与更多价值反加注。",
   },
   {
     index: "06",
@@ -2119,13 +2104,15 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     const selectedFrequency = advice.frequencies[kind];
     const relativeFrequency = selectedFrequency / Math.max(0.001, bestFrequency);
     const actionScore = selectedFrequency > 0 ? Math.round(40 + 60 * relativeFrequency) : 30;
-    const actionVerdict = selectedFrequency <= 0.005
+    const actionVerdict = selectedFrequency <= Number.EPSILON
       ? "当前模型不支持"
-      : relativeFrequency >= 0.78
-        ? "主频路线"
-        : relativeFrequency >= 0.28 || selectedFrequency >= 0.15
-          ? "可接受混合"
-          : "低频路线";
+      : selectedFrequency < 0.02
+        ? "极低频路线"
+        : relativeFrequency >= 0.78
+          ? "主频路线"
+          : relativeFrequency >= 0.28 || selectedFrequency >= 0.15
+            ? "可接受混合"
+            : "低频路线";
     const sizingContext = pokerSizingContext(game, human);
     const actualRaiseTo = kind === "raise" ? legalPokerRaiseTarget(sizingContext, raiseTo) : null;
     const actualBetFraction = actualRaiseTo === null ? null : pokerRaiseFraction(sizingContext, actualRaiseTo);
@@ -2659,7 +2646,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                 <section className="last-decision">
                   <div className="decision-top"><span>上一决策{feedback.hintUsed ? " · 借助提示" : " · 独立完成"}</span><b className={feedback.score >= 85 ? "good" : feedback.score >= 65 ? "ok" : "bad"}>{feedback.score} 分</b></div>
                   <h3>{feedback.score >= 85 ? "线路漂亮，继续保持" : feedback.score >= 65 ? "可执行，但有更优选择" : "这里值得重点复盘"}</h3>
-                  <p>你选择了{feedback.action}，属于{feedback.actionVerdict}（约 {Math.round(feedback.selectedFrequency * 100)}%）。参考混合：{feedback.mix}。{feedback.sizingMix ? `进入加注分支后的尺寸混合：${feedback.sizingMix}。` : ""}{feedback.sizeVerdict ? `${feedback.sizeVerdict}。` : ""}{feedback.note}</p>
+                  <p>你选择了{feedback.action}，属于{feedback.actionVerdict}（{formatPokerFrequency(feedback.selectedFrequency)}）。参考混合：{feedback.mix}。{feedback.sizingMix ? `进入加注分支后的尺寸混合：${feedback.sizingMix}。` : ""}{feedback.sizeVerdict ? `${feedback.sizeVerdict}。` : ""}{feedback.note}</p>
                   <p className="range-note">来源：{feedback.strategySource}。分数表示与当前公开策略频率的匹配程度，不是求解器计算的 EV 损失。</p>
                 </section>
               ) : (
@@ -2743,7 +2730,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                     <div>
                       <b>{isReviewRun ? `第 ${item.hand} 手 · ` : ""}{item.street} · 手牌 {item.cards}</b>
                       <p>公共牌 {item.board} · 底池 {item.pot} · 面对 {item.toCall}</p>
-                      <p>你的选择：{item.action}（{item.actionVerdict}，约 {Math.round(item.selectedFrequency * 100)}%）；最高频线路：{item.recommended}；{item.hintUsed ? "本节点借助了 AI 提示" : "本节点独立完成"}</p>
+                      <p>你的选择：{item.action}（{item.actionVerdict}，{formatPokerFrequency(item.selectedFrequency)}）；最高频线路：{item.recommended}；{item.hintUsed ? "本节点借助了 AI 提示" : "本节点独立完成"}</p>
                       <p>参考混合：{item.mix}</p>
                       <p>本手起始有效 {item.startingDepthBb.toFixed(1)} BB · 当前后手：你 {item.heroStackBb.toFixed(1)} BB / {item.opponentName} {item.opponentStackBb.toFixed(1)} BB · 本节点有效 {item.effectiveStackBb.toFixed(1)} BB{item.maxContestableBb > item.effectiveStackBb + 0.05 ? ` · 多人加注有效上限 ${item.maxContestableBb.toFixed(1)} BB` : ""}</p>
                       {item.sizingMix && <p>进入加注分支后的尺寸混合：{item.sizingMix}{item.sizeVerdict ? `；${item.sizeVerdict}` : ""}</p>}

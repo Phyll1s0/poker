@@ -706,8 +706,8 @@ function buildPreflopFrequencies(input: Parameters<typeof buildFallbackPreflopFr
   // instead of replacing the chart with a different hand-strength ranking.
   const styleEnterFactor = Math.exp((input.profile.looseness - 0.27) * 2.05);
   const styleRaiseFactor = Math.exp(
-    (input.profile.aggression - 0.7) * 1.15
-      + (input.profile.bluff - 0.12) * 0.75,
+    (input.profile.aggression - 0.7) * 2
+      + (input.profile.bluff - 0.12) * 1.2,
   );
   const limperFactor = publishedScenario === "isolate"
     ? clamp(1 - input.preflopLimpers * 0.045, 0.78, 1)

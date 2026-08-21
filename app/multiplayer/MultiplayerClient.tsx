@@ -18,6 +18,7 @@ import {
   analyzeMultiplayerDecision,
   type MultiplayerAiAnalysis,
 } from "../../lib/multiplayer-ai-coach";
+import { formatPokerFrequency } from "../../lib/poker-frequency";
 import {
   isPokerAudioEnabled,
   playPokerSound,
@@ -1287,8 +1288,8 @@ function AiAssistAnalysisPanel({
         {analysis.frequencies.map((route) => (
           <div className={styles.aiFrequencyRow} key={route.action}>
             <span>{route.label}</span>
-            <div><i style={{ width: formatAnalysisPercent(route.frequency) }} /></div>
-            <strong>{formatAnalysisPercent(route.frequency)}</strong>
+            <div><i style={{ width: `${Math.max(0, Math.min(1, route.frequency)) * 100}%` }} /></div>
+            <strong>{formatPokerFrequency(route.frequency)}</strong>
           </div>
         ))}
       </section>
@@ -1303,7 +1304,7 @@ function AiAssistAnalysisPanel({
             {analysis.sizing.map((route) => (
               <div key={route.target}>
                 <strong>{route.allIn ? `全下 ${route.target}` : route.label}</strong>
-                <span>{formatAnalysisPercent(route.frequency)}</span>
+                <span>{formatPokerFrequency(route.frequency)}</span>
               </div>
             ))}
           </div>

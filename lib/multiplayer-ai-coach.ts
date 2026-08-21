@@ -337,15 +337,14 @@ function boardDescription(board: readonly PokerCard[]) {
 }
 
 function frequencyRows(frequencies: Record<PokerPolicyActionKind, number>) {
-  const visible = (Object.entries(frequencies) as [PokerPolicyActionKind, number][])
-    .filter(([, frequency]) => frequency >= 0.005)
-    .sort((left, right) => right[1] - left[1]);
-  const total = visible.reduce((sum, [, frequency]) => sum + frequency, 0);
-  return visible.map(([action, frequency]) => ({
-    action,
-    label: ACTION_LABELS[action],
-    frequency: frequency / Math.max(1e-9, total),
-  }));
+  return (Object.entries(frequencies) as [PokerPolicyActionKind, number][])
+    .filter(([, frequency]) => frequency > 0)
+    .sort((left, right) => right[1] - left[1])
+    .map(([action, frequency]) => ({
+      action,
+      label: ACTION_LABELS[action],
+      frequency,
+    }));
 }
 
 export function analyzeMultiplayerDecision(input: MultiplayerAiCoachInput): MultiplayerAiAnalysis {

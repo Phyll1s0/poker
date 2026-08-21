@@ -194,7 +194,7 @@ function buildVsOpenReference() {
   setMix(chart, ["TT"], 0.58, 0.3);
   setMix(chart, ["99"], 0.68, 0.18);
   setMix(chart, ["88", "77", "66", "55", "44", "33"], 0.76, 0.06);
-  setMix(chart, ["22"], 0.82, 0.06);
+  setMix(chart, ["22"], 0.72, 0.05);
   setMix(chart, ["AKs"], 0.16, 0.84);
   setMix(chart, ["AKo"], 0.36, 0.6);
   setMix(chart, ["AQs"], 0.5, 0.42);
@@ -208,6 +208,103 @@ function buildVsOpenReference() {
   setMix(chart, ["A9s", "A8s", "A7s", "A6s", "K9s", "Q9s", "J9s", "T9s", "98s", "87s", "76s", "65s", "54s"], 0.5, 0.08);
   setMix(chart, ["ATo", "KQo", "KJo", "QJo", "T8s", "97s", "86s", "75s", "64s", "53s"], 0.32, 0.05);
   return chart;
+}
+
+const VS_OPEN_TARGETS: Record<PreflopPosition, Record<PreflopPosition, number>> = {
+  UTG: { UTG: 0.1, HJ: 0.1, CO: 0.1, BTN: 0.1, SB: 0.1, BB: 0.1 },
+  HJ: { UTG: 0.1, HJ: 0.11, CO: 0.11, BTN: 0.11, SB: 0.11, BB: 0.11 },
+  CO: { UTG: 0.12, HJ: 0.15, CO: 0.15, BTN: 0.15, SB: 0.15, BB: 0.15 },
+  BTN: { UTG: 0.15, HJ: 0.18, CO: 0.23, BTN: 0.23, SB: 0.23, BB: 0.23 },
+  SB: { UTG: 0.11, HJ: 0.13, CO: 0.17, BTN: 0.23, SB: 0.23, BB: 0.23 },
+  BB: { UTG: 0.3, HJ: 0.35, CO: 0.43, BTN: 0.5, SB: 0.55, BB: 0.5 },
+};
+
+const VS_OPEN_SUPPORT_MARGIN: Record<PreflopPosition, Record<PreflopPosition, number>> = {
+  UTG: { UTG: 0.02, HJ: 0.02, CO: 0.02, BTN: 0.02, SB: 0.02, BB: 0.02 },
+  HJ: { UTG: 0.02, HJ: 0.02, CO: 0.02, BTN: 0.02, SB: 0.02, BB: 0.02 },
+  CO: { UTG: 0.025, HJ: 0.025, CO: 0.025, BTN: 0.025, SB: 0.025, BB: 0.025 },
+  BTN: { UTG: 0.04, HJ: 0.045, CO: 0.07, BTN: 0.07, SB: 0.07, BB: 0.07 },
+  SB: { UTG: 0.035, HJ: 0.035, CO: 0.05, BTN: 0.1, SB: 0.1, BB: 0.1 },
+  BB: { UTG: 0.15, HJ: 0.17, CO: 0.2, BTN: 0.23, SB: 0.25, BB: 0.23 },
+};
+
+function blindDefenseScore(hand: PreflopHandClass) {
+  const pair = hand.length === 2;
+  const suited = hand.endsWith("s");
+  const high = RANK_VALUE[hand[0]];
+  const low = RANK_VALUE[hand[1]];
+  if (pair) return 108 + high * 4;
+  const gap = high - low;
+  const connectivity = gap === 1 ? 10 : gap === 2 ? 6 : gap === 3 ? 2 : 0;
+  const blocker = high === 14 ? 9 : high === 13 ? 3 : 0;
+  const wheel = suited && high === 14 && low <= 5 ? 5 : 0;
+  const offsuitPenalty = suited ? 0 : gap >= 4 ? 8 : 3;
+  const weakOffsuitPenalty = !suited && high <= 10 && low <= 5 ? 4 : 0;
+  return high * 4 + low * 2 + (suited ? 14 : 0) + connectivity + blocker + wheel
+    - offsuitPenalty - weakOffsuitPenalty;
+}
+
+function addRankedDefenseSupport(
+  chart: MutableChart,
+  targetSupport: number,
+  heroPosition: PreflopPosition,
+) {
+  let supportedCombos = PREFLOP_HAND_CLASSES.reduce((sum, hand) => {
+    const frequencies = chart.get(hand)!;
+    return sum + (frequencies.call + frequencies.raise > 0 ? preflopComboCount(hand) : 0);
+  }, 0);
+  const targetCombos = Math.ceil(clamp(targetSupport) * 1326);
+  const candidates = PREFLOP_HAND_CLASSES
+    .filter((hand) => {
+      const frequencies = chart.get(hand)!;
+      return frequencies.call + frequencies.raise === 0 && hand !== "72o";
+    })
+    .map((hand) => ({ hand, score: blindDefenseScore(hand) }))
+    .sort((left, right) => right.score - left.score || left.hand.localeCompare(right.hand));
+  const bestScore = candidates[0]?.score ?? 1;
+  const selected: typeof candidates = [];
+  for (const candidate of candidates) {
+    if (supportedCombos >= targetCombos) break;
+    selected.push(candidate);
+    supportedCombos += preflopComboCount(candidate.hand);
+  }
+  const edgeScore = selected.at(-1)?.score ?? bestScore;
+  for (const candidate of selected) {
+    const quality = clamp((candidate.score - edgeScore) / Math.max(1, bestScore - edgeScore));
+    const enter = 0.025 + quality * 0.45;
+    const handTraits = traits(candidate.hand);
+    const blockerRaise = handTraits.high === 14
+      ? handTraits.suited ? 0.16 : 0.08
+      : handTraits.high === 13 && handTraits.suited ? 0.07 : 0;
+    const baseRaiseShare = heroPosition === "SB" ? 0.16 : heroPosition === "BB" ? 0.035 : 0.1;
+    const raiseShare = clamp(baseRaiseShare + blockerRaise, 0.025, 0.34);
+    chart.set(candidate.hand, normalized({
+      fold: 1 - enter,
+      call: enter * (1 - raiseShare),
+      raise: enter * raiseShare,
+    }));
+  }
+}
+
+function buildVsOpenCharts(
+  base: MutableChart,
+) {
+  const charts = {} as Record<PreflopPosition, Record<PreflopPosition, MutableChart>>;
+  for (const heroPosition of PREFLOP_POSITIONS) {
+    charts[heroPosition] = {} as Record<PreflopPosition, MutableChart>;
+    for (const aggressorPosition of PREFLOP_POSITIONS) {
+      const chart = cloneChart(base);
+      const targetRange = VS_OPEN_TARGETS[heroPosition][aggressorPosition];
+      addRankedDefenseSupport(
+        chart,
+        targetRange + VS_OPEN_SUPPORT_MARGIN[heroPosition][aggressorPosition],
+        heroPosition,
+      );
+      calibrateEnterRange(chart, targetRange);
+      charts[heroPosition][aggressorPosition] = chart;
+    }
+  }
+  return charts;
 }
 
 function buildVsThreeBetReference() {
@@ -250,7 +347,7 @@ function buildVsFourBetReference() {
 }
 
 const RFI = buildRfiCharts();
-const VS_OPEN = buildVsOpenReference();
+const VS_OPEN = buildVsOpenCharts(buildVsOpenReference());
 const VS_THREE_BET = buildVsThreeBetReference();
 const VS_FOUR_BET = buildVsFourBetReference();
 
@@ -300,9 +397,15 @@ function adjustedReferenceFrequencies(query: PreflopStrategyQuery, base: Preflop
   const depthShift = Math.tanh(Math.log(depth / 100) / 0.85);
   const referenceSize = query.scenario === "vs-open" ? 2.5 : query.scenario === "vs-three-bet" ? 9 : 22;
   const facingSize = clamp(query.facingSizeBb ?? referenceSize, 1, 400);
-  const sizeFactor = Math.exp(-0.72 * Math.log(facingSize / referenceSize));
-  const positionFactor = HERO_POSITION_FACTOR[query.heroPosition]
-    * AGGRESSOR_POSITION_FACTOR[query.aggressorPosition ?? "CO"];
+  const sizeLogRatio = Math.log(facingSize / referenceSize);
+  const sizeElasticity = query.scenario === "vs-open"
+    ? 1.65 + Math.max(0, sizeLogRatio) * 1.15
+    : 0.72;
+  const sizeFactor = Math.exp(-sizeElasticity * sizeLogRatio);
+  const positionFactor = query.scenario === "vs-open"
+    ? 1
+    : HERO_POSITION_FACTOR[query.heroPosition]
+      * AGGRESSOR_POSITION_FACTOR[query.aggressorPosition ?? "CO"];
   const speculationFactor = handTraits.smallPair || handTraits.suited && handTraits.connected
     ? 1 + depthShift * 0.24
     : 1 - Math.max(0, depthShift) * 0.04;
@@ -333,7 +436,7 @@ export function getPreflopStrategy(query: PreflopStrategyQuery): PreflopStrategy
     frequencies = { ...RFI[query.heroPosition].get(query.hand)! };
   } else {
     const chart = query.scenario === "vs-open"
-      ? VS_OPEN
+      ? VS_OPEN[query.heroPosition][query.aggressorPosition ?? "CO"]
       : query.scenario === "vs-three-bet"
         ? VS_THREE_BET
         : VS_FOUR_BET;

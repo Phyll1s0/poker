@@ -135,8 +135,11 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /结束无尽局并复盘/);
   assert.match(page, /function pokerRunBbPer100|pokerRunBbPer100/);
   assert.match(page, /BB \/ 100/);
-  assert.match(page, /mode === "endless" \? 1\.25 : 0\.7/);
+  assert.match(page, /mode === "endless" \? 1\.5 : 0\.85/);
   assert.match(page, /heroActive: !game\.players\[0\]\.folded/);
+  assert.match(page, /formatPokerFrequencyMix/);
+  assert.match(page, /极低频路线/);
+  assert.doesNotMatch(page, /items\.filter\(\(item\) => item\.frequency >= 0\.005\)/);
   assert.match(page, /pokerRunCanStartNextHand\(mode, sessionEnded/);
   assert.match(page, /mode === "per_hand" \|\| finishedGame\.status/);
   assert.match(page, /function setHeroShowChoice/);
@@ -363,6 +366,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerCoach, /createPublicOpponentRanges/);
   assert.match(multiplayerCoach, /公开信息近似模型/);
   assert.match(multiplayerCoach, /不读取任何对手暗牌/);
+  assert.doesNotMatch(multiplayerCoach, /\.filter\(\(\[, frequency\]\) => frequency >= 0\.005\)/);
   assert.match(multiplayerAudio, /MULTIPLAYER_AUDIO_EVENT_MAX_AGE_MS = 5_000/);
   assert.match(multiplayerAudio, /event\.seq > previous\.actionSeq/);
   assert.match(multiplayerAudio, /sound: "deal"/);

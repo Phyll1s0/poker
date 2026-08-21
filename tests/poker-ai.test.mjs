@@ -8,6 +8,7 @@ import {
   sampleAiLineup,
   updateHeroTableImage,
 } from "../lib/poker-ai.ts";
+import { evaluatePokerPolicy } from "../lib/poker-policy.ts";
 
 test("samples every AI seat independently and allows repeated styles", () => {
   const lineup = sampleAiLineup(5, () => 0);
@@ -20,6 +21,14 @@ test("samples every AI seat independently and allows repeated styles", () => {
 test("samples the full style range and handles an empty table", () => {
   assert.deepEqual(sampleAiLineup(3, () => 0.9999).map((entry) => entry.styleKey), ["nit", "nit", "nit"]);
   assert.deepEqual(sampleAiLineup(0, () => 0.5), []);
+});
+
+test("weights random lineups toward active opponents without removing any archetype", () => {
+  const rolls = [0, 0.27, 0.51, 0.71, 0.99];
+  assert.deepEqual(
+    rolls.map((roll) => sampleAiLineup(1, () => roll)[0].styleKey),
+    ["gto", "lag", "tag", "adaptive", "nit"],
+  );
 });
 
 test("builds confidence gradually and keeps a mature hero image stable", () => {
@@ -79,9 +88,89 @@ test("ignores the hero after they fold and bounds direct counter-adjustments", (
     intensity: 1.25,
   });
   assert.ok(active.equityAdjustment > 0);
-  assert.ok(active.equityAdjustment <= 0.04);
+  assert.ok(active.equityAdjustment <= 0.075);
+  assert.ok(active.looseness > AI_PROFILES.adaptive.looseness);
+  assert.ok(active.aggression > AI_PROFILES.adaptive.aggression);
   for (const value of [active.aggression, active.looseness, active.bluff, active.confidence]) {
     assert.ok(Number.isFinite(value));
-    assert.ok(value >= 0 && value <= 1.25);
+    assert.ok(value >= 0 && value <= 1);
   }
+});
+
+test("repeated hero raises trigger wider defense instead of teaching every AI to fold", () => {
+  let image = { loose: 0.5, aggressive: 0.5, deceptive: 0.5, observations: 0 };
+  for (let index = 0; index < 40; index += 1) {
+    image = updateHeroTableImage(image, { loose: 0.78, aggressive: 0.9 });
+  }
+  assert.ok(image.loose > 0.68);
+  assert.ok(image.aggressive > 0.78);
+
+  for (const styleKey of Object.keys(AI_PROFILES)) {
+    const adapted = adaptAiProfileToHeroImage(styleKey, image, {
+      heroActive: true,
+      facingHero: true,
+      intensity: 1.5,
+    });
+    assert.ok(adapted.looseness > AI_PROFILES[styleKey].looseness, `${styleKey} 应扩大防守范围`);
+    assert.ok(adapted.aggression > AI_PROFILES[styleKey].aggression, `${styleKey} 应增加反加注压力`);
+    assert.ok(adapted.equityAdjustment > 0, `${styleKey} 应降低对加注范围强度的先验判断`);
+  }
+
+  const counter = adaptAiProfileToHeroImage("adaptive", image, {
+    heroActive: true,
+    facingHero: true,
+    intensity: 1.5,
+  });
+  const q4SuitedFacingButton = {
+    profile: { ...AI_PROFILES.adaptive },
+    street: "preflop",
+    equity: 0.34,
+    handStrength: 0.34,
+    draw: 0,
+    blockers: 0.03,
+    pot: 40,
+    toCall: 15,
+    potOdds: 15 / 55,
+    inPosition: false,
+    activeOpponents: 1,
+    opponentsCanRespond: true,
+    callEndsHand: false,
+    effectiveStackBb: 99,
+    startingDepthBb: 100,
+    highestBet: 25,
+    playerBet: 10,
+    playerStack: 990,
+    maxContestableTarget: 1_000,
+    minRaise: 15,
+    raiseLocked: false,
+    squidPressure: 0,
+    bigBlind: 10,
+    preflopPercentile: 0.55,
+    preflopPosition: "BB",
+    preflopPositionFactor: 1.35,
+    preflopRaiseCount: 1,
+    preflopOpenerPosition: "BTN",
+    preflopLimpers: 0,
+    preflopColdCallers: 0,
+    preflopPreviouslyRaised: false,
+    preflopHand: { highRank: 12, lowRank: 4, pair: false, suited: true, gap: 8 },
+    boardWetness: 0,
+    boardPairing: 0,
+    boardHighCard: 0,
+    initiative: false,
+    streetRaiseCount: 1,
+  };
+  const baselinePlan = evaluatePokerPolicy(q4SuitedFacingButton);
+  const counterPlan = evaluatePokerPolicy({
+    ...q4SuitedFacingButton,
+    profile: {
+      aggression: counter.aggression,
+      looseness: counter.looseness,
+      bluff: counter.bluff,
+    },
+  });
+  const baselineContinue = baselinePlan.actionFrequencies.call + baselinePlan.actionFrequencies.raise;
+  const counterContinue = counterPlan.actionFrequencies.call + counterPlan.actionFrequencies.raise;
+  assert.ok(counterContinue > baselineContinue + 0.04);
+  assert.ok(counterPlan.actionFrequencies.raise > baselinePlan.actionFrequencies.raise);
 });
