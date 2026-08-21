@@ -2561,16 +2561,6 @@ export default function MultiplayerClient({
             <span className={styles.brandCopy}><strong>RANGECRAFT</strong><small>朋友牌桌</small></span>
           </a>
         </div>
-        {snapshot && (
-          <div className={styles.sessionMeta}>
-            <span className={styles.onlineDot} />
-            <span>在线朋友局</span>
-            <i />
-            <span>{tableModeLabel(snapshot.table.tableMode)} · {tableDepthBb}BB · 盲注 {snapshot.table.smallBlind}/{snapshot.table.bigBlind}</span>
-            <i />
-            <span>{snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s · {snapshot.players.length}/{snapshot.room.maxPlayers} 人 · {phase === "finished" ? "整局已结算" : game ? `第 ${game.handNo} 手` : "等待开局"}</span>
-          </div>
-        )}
         <div className={styles.navRight}>
           {snapshot && (
             <button className={styles.navCodeButton} type="button" onClick={() => void copyJoinCode(snapshot.room.joinCode)} aria-label={`复制邀请码 ${snapshot.room.joinCode}`}>
@@ -2588,6 +2578,7 @@ export default function MultiplayerClient({
               aria-expanded={chatOpen}
               aria-controls="multiplayer-chat"
               aria-label={chatOpen && chatFocusTarget === "reactions" ? "关闭快捷表情" : "打开快捷表情"}
+              title="发表快捷表情"
             >
               <span aria-hidden="true">☺</span><b>表情</b>
             </button>
@@ -2603,6 +2594,7 @@ export default function MultiplayerClient({
               aria-expanded={chatOpen}
               aria-controls="multiplayer-chat"
               aria-label={chatOpen && chatFocusTarget === "message" ? "关闭牌桌消息" : `打开牌桌消息${unreadChatCount ? `，${unreadChatCount} 条未读` : ""}`}
+              title="打开牌桌消息"
             >
               <span aria-hidden="true">✉</span><b>消息</b>
               {unreadChatCount > 0 && <small>{unreadChatCount > 9 ? "9+" : unreadChatCount}</small>}
@@ -2614,6 +2606,7 @@ export default function MultiplayerClient({
             onClick={toggleSound}
             aria-pressed={soundOn}
             aria-label={soundOn ? "关闭牌桌音效" : "开启牌桌音效"}
+            title={soundOn ? "关闭牌桌音效" : "开启牌桌音效"}
           >
             <span>{soundOn ? "♪" : "—"}</span><b>音效</b><small>{soundOn ? "ON" : "OFF"}</small>
           </button>
@@ -2627,6 +2620,7 @@ export default function MultiplayerClient({
             aria-expanded={tableHintOpen}
             aria-controls="multiplayer-table-hint"
             aria-label={tableHintOpen ? "关闭牌桌操作提示" : "查看牌桌操作提示"}
+            title="查看牌桌操作提示"
           >
             <span>◇</span><b>提示</b>
           </button>
@@ -2847,7 +2841,14 @@ export default function MultiplayerClient({
                   <span>FRIENDS TABLE · {phase === "finished" ? "SESSION COMPLETE" : game ? `HAND ${game.handNo}` : "LOBBY"}</span>
                   <strong>{snapshot.room.name}</strong>
                 </div>
-                <div className={styles.roomMeta}>
+                <div className={styles.tableToolbarFacts} aria-label="牌桌设置">
+                  <span className={`${styles.statusPill} ${styles.toolbarSecondaryStatus}`}>{tableModeLabel(snapshot.table.tableMode)} · {tableDepthBb}BB · {snapshot.table.smallBlind}/{snapshot.table.bigBlind}</span>
+                  <span className={`${styles.statusPill} ${styles.toolbarPrimaryStatus}`}>读秒 {snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s</span>
+                  <span className={`${styles.statusPill} ${styles.toolbarSecondaryStatus}`}>AI {snapshot.table.aiAssistLimit ? `${snapshot.table.aiAssistLimit}次/人` : "关闭"}</span>
+                  <span className={`${styles.statusPill} ${styles.toolbarPrimaryStatus}`}>{snapshot.players.length}/{snapshot.room.maxPlayers} 人</span>
+                  {snapshot.table.finishRequested && phase !== "finished" && <span className={`${styles.statusPill} ${styles.toolbarPrimaryStatus} ${styles.finishRequestedPill}`}>本手后结算</span>}
+                </div>
+                <div className={styles.tableToolbarActions}>
                   <button
                     className={styles.historyButton}
                     type="button"
@@ -2858,18 +2859,17 @@ export default function MultiplayerClient({
                   >
                     牌谱 {handHistory.length}/30
                   </button>
-                  <span className={styles.statusPill}>{tableModeLabel(snapshot.table.tableMode)} · {tableDepthBb} BB</span>
-                  <span className={styles.statusPill}>盲注 {snapshot.table.smallBlind}/{snapshot.table.bigBlind}</span>
-                  <span className={styles.statusPill}>读秒 {snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s</span>
-                  <span className={styles.statusPill}>AI 辅助 {snapshot.table.aiAssistLimit ? `${snapshot.table.aiAssistLimit}次/人` : "关闭"}</span>
-                  <span className={styles.statusPill}>{snapshot.players.length}/{snapshot.room.maxPlayers} 人</span>
-                  {snapshot.table.finishRequested && phase !== "finished" && <span className={`${styles.statusPill} ${styles.finishRequestedPill}`}>本手后结算</span>}
-                  {isOwner && phase !== "lobby" && phase !== "finished" && phase !== "closed" && (
-                    <button className={styles.dangerButton} type="button" onClick={() => void finishSession()} disabled={busy || snapshot.table.finishRequested}>
-                      {snapshot.table.finishRequested ? "等待本手结束" : "结束游戏"}
-                    </button>
-                  )}
-                  <button className={styles.dangerButton} type="button" onClick={() => void leaveRoom()} disabled={busy || leaving} title="永久离开房间；牌局中未全下的手牌将自动弃牌">{leaving ? "正在离开…" : "永久离开"}</button>
+                  <details className={styles.tableMoreMenu}>
+                    <summary aria-label="打开更多牌桌操作">更多</summary>
+                    <div className={styles.tableMoreMenuPanel}>
+                      {isOwner && phase !== "lobby" && phase !== "finished" && phase !== "closed" && (
+                        <button className={styles.tableMenuFinish} type="button" onClick={() => void finishSession()} disabled={busy || snapshot.table.finishRequested}>
+                          {snapshot.table.finishRequested ? "等待本手结束" : "结束游戏"}
+                        </button>
+                      )}
+                      <button className={styles.tableMenuDanger} type="button" onClick={() => void leaveRoom()} disabled={busy || leaving} title="永久离开房间；牌局中未全下的手牌将自动弃牌">{leaving ? "正在离开…" : "永久离开"}</button>
+                    </div>
+                  </details>
                 </div>
               </header>
               <div className={`${styles.tableAmbient} ${styles.tableAmbientOne}`} />

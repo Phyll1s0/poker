@@ -240,6 +240,27 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /function ReplayTable/);
   assert.match(multiplayerClient, /snapshot\?\.table\.handHistory \?\? \[\]/);
   assert.match(multiplayerClient, /牌谱 \{handHistory\.length\}\/30/);
+  const multiplayerToolbar = sourceBetween(
+    multiplayerClient,
+    '<header className={styles.tableToolbar}>',
+    '</header>',
+  );
+  assert.match(multiplayerToolbar, /styles\.tableToolbarCopy/);
+  assert.match(multiplayerToolbar, /styles\.tableToolbarFacts/);
+  assert.match(multiplayerToolbar, /styles\.toolbarPrimaryStatus/);
+  assert.match(multiplayerToolbar, /styles\.toolbarSecondaryStatus/);
+  assert.match(multiplayerToolbar, /styles\.tableToolbarActions/);
+  assert.match(multiplayerToolbar, /styles\.tableMoreMenu/);
+  assert.match(multiplayerToolbar, /结束游戏/);
+  assert.match(multiplayerToolbar, /永久离开/);
+  assert.doesNotMatch(multiplayerClient, /styles\.sessionMeta/);
+  assert.match(multiplayerCss, /\.tableToolbarCopy\s*\{[^}]*min-width:\s*0/s);
+  assert.match(multiplayerCss, /\.tableToolbarFacts\s*\{[^}]*min-width:\s*0/s);
+  assert.match(multiplayerCss, /\.tableToolbarActions\s*\{[^}]*flex:\s*0 0 auto/s);
+  assert.match(multiplayerCss, /Multiplayer top-bar collision guard/);
+  assert.match(multiplayerCss, /@media \(max-width: 1280px\)[\s\S]*?\.navChatToggle b/);
+  assert.doesNotMatch(multiplayerCss, /\.tableToolbar \.roomMeta\s*\{[^}]*flex-wrap:\s*nowrap/s);
+  assert.doesNotMatch(multiplayerCss, /\.tableToolbar \.statusPill:nth-of-type/);
   assert.match(multiplayerClient, /const maxStep = actionCount \+ 1/);
   assert.match(multiplayerClient, /加注到 \$\{action\.raiseTo/);
   assert.match(multiplayerClient, /player\.stackAfterHand/);

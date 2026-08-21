@@ -2399,7 +2399,7 @@
 }
 
 .tableToolbar {
-  width: min(930px, calc(100% - 64px));
+  width: min(1040px, calc(100% - 64px));
   min-height: 62px;
   padding: 9px 12px 9px 15px;
   position: absolute;
@@ -2407,10 +2407,10 @@
   left: 50%;
   top: 18px;
   transform: translateX(-50%);
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(0, 2fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 18px;
+  gap: 12px;
   border: 1px solid rgba(255, 255, 255, 0.085);
   border-radius: 8px;
   background: rgba(18, 22, 20, 0.88);
@@ -2419,7 +2419,7 @@
 }
 
 .tableToolbarCopy {
-  min-width: 150px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -2439,21 +2439,110 @@
   white-space: nowrap;
 }
 
-.tableToolbar .roomMeta {
-  flex-wrap: nowrap;
+.tableToolbarFacts {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.tableToolbarActions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
   gap: 7px;
 }
 
 .tableToolbar .statusPill {
+  flex: 0 0 auto;
   min-height: 29px;
   padding-inline: 8px;
   white-space: nowrap;
 }
 
-.tableToolbar .dangerButton {
-  min-height: 30px;
+.tableMoreMenu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.tableMoreMenu > summary {
+  min-height: 29px;
   padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 5px;
+  color: #a4aaa4;
+  background: rgba(255, 255, 255, 0.025);
+  cursor: pointer;
+  font: 600 8px/1 Arial, sans-serif;
+  letter-spacing: 0.04em;
+  list-style: none;
   white-space: nowrap;
+}
+
+.tableMoreMenu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tableMoreMenu[open] > summary,
+.tableMoreMenu > summary:hover,
+.tableMoreMenu > summary:focus-visible {
+  border-color: rgba(216, 183, 116, 0.36);
+  color: #e1d5b8;
+  outline: none;
+}
+
+.tableMoreMenuPanel {
+  width: 156px;
+  padding: 6px;
+  position: absolute;
+  z-index: 45;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  gap: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(15, 19, 17, 0.985);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.48);
+}
+
+.tableMoreMenu:not([open]) .tableMoreMenuPanel {
+  display: none;
+}
+
+.tableMenuFinish,
+.tableMenuDanger {
+  min-height: 35px;
+  padding: 0 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.tableMenuFinish {
+  border: 1px solid rgba(216, 183, 116, 0.25);
+  color: #d6c394;
+  background: rgba(216, 183, 116, 0.055);
+}
+
+.tableMenuDanger {
+  border: 1px solid rgba(211, 111, 97, 0.25);
+  color: #d88c81;
+  background: rgba(211, 111, 97, 0.06);
+}
+
+.tableMenuFinish:disabled,
+.tableMenuDanger:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .multiplayerPage .pokerTable {
@@ -3001,8 +3090,7 @@
     gap: 11px;
   }
 
-  .tableToolbar .statusPill:nth-of-type(2),
-  .tableToolbar .statusPill:nth-of-type(4) {
+  .tableToolbar .toolbarSecondaryStatus {
     display: none;
   }
 }
@@ -3091,19 +3179,19 @@
   .tableToolbar {
     width: calc(100% - 24px);
     top: 12px;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .tableToolbar .roomMeta {
-    gap: 5px;
-  }
-
-  .tableToolbar .statusPill:nth-of-type(1),
-  .tableToolbar .statusPill:nth-of-type(2),
-  .tableToolbar .statusPill:nth-of-type(4) {
+  .tableToolbarFacts {
     display: none;
   }
 
-  .tableToolbar .dangerButton {
+  .tableToolbarActions {
+    gap: 5px;
+  }
+
+  .tableToolbar .historyButton,
+  .tableMoreMenu > summary {
     min-height: 28px;
     padding-inline: 8px;
     font-size: 8px;
@@ -5743,5 +5831,80 @@
     opacity: 1;
     transform: none;
     animation: none;
+  }
+}
+
+/* Multiplayer top-bar collision guard. The table toolbar already carries the
+   live room facts, so the global nav stays focused on navigation and tools. */
+.multiplayerPage .lobbyNav {
+  gap: 12px;
+}
+
+.multiplayerPage .tableBrandGroup {
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.multiplayerPage .navRight {
+  min-width: 0;
+  margin-left: auto;
+  flex: 0 1 auto;
+  gap: 7px;
+}
+
+.multiplayerPage .navRight > span {
+  display: none;
+}
+
+@media (max-width: 1280px) {
+  .multiplayerPage .navRight {
+    padding: 6px;
+    gap: 6px;
+  }
+
+  .navChatToggle,
+  .navSoundToggle,
+  .navHintToggle {
+    width: 36px;
+    min-width: 36px;
+    min-height: 36px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .navChatToggle b,
+  .navSoundToggle b,
+  .navSoundToggle small,
+  .navHintToggle b,
+  .multiplayerPage .navRight > strong {
+    display: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .multiplayerPage .tableBrandGroup {
+    gap: 8px;
+  }
+
+  .multiplayerPage .brandCopy {
+    display: none;
+  }
+
+  .multiplayerPage .navRight {
+    padding: 4px;
+    gap: 4px;
+  }
+
+  .multiplayerPage .navCodeButton {
+    min-height: 32px;
+    padding-inline: 7px;
+  }
+
+  .navChatToggle,
+  .navSoundToggle,
+  .navHintToggle {
+    width: 32px;
+    min-width: 32px;
+    min-height: 32px;
   }
 }
