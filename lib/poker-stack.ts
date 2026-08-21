@@ -51,7 +51,12 @@ export function resolvePokerDecisionStacks<T extends PokerStackPlayer>({
     && liveOpponents.some((candidate) => candidate.id === lastAggressorId)
     ? lastAggressorId
     : undefined;
-  const highestBettor = toCall > 0 && latestAggressor === undefined
+  // `null` explicitly means the pot is still unraised. Several limpers and the
+  // BB may all have the same wager; choosing the first seat as an "aggressor"
+  // would make effective depth depend on array order. In that node the deepest
+  // live opponent defines the contestable stack. `undefined` remains the
+  // compatibility path for callers that genuinely do not know the aggressor.
+  const highestBettor = toCall > 0 && latestAggressor === undefined && lastAggressorId !== null
     ? [...liveOpponents]
         .filter((candidate) => candidate.bet > player.bet)
         .sort((left, right) => right.bet - left.bet)[0]?.id

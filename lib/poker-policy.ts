@@ -75,6 +75,8 @@ export type PokerPolicyInput = {
   preflopLimpers?: number;
   preflopColdCallers?: number;
   preflopPreviouslyRaised?: boolean;
+  /** Whether this player already called the blind before the current raise. */
+  preflopPreviouslyLimped?: boolean;
   preflopHand?: PokerPreflopHand | null;
   /** Continuous public-board features; ignored before the flop. */
   boardWetness?: number;
@@ -416,6 +418,98 @@ function preflopPremiumValue(input: { preflopPercentile: number; preflopHand: Po
   return sigmoid((input.preflopPercentile - 0.975) * 58) * 0.42;
 }
 
+/**
+ * Ranks hands for the passive branch of an unraised pot.  A useful limp range
+ * cannot be only weak hands: small pairs/suited hands want cheap realization,
+ * while a small protected slice of premiums must be able to limp-reraise.
+ */
+function preflopLimpShape(input: {
+  preflopPercentile: number;
+  preflopHand: PokerPreflopHand | null;
+}) {
+  const hand = input.preflopHand;
+  if (!hand) return 0.5;
+  if (hand.pair) {
+    if (hand.highRank >= 12) return 0.46;
+    if (hand.highRank <= 8) return 1;
+    return 0.66;
+  }
+  if (hand.suited && hand.highRank === 14 && hand.lowRank <= 9) return 0.94;
+  if (hand.suited && hand.gap <= 2 && hand.highRank <= 12) return 0.96;
+  if (hand.suited && hand.highRank >= 11 && hand.lowRank >= 10) return 0.68;
+  if (hand.suited) return 0.72;
+  if (hand.highRank >= 12 && hand.lowRank >= 10) return 0.32;
+  return 0.12;
+}
+
+/**
+ * Conditional share of an entered range that calls the blind instead of
+ * raising.  Standard 100 BB six-max remains raise-first, but the tree now
+ * contains low-frequency protected open limps and realistic overlimps.  Short
+ * BTN stacks and deep speculative hands receive a little more passive weight.
+ */
+function preflopLimpShare(input: {
+  profile: PokerPolicyProfile;
+  preflopPosition: PokerPreflopPosition;
+  preflopLimpers: number;
+  preflopPercentile: number;
+  preflopHand: PokerPreflopHand | null;
+  startingDepthBb: number;
+}) {
+  const position = input.preflopPosition;
+  if (position === "BB") return 0;
+  // The SB chart already owns a substantial complete/raise mix when folded to.
+  if (position === "SB" && input.preflopLimpers === 0) return 0;
+
+  const openBase: Record<PokerPreflopPosition, number> = {
+    UTG: 0.05,
+    HJ: 0.075,
+    CO: 0.115,
+    BTN: 0.165,
+    SB: 0,
+    BB: 0,
+  };
+  const overlimpBase: Record<PokerPreflopPosition, number> = {
+    UTG: 0.05,
+    HJ: 0.11,
+    CO: 0.17,
+    BTN: 0.25,
+    SB: 0.34,
+    BB: 0,
+  };
+  const hasLimpers = input.preflopLimpers > 0;
+  const shortStackMix = sigmoid((24 - input.startingDepthBb) / 4.5);
+  const deepSpeculation = sigmoid((input.startingDepthBb - 145) / 24);
+  const passiveStyleFactor = clamp(
+    0.65
+      + (0.78 - input.profile.aggression) * 1.08
+      + (input.profile.looseness - 0.27) * 0.38,
+    0.46,
+    1.42,
+  );
+  const shape = preflopLimpShape(input);
+  const premium = preflopPremiumValue(input);
+  const trapProtection = premium > 0.55
+    ? 0.46 + shortStackMix * (position === "BTN" ? 0.42 : 0.16)
+    : 0.38 + shape * 0.94;
+  const shortPositionBoost = position === "BTN"
+    ? shortStackMix * 0.105
+    : position === "CO"
+      ? shortStackMix * 0.035
+      : 0;
+  const limperBoost = hasLimpers
+    ? Math.min(0.13, Math.max(0, input.preflopLimpers - 1) * 0.045) + deepSpeculation * 0.045
+    : deepSpeculation * 0.012;
+  const baseline = (hasLimpers ? overlimpBase[position] : openBase[position])
+    + shortPositionBoost
+    + limperBoost;
+  return clamp(
+    baseline * passiveStyleFactor * trapProtection,
+    0,
+    hasLimpers ? 0.68 : position === "BTN" ? 0.26 : 0.14,
+  );
+}
+
 function normalizeActionFrequencies(
   raw: Partial<PokerPolicyActionFrequencies>,
   input: {
@@ -473,6 +567,7 @@ function buildFallbackPreflopFrequencies(input: {
   preflopLimpers: number;
   preflopColdCallers: number;
   preflopPreviouslyRaised: boolean;
+  preflopPreviouslyLimped: boolean;
   preflopHand: PokerPreflopHand | null;
   bigBlind: number;
   highestBet: number;
@@ -673,9 +768,12 @@ function buildPreflopFrequencies(input: Parameters<typeof buildFallbackPreflopFr
         ? "vs-three-bet"
         : "vs-four-bet";
 
-  // A free BB option after limpers is not an RFI node. Keep the dedicated
-  // check/raise compatibility branch until a limped-pot chart is published.
-  if (publishedScenario === "check-option") return fallback;
+  // A free BB option is not an RFI node. Use the dedicated check/raise branch
+  // both when action folds around and after one or more players limp; querying
+  // the BB RFI chart here would otherwise produce a pure check forever.
+  if (position === "BB" && input.toCall === 0) {
+    return fallback;
+  }
 
   const chartScenario: ChartPreflopScenario = input.preflopRaiseCount === 0
     ? "rfi"
@@ -740,11 +838,29 @@ function buildPreflopFrequencies(input: Parameters<typeof buildFallbackPreflopFr
     raiseShare = raiseShare * (1 - expandedShare) + fallbackRaiseShare * expandedShare;
   }
 
+  if (input.preflopRaiseCount === 1 && input.preflopPreviouslyLimped) {
+    // The passive range is deliberately protected. Once a player who limped
+    // gets raised, premiums return through a high-frequency limp-reraise branch
+    // instead of being treated exactly like an unrelated cold caller.
+    const premium = preflopPremiumValue(input);
+    if (premium > 0.42) {
+      adjustedEnter = Math.max(adjustedEnter, 0.91 + premium * 0.08);
+      raiseShare = Math.max(raiseShare, 0.42 + premium * 0.5);
+    }
+  }
+
   // Keep premiums inside every style's range and avoid turning a charted pure
   // fold into a bluff solely because the profile is aggressive.
   if (hand === "AA") {
     adjustedEnter = 1;
     raiseShare = Math.max(raiseShare, 0.9);
+  }
+  if (input.preflopRaiseCount === 0) {
+    // Calls in an unopened pot are genuine limps/overlimps.  Shift only hands
+    // that already entered the chart so the passive branch does not admit
+    // arbitrary trash. `preflopLimpShare` also protects this range with a small
+    // premium trap component, making later limp-reraises possible.
+    raiseShare *= 1 - preflopLimpShare(input);
   }
   const selectedRaise = input.opponentsCanRespond && !input.raiseLocked
     ? adjustedEnter * raiseShare
@@ -852,6 +968,7 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
     preflopLimpers: Math.max(0, Math.floor(nonNegative(rawInput.preflopLimpers ?? 0))),
     preflopColdCallers: Math.max(0, Math.floor(nonNegative(rawInput.preflopColdCallers ?? 0))),
     preflopPreviouslyRaised: Boolean(rawInput.preflopPreviouslyRaised),
+    preflopPreviouslyLimped: Boolean(rawInput.preflopPreviouslyLimped),
     preflopHand: rawInput.preflopHand ?? null,
     boardWetness: clamp(rawInput.boardWetness ?? 0, 0, 1),
     boardPairing: clamp(rawInput.boardPairing ?? 0, 0, 1),
@@ -904,30 +1021,58 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
   );
   const strong = valueScore >= 0.5;
   const highDryBoard = input.boardHighCard * (1 - input.boardWetness);
-  // These are intentionally hand-level board/line proxies. They help the local
-  // fallback policy stay continuous, but they are not solver-grade aggregate
-  // range or nut-density measurements and must not be described as such in UI.
+  // Public range proxies must not depend on this exact hidden combo. Earlier
+  // versions fed `input.equity` and `strategyStrength` into these values, which
+  // made the policy face-up: air lost its range advantage while strong hands
+  // gained it on the very same board. Position, initiative, board texture and
+  // player count are public and stable across every combo in the range.
   const rangeAdvantage = clamp(
-    (input.equity - 0.5) * 1.08
-      + (input.initiative ? 0.08 : -0.012)
-      + (input.inPosition ? 0.03 : -0.01)
-      + highDryBoard * 0.045
-      + input.boardPairing * (1 - input.boardWetness) * 0.025
-      - input.boardWetness * 0.035
-      - (input.activeOpponents - 1) * 0.024,
+    (input.initiative ? 0.16 : -0.035)
+      + (input.inPosition ? 0.045 : -0.015)
+      + highDryBoard * 0.11
+      + input.boardPairing * (1 - input.boardWetness) * 0.06
+      - input.boardWetness * 0.07
+      - (input.activeOpponents - 1) * 0.045,
     -0.5,
     0.5,
   );
   const nutAdvantage = clamp(sigmoid(
-    (strategyStrength
-      + blockerQuality * 0.025
-      + drawQuality * (input.street === "river" ? 0 : 0.035)
-      - (0.69 + deepFactor * 0.018)) * 13,
+    (rangeAdvantage
+      + (input.initiative ? 0.03 : 0)
+      + input.boardPairing * (1 - input.boardWetness) * 0.04
+      - input.boardWetness * 0.025
+      - 0.05) * 5,
   ), 0, 1);
 
+  // Air needs an explicit route into the betting range. Previously almost all
+  // bluff weight came from made draws or rare nut blockers, so a computer that
+  // missed the board simply checked and became easy to read. Low showdown
+  // value is useful only as a candidate selector; board/line context and the
+  // balanced size ratio below still decide how often that candidate fires.
+  const lowShowdownValue = clamp(
+    (0.48 - strategyStrength) / 0.34,
+    0,
+    1,
+  ) * (1 - valueScore);
+  const streetAirWeight = input.street === "flop"
+    ? 0.26
+    : input.street === "turn"
+      ? 0.2
+      : 0.22;
+  const airBluffQuality = lowShowdownValue * clamp(
+    streetAirWeight
+      + (input.initiative ? 0.13 : 0)
+      + (input.inPosition ? 0.08 : 0)
+      + highDryBoard * 0.1
+      + input.boardPairing * (1 - input.boardWetness) * 0.07
+      + Math.max(0, rangeAdvantage) * 0.14,
+    0,
+    0.72,
+  );
   const bluffShape = clamp(
     drawQuality * (input.street === "river" ? 0 : 0.58)
       + blockerQuality * (input.street === "river" ? 0.72 : 0.34)
+      + airBluffQuality
       + (input.inPosition ? 0.06 : 0)
       + Math.max(0, rangeAdvantage) * 0.12,
     0,
@@ -935,6 +1080,7 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
   );
   const polarization = clamp(
     nutAdvantage * 0.55
+      + valueScore * 0.24
       + (1 - valueScore) * bluffShape * 0.34
       + streetProgress * 0.12
       + Math.abs(rangeAdvantage) * 0.12,
@@ -1096,9 +1242,14 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
   const bluffCandidate = bluffShape > 0.015;
   const multiwayBluffFactor = 1 / (1 + 0.62 * (input.activeOpponents - 1));
   const depthBluffFactor = 1 - shallowFactor * 0.18 + deepFactor * (input.inPosition ? 0.08 : -0.06);
+  // `profile.bluff` is a style adjustment around the GTO-like baseline, not a
+  // literal percentage. Keeping the balanced profile at factor 1 makes the
+  // size-derived bluff:value ratio meaningful; other archetypes bend it in
+  // odds space without eliminating bluffs entirely.
+  const profileBluffFactor = clamp(Math.exp((input.profile.bluff - 0.13) * 2.2), 0.72, 1.46);
   const bluffFrequency = clamp(
     balancedBluffRate
-      * (0.42 + input.profile.bluff * 2.8)
+      * profileBluffFactor
       * bluffShape
       * (input.inPosition ? 1.16 : 0.82)
       * (1 + input.squidPressure * 2.4)
@@ -1174,27 +1325,44 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
       - valueScore * 0.24
       + drawQuality * 0.18
       - pressure * 0.22 * futureRiskFactor;
-    const raiseLogit = -1.38
+    const valueRaiseLogit = -1.38
       + continueEdge * edgeSensitivity
       + valueScore * (1.72 + input.profile.aggression * 0.82)
-      + bluffFrequency * 2.15
       + nutAdvantage * 0.42
       - input.streetRaiseCount * 0.3
       - (input.activeOpponents - 1) * 0.2;
+    // A semi-bluff or blocker bluff is a separate route from a value raise.
+    // Letting the same negative showdown-equity term govern both routes made
+    // every non-value raise disappear before sampling. This branch stays rare
+    // against large bets and multiway action, but is live against small probes
+    // and with high-quality blockers/draws.
+    const bluffRaiseLogit = -2.12
+      + bluffFrequency * 5.2
+      + drawQuality * (input.street === "river" ? 0 : 0.72)
+      + blockerQuality * (input.street === "river" ? 0.82 : 0.3)
+      + input.profile.aggression * 0.34
+      + Number(input.inPosition) * 0.12
+      - pressure * 0.62
+      - input.streetRaiseCount * 0.48
+      - (input.activeOpponents - 1) * 0.42;
+    const raiseLogit = Math.max(valueRaiseLogit, bluffRaiseLogit);
     actionFrequencies = softmaxLegalActions(
       { fold: foldLogit, call: callLogit, raise: raiseLogit },
       input,
       0.76 + (input.activeOpponents - 1) * 0.035,
     );
   } else {
+    const rangeBetLogitMultiplier = input.street === "flop" ? 1.58 : input.street === "turn" ? 1.25 : 0.82;
+    const probeLogitMultiplier = input.street === "flop" ? 1.45 : input.street === "turn" ? 1.05 : 0.62;
     const checkLogit = 0.46
       + (1 - valueScore) * 0.28
       - input.profile.aggression * 0.15
       - rangeBetBias * 0.42;
     const betLogit = -0.82
       + valueScore * (1.45 + input.profile.aggression * 0.72)
-      + bluffFrequency * 1.9
-      + rangeBetBias * 1.58
+      + bluffFrequency * (2.1 + lowShowdownValue * 1.5)
+      + probeFrequency * probeLogitMultiplier
+      + rangeBetBias * rangeBetLogitMultiplier
       + drawQuality * 0.16
       - (input.activeOpponents - 1) * 0.3;
     actionFrequencies = softmaxLegalActions(

@@ -341,8 +341,10 @@ test("uses the 169-class chart for canonical opening and blind-defense hands", (
   const utgKingJack = evaluatePokerPolicy({ ...chartSpot, preflopPosition: "UTG", preflopHand: kingJackOff });
   const utgQueenJack = evaluatePokerPolicy({ ...chartSpot, preflopPosition: "UTG", preflopHand: queenJackOff });
 
-  assert.ok(buttonDeuces.actionFrequencies.raise >= 0.95);
-  assert.ok(cutoffDeuces.actionFrequencies.raise >= 0.9);
+  assert.ok(buttonDeuces.actionFrequencies.raise >= 0.8);
+  assert.ok(buttonDeuces.actionFrequencies.call >= 0.1);
+  assert.ok(cutoffDeuces.actionFrequencies.raise >= 0.82);
+  assert.ok(cutoffDeuces.actionFrequencies.call >= 0.08);
   assert.ok(utgKingJack.actionFrequencies.fold >= 0.9);
   assert.ok(utgQueenJack.actionFrequencies.fold >= 0.9);
 
@@ -360,6 +362,86 @@ test("uses the 169-class chart for canonical opening and blind-defense hands", (
   });
   assert.ok(bigBlindDefense.actionFrequencies.call + bigBlindDefense.actionFrequencies.raise >= 0.88);
   assert.ok(bigBlindDefense.actionFrequencies.call > bigBlindDefense.actionFrequencies.raise);
+});
+
+test("mixes protected open limps, overlimps and big-blind isolation raises", () => {
+  const common = {
+    ...baseSpot,
+    profile: { aggression: 0.7, looseness: 0.27, bluff: 0.12 },
+    street: "preflop",
+    pot: 15,
+    highestBet: 10,
+    minRaise: 10,
+    playerStack: 990,
+    effectiveStackBb: 99,
+    startingDepthBb: 100,
+    preflopRaiseCount: 0,
+  };
+  const deuces = { highRank: 2, lowRank: 2, pair: true, suited: false, gap: 0 };
+  const aces = { highRank: 14, lowRank: 14, pair: true, suited: false, gap: 0 };
+  const sevenSixSuited = { highRank: 7, lowRank: 6, pair: false, suited: true, gap: 1 };
+  const buttonDeuces = evaluatePokerPolicy({
+    ...common,
+    preflopPosition: "BTN",
+    preflopHand: deuces,
+    preflopPercentile: 0.72,
+    toCall: 10,
+    playerBet: 0,
+  });
+  const buttonAces = evaluatePokerPolicy({
+    ...common,
+    preflopPosition: "BTN",
+    preflopHand: aces,
+    preflopPercentile: 1,
+    toCall: 10,
+    playerBet: 0,
+  });
+  const buttonOverlimp = evaluatePokerPolicy({
+    ...common,
+    preflopPosition: "BTN",
+    preflopHand: sevenSixSuited,
+    preflopPercentile: 0.8,
+    preflopLimpers: 1,
+    toCall: 10,
+    playerBet: 0,
+  });
+  const bigBlindIsolation = evaluatePokerPolicy({
+    ...common,
+    preflopPosition: "BB",
+    preflopHand: aces,
+    preflopPercentile: 1,
+    preflopLimpers: 1,
+    toCall: 0,
+    playerBet: 10,
+  });
+  const limpedQueensFacingRaise = evaluatePokerPolicy({
+    ...common,
+    preflopPosition: "BTN",
+    preflopOpenerPosition: "BB",
+    preflopHand: { highRank: 12, lowRank: 12, pair: true, suited: false, gap: 0 },
+    preflopPercentile: 0.98,
+    preflopLimpers: 1,
+    preflopRaiseCount: 1,
+    preflopPreviouslyLimped: true,
+    pot: 60,
+    highestBet: 40,
+    playerBet: 10,
+    toCall: 30,
+    minRaise: 30,
+  });
+
+  assert.equal(buttonDeuces.preflopScenario, "open");
+  assert.ok(buttonDeuces.actionFrequencies.call >= 0.1);
+  assert.ok(buttonDeuces.actionFrequencies.raise > buttonDeuces.actionFrequencies.call);
+  assert.ok(buttonAces.actionFrequencies.call >= 0.03, "premium traps must protect the limp range");
+  assert.ok(buttonAces.actionFrequencies.raise >= 0.9);
+  assert.equal(buttonOverlimp.preflopScenario, "isolate");
+  assert.ok(buttonOverlimp.actionFrequencies.call >= 0.18);
+  assert.ok(buttonOverlimp.actionFrequencies.raise > buttonOverlimp.actionFrequencies.call);
+  assert.equal(bigBlindIsolation.preflopScenario, "isolate");
+  assert.ok(bigBlindIsolation.actionFrequencies.raise >= 0.85);
+  assert.equal(limpedQueensFacingRaise.preflopScenario, "vs-open");
+  assert.ok(limpedQueensFacingRaise.actionFrequencies.raise >= 0.82);
 });
 
 test("preserves charted ace-five suited bluff branches", () => {
@@ -579,6 +661,98 @@ test("responds continuously to price, board texture, initiative and number of op
   assert.ok(dryHeadsUp.actionFrequencies.raise > wetHeadsUp.actionFrequencies.raise);
   assert.ok(dryHeadsUp.sizingIntents[0].frequency > wetHeadsUp.sizingIntents[0].frequency);
   assert.ok(dryMultiway.actionFrequencies.raise < dryHeadsUp.actionFrequencies.raise * 0.6);
+});
+
+test("keeps public range advantages combo-independent while mixing real air bluffs", () => {
+  const publicSpot = {
+    ...baseSpot,
+    street: "river",
+    pot: 300,
+    toCall: 0,
+    highestBet: 0,
+    playerBet: 0,
+    minRaise: 10,
+    inPosition: true,
+    activeOpponents: 1,
+    initiative: true,
+    boardWetness: 0.28,
+    boardPairing: 0,
+    boardHighCard: 0.78,
+    streetRaiseCount: 0,
+    draw: 0,
+  };
+  const air = evaluatePokerPolicy({
+    ...publicSpot,
+    equity: 0.08,
+    handStrength: 0.1,
+    blockers: 0,
+  });
+  const blockerAir = evaluatePokerPolicy({
+    ...publicSpot,
+    equity: 0.08,
+    handStrength: 0.1,
+    blockers: 0.1,
+  });
+  const value = evaluatePokerPolicy({
+    ...publicSpot,
+    equity: 0.9,
+    handStrength: 0.92,
+    blockers: 0,
+  });
+  const lagAir = evaluatePokerPolicy({
+    ...publicSpot,
+    profile: { aggression: 0.94, looseness: 0.47, bluff: 0.25 },
+    equity: 0.08,
+    handStrength: 0.1,
+    blockers: 0,
+  });
+  const nitAir = evaluatePokerPolicy({
+    ...publicSpot,
+    profile: { aggression: 0.5, looseness: 0.15, bluff: 0.03 },
+    equity: 0.08,
+    handStrength: 0.1,
+    blockers: 0,
+  });
+
+  assert.equal(air.rangeAdvantage, value.rangeAdvantage);
+  assert.equal(air.nutAdvantage, value.nutAdvantage);
+  assert.ok(air.actionFrequencies.raise >= 0.28, JSON.stringify(air.actionFrequencies));
+  assert.ok(blockerAir.actionFrequencies.raise > air.actionFrequencies.raise + 0.08);
+  assert.ok(value.actionFrequencies.raise > air.actionFrequencies.raise);
+  assert.ok(lagAir.actionFrequencies.raise > air.actionFrequencies.raise + 0.04);
+  assert.ok(nitAir.actionFrequencies.raise < air.actionFrequencies.raise - 0.02);
+});
+
+test("separates semi-bluff raises from losing calls and keeps multiway pressure honest", () => {
+  const facingSmallBet = {
+    ...baseSpot,
+    street: "flop",
+    profile: { aggression: 0.73, looseness: 0.3, bluff: 0.13 },
+    equity: 0.28,
+    handStrength: 0.1,
+    draw: 0.16,
+    blockers: 0.02,
+    pot: 300,
+    toCall: 100,
+    highestBet: 100,
+    playerBet: 0,
+    playerStack: 900,
+    effectiveStackBb: 90,
+    inPosition: true,
+    activeOpponents: 1,
+    boardWetness: 0.72,
+    boardPairing: 0,
+    boardHighCard: 0.55,
+    initiative: false,
+    streetRaiseCount: 1,
+  };
+  const draw = evaluatePokerPolicy(facingSmallBet);
+  const noDraw = evaluatePokerPolicy({ ...facingSmallBet, draw: 0, blockers: 0 });
+  const multiway = evaluatePokerPolicy({ ...facingSmallBet, activeOpponents: 3 });
+
+  assert.ok(draw.actionFrequencies.raise > noDraw.actionFrequencies.raise + 0.02);
+  assert.ok(draw.actionFrequencies.raise >= 0.06);
+  assert.ok(multiway.actionFrequencies.raise < draw.actionFrequencies.raise);
 });
 
 test("centers non-terminal fold-call mixing on the published realization threshold", () => {

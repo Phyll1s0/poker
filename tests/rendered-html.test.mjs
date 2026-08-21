@@ -447,7 +447,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(selfPlay, /pokerCallClosesContestableLayers/);
   assert.match(selfPlay, /pokerContestablePotAtDecision/);
   assert.match(serviceWorker, /key\.startsWith\("rangecraft-"\)/);
-  assert.match(serviceWorker, /rangecraft-v9/);
+  assert.match(serviceWorker, /rangecraft-v10/);
   assert.match(serviceWorker, /request\.destination === "script" \|\| request\.destination === "style"/);
   assert.match(page, /updateViaCache: "none"/);
   assert.match(page, /controllerchange/);

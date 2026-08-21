@@ -85,6 +85,24 @@ test("preflop raises narrow the range while retaining bluff candidates", () => {
   assert.ok(weightedMeanPreflopPercentile(largeRaise) > weightedMeanPreflopPercentile(smallRaise));
 });
 
+test("infers a protected speculative limp range instead of a generic weak call", () => {
+  const limp = {
+    actions: [action({ kind: "call", amount: 10, toCall: 10, raiseCountBefore: 0 })],
+    positionFactor: 1.28,
+    position: "BTN",
+    bigBlind: 10,
+  };
+  const deuces = [c(2, "♠"), c(2, "♥")];
+  const sevenSixSuited = [c(7, "♠"), c(6, "♠")];
+  const aces = [c(14, "♠"), c(14, "♥")];
+  const sevenDeuce = [c(7, "♠"), c(2, "♥")];
+
+  assert.ok(opponentHoldingWeight(deuces, [], limp) > opponentHoldingWeight(sevenDeuce, [], limp) * 10);
+  assert.ok(opponentHoldingWeight(sevenSixSuited, [], limp) > opponentHoldingWeight(sevenDeuce, [], limp) * 10);
+  assert.ok(opponentHoldingWeight(aces, [], limp) > opponentHoldingWeight(sevenDeuce, [], limp) * 5);
+  assert.ok(opponentHoldingWeight(deuces, [], limp) > opponentHoldingWeight(aces, [], limp));
+});
+
 test("matching historical pressure widens the public raising range without reading cards", () => {
   const baseline = {
     actions: [action({ amount: 25 })],

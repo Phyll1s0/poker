@@ -140,6 +140,37 @@ function preflopActionLikelihood(
   if (action.kind === "check") {
     return clamp(0.78 - percentile * 0.42 + premium * 0.16, 0.08, 1.15);
   }
+  if (action.kind === "call" && action.raiseCountBefore === 0) {
+    // A limp is not a generic weak call. Weight the public range toward cheap-
+    // realization hands while retaining premium traps, so a later limp-reraise
+    // remains credible instead of magically creating strength from a range
+    // that previously excluded it.
+    const [high, low] = [...hole].sort((left, right) => right.rank - left.rank);
+    const pair = high.rank === low.rank;
+    const suited = sameSuit(high, low);
+    const gap = high.rank - low.rank;
+    const smallPair = pair && high.rank <= 9 ? 1 : 0;
+    const suitedConnector = suited && gap <= 2 && high.rank <= 12 ? (gap === 1 ? 1 : 0.72) : 0;
+    const suitedAce = suited && high.rank === 14 && low.rank <= 10 ? 0.9 : 0;
+    const suitedBroadway = suited && high.rank >= 11 && low.rank >= 10 ? 0.62 : 0;
+    const speculative = Math.max(smallPair, suitedConnector, suitedAce, suitedBroadway);
+    const premiumTrap = premium * (
+      pair && high.rank >= 12
+        ? 1
+        : high.rank === 14 && low.rank >= 12
+          ? suited ? 0.9 : 0.55
+          : 0.18
+    );
+    const lateOrBlind = evidence.position === "BTN" || evidence.position === "SB" ? 1 : 0;
+    const wideLateMix = lateOrBlind * (1 - premium) * clamp(
+      (suited ? 0.22 : 0) + preflopBluffShape(hole) * 0.18,
+    );
+    return clamp(
+      0.012 + speculative * 0.72 + premiumTrap * 0.4 + wideLateMix,
+      0.012,
+      1.25,
+    );
+  }
   const chartScenario: PreflopScenario | null = action.raiseCountBefore === 0
     ? action.kind === "raise" ? "rfi" : null
     : action.raiseCountBefore === 1

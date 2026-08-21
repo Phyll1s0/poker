@@ -24,6 +24,13 @@ test("AI self-play stays zero-sum and reports every style", () => {
     assert.ok(result.hands > 0);
     assert.ok(result.vpip >= 0 && result.vpip <= 1);
     assert.ok(result.pfr >= 0 && result.pfr <= result.vpip);
+    assert.ok(result.limpRate >= 0 && result.limpRate <= 1);
+    assert.ok(result.openLimpDecisionRate >= 0 && result.openLimpDecisionRate <= 1);
+    assert.ok(result.overLimpDecisionRate >= 0 && result.overLimpDecisionRate <= 1);
+    assert.ok(result.isolationRaiseRate >= 0 && result.isolationRaiseRate <= 1);
+    assert.ok(result.limpRaiseDecisionRate >= 0 && result.limpRaiseDecisionRate <= 1);
+    assert.ok(result.bluffActionRate >= 0 && result.bluffActionRate <= 1);
+    assert.ok(result.pureBluffActionRate >= 0 && result.pureBluffActionRate <= 1);
     assert.ok(result.showdownWinRate >= 0 && result.showdownWinRate <= 1);
     assert.ok(Number.isFinite(result.netBbPer100));
   }
@@ -34,4 +41,10 @@ test("AI self-play stays zero-sum and reports every style", () => {
   assert.ok(byStyle.tag.vpip > byStyle.nit.vpip);
   assert.ok(byStyle.lag.pfr > 0.16);
   assert.ok(byStyle.nit.pfr > 0.05);
+  assert.ok(report.results.reduce((sum, result) => sum + result.openLimpRate, 0) > 0.01);
+  assert.ok(report.results.reduce((sum, result) => sum + result.overLimpRate, 0) > 0.005);
+  assert.ok(report.results.reduce((sum, result) => sum + result.bluffOpportunities, 0) > 100);
+  assert.ok(report.results.reduce((sum, result) => sum + result.pureBluffOpportunities, 0) > 20);
+  assert.ok(report.results.every((result) => result.bluffActionRate > 0.08));
+  assert.ok(byStyle.lag.bluffActionRate > byStyle.nit.bluffActionRate);
 });

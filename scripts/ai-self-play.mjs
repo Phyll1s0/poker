@@ -15,6 +15,7 @@ import {
 } from "../lib/poker-evaluator.ts";
 import {
   choosePokerPolicyAction,
+  evaluatePokerPolicy,
   pokerCallClosesContestableLayers,
   pokerContestablePotAtDecision,
   sixMaxPreflopPosition,
@@ -182,7 +183,7 @@ function decideAction(context) {
     }
     equityCache.set(equityKey, equity);
   }
-  const action = choosePokerPolicyAction({
+  const policyInput = {
     profile,
     street,
     equity,
@@ -217,13 +218,27 @@ function decideAction(context) {
     preflopLimpers,
     preflopColdCallers,
     preflopPreviouslyRaised: player.pfr,
+    preflopPreviouslyLimped: player.limped,
     boardWetness: boardTexture.wetness,
     boardPairing: boardTexture.pairedness,
     boardHighCard: boardTexture.highCard,
     initiative: lastAggressor === player.id,
     streetRaiseCount: raiseCount,
-  }, random);
-  return action.kind === "raise" ? { kind: "raise", target: action.raiseTo } : action;
+  };
+  const plan = evaluatePokerPolicy(policyInput);
+  const action = choosePokerPolicyAction(policyInput, random);
+  const policy = {
+    strong: plan.strong,
+    bluffCandidate: plan.bluffCandidate,
+    bluffFrequency: plan.bluffFrequency,
+    equity,
+    handStrength,
+    draw,
+    blockers,
+  };
+  return action.kind === "raise"
+    ? { kind: "raise", target: action.raiseTo, policy }
+    : { ...action, policy };
 }
 
 function post(player, amount) {
@@ -234,15 +249,39 @@ function post(player, amount) {
   return paid;
 }
 
-function recordAction(player, street, action, currentBetBefore, amount) {
+function recordAction(player, street, action, currentBetBefore, amount, context = {}) {
   if (street === "preflop" && amount > 0 && (action === "call" || action === "raise")) {
     player.vpip = true;
     if (action === "raise") player.pfr = true;
   }
+  if (street === "preflop" && action === "call" && amount > 0 && context.raiseCountBefore === 0) {
+    player.limps += 1;
+    player.openLimps += Number((context.preflopLimpersBefore ?? 0) === 0);
+    player.overLimps += Number((context.preflopLimpersBefore ?? 0) > 0);
+    player.limped = true;
+  }
+  if (street === "preflop" && action === "raise" && player.limped && player.limpRaises === 0) {
+    player.limpRaises += 1;
+  }
+  if (
+    street === "preflop"
+    && action === "raise"
+    && context.raiseCountBefore === 0
+    && (context.preflopLimpersBefore ?? 0) > 0
+  ) player.isolationRaises += 1;
   if (action === "call" && amount > 0) player.calls += 1;
   if (action === "raise") {
     if (currentBetBefore === 0) player.bets += 1;
     else player.raises += 1;
+    if (street !== "preflop") {
+      player.postflopAggression += 1;
+      if (!context.policy?.strong && context.policy?.bluffCandidate) {
+        player.bluffAggression += 1;
+        if (context.policy.draw < 0.035 && context.policy.handStrength < 0.16) {
+          player.pureBluffAggression += 1;
+        }
+      }
+    }
   }
 }
 
@@ -296,6 +335,37 @@ function bettingRound(state, street, startAt) {
     });
     const toCall = Math.max(0, currentBet - player.bet);
     const currentBetBefore = currentBet;
+    const raiseCountBefore = raiseCount;
+    const preflopLimpersBefore = preflopLimpers;
+    const actionContext = {
+      policy: decision.policy,
+      raiseCountBefore,
+      preflopLimpersBefore,
+    };
+    if (street === "preflop" && raiseCountBefore === 0) {
+      if (toCall > 0 && preflopLimpersBefore === 0) player.openLimpOpportunities += 1;
+      if (preflopLimpersBefore > 0) {
+        player.isolationOpportunities += 1;
+        if (toCall > 0) player.overLimpOpportunities += 1;
+      }
+    }
+    const canAggress = !player.raiseLocked
+      && player.bet + player.stack > currentBet
+      && players.some((candidate) => candidate.id !== player.id && !candidate.folded && candidate.stack > 0);
+    if (street === "preflop" && raiseCountBefore === 1 && player.limped && canAggress) {
+      player.limpRaiseOpportunities += 1;
+    }
+    if (street !== "preflop") {
+      if (canAggress) {
+        player.postflopAggressionOpportunities += 1;
+        if (!decision.policy.strong && decision.policy.bluffCandidate) {
+          player.bluffOpportunities += 1;
+          if (decision.policy.draw < 0.035 && decision.policy.handStrength < 0.16) {
+            player.pureBluffOpportunities += 1;
+          }
+        }
+      }
+    }
 
     if (decision.kind === "fold" && toCall === 0) decision = { kind: "check" };
     if (decision.kind === "check" && toCall > 0) decision = { kind: "fold" };
@@ -316,7 +386,7 @@ function bettingRound(state, street, startAt) {
         if (raiseCount === 0) preflopLimpers += 1;
         else preflopColdCallers += 1;
       }
-      recordAction(player, street, "call", currentBetBefore, paid);
+      recordAction(player, street, "call", currentBetBefore, paid, actionContext);
       continue;
     }
 
@@ -326,7 +396,7 @@ function bettingRound(state, street, startAt) {
     if (target <= currentBet) {
       const paid = post(player, toCall);
       player.hasActed = true;
-      recordAction(player, street, "call", currentBetBefore, paid);
+      recordAction(player, street, "call", currentBetBefore, paid, actionContext);
       continue;
     }
     const previousBet = player.bet;
@@ -348,7 +418,7 @@ function bettingRound(state, street, startAt) {
         other.raiseLocked = target - other.bet < minRaise;
       }
     }
-    recordAction(player, street, "raise", currentBetBefore, paid);
+    recordAction(player, street, "raise", currentBetBefore, paid, actionContext);
     pending = new Set(players
       .filter((candidate) => candidate.id !== player.id && !candidate.folded && candidate.stack > 0 && candidate.bet < currentBet)
       .map((candidate) => candidate.id));
@@ -394,6 +464,21 @@ function createAggregate(styleKey) {
     bets: 0,
     raises: 0,
     calls: 0,
+    limps: 0,
+    openLimps: 0,
+    overLimps: 0,
+    limpRaises: 0,
+    openLimpOpportunities: 0,
+    overLimpOpportunities: 0,
+    isolationOpportunities: 0,
+    isolationRaises: 0,
+    limpRaiseOpportunities: 0,
+    postflopAggression: 0,
+    bluffAggression: 0,
+    pureBluffAggression: 0,
+    postflopAggressionOpportunities: 0,
+    bluffOpportunities: 0,
+    pureBluffOpportunities: 0,
     showdowns: 0,
     showdownWins: 0,
     netBb: 0,
@@ -421,6 +506,22 @@ function playHand(handIndex, stackBb, randoms, equityIterations, aggregates) {
     bets: 0,
     raises: 0,
     calls: 0,
+    limps: 0,
+    openLimps: 0,
+    overLimps: 0,
+    limpRaises: 0,
+    openLimpOpportunities: 0,
+    overLimpOpportunities: 0,
+    isolationOpportunities: 0,
+    isolationRaises: 0,
+    limpRaiseOpportunities: 0,
+    limped: false,
+    postflopAggression: 0,
+    bluffAggression: 0,
+    pureBluffAggression: 0,
+    postflopAggressionOpportunities: 0,
+    bluffOpportunities: 0,
+    pureBluffOpportunities: 0,
     hasActed: false,
     raiseLocked: false,
   }));
@@ -461,6 +562,21 @@ function playHand(handIndex, stackBb, randoms, equityIterations, aggregates) {
     aggregate.bets += player.bets;
     aggregate.raises += player.raises;
     aggregate.calls += player.calls;
+    aggregate.limps += player.limps;
+    aggregate.openLimps += player.openLimps;
+    aggregate.overLimps += player.overLimps;
+    aggregate.limpRaises += player.limpRaises;
+    aggregate.openLimpOpportunities += player.openLimpOpportunities;
+    aggregate.overLimpOpportunities += player.overLimpOpportunities;
+    aggregate.isolationOpportunities += player.isolationOpportunities;
+    aggregate.isolationRaises += player.isolationRaises;
+    aggregate.limpRaiseOpportunities += player.limpRaiseOpportunities;
+    aggregate.postflopAggression += player.postflopAggression;
+    aggregate.bluffAggression += player.bluffAggression;
+    aggregate.pureBluffAggression += player.pureBluffAggression;
+    aggregate.postflopAggressionOpportunities += player.postflopAggressionOpportunities;
+    aggregate.bluffOpportunities += player.bluffOpportunities;
+    aggregate.pureBluffOpportunities += player.pureBluffOpportunities;
     const netBb = settlement.payouts[player.id] - player.contributed;
     aggregate.netBb += netBb;
     clusters[player.styleKey].hands += 1;
@@ -517,6 +633,21 @@ export function runSimulation(options = {}) {
       vpip: value.hands ? value.vpip / value.hands : 0,
       pfr: value.hands ? value.pfr / value.hands : 0,
       aggression: value.calls ? (value.bets + value.raises) / value.calls : value.bets + value.raises,
+      limpRate: value.hands ? value.limps / value.hands : 0,
+      openLimpRate: value.hands ? value.openLimps / value.hands : 0,
+      overLimpRate: value.hands ? value.overLimps / value.hands : 0,
+      limpRaiseRate: value.limps ? value.limpRaises / value.limps : 0,
+      openLimpDecisionRate: value.openLimpOpportunities ? value.openLimps / value.openLimpOpportunities : 0,
+      overLimpDecisionRate: value.overLimpOpportunities ? value.overLimps / value.overLimpOpportunities : 0,
+      isolationRaiseRate: value.isolationOpportunities ? value.isolationRaises / value.isolationOpportunities : 0,
+      limpRaiseDecisionRate: value.limpRaiseOpportunities ? value.limpRaises / value.limpRaiseOpportunities : 0,
+      bluffShare: value.postflopAggression ? value.bluffAggression / value.postflopAggression : 0,
+      pureBluffShare: value.postflopAggression ? value.pureBluffAggression / value.postflopAggression : 0,
+      postflopAggressionActions: value.postflopAggression,
+      bluffActionRate: value.bluffOpportunities ? value.bluffAggression / value.bluffOpportunities : 0,
+      pureBluffActionRate: value.pureBluffOpportunities ? value.pureBluffAggression / value.pureBluffOpportunities : 0,
+      bluffOpportunities: value.bluffOpportunities,
+      pureBluffOpportunities: value.pureBluffOpportunities,
       showdownWinRate: value.showdowns ? value.showdownWins / value.showdowns : 0,
       showdowns: value.showdowns,
       netBb: value.netBb,
@@ -546,6 +677,9 @@ export function formatReport(report) {
     Hands: String(result.hands),
     VPIP: percent(result.vpip),
     PFR: percent(result.pfr),
+    Limp: percent(result.limpRate),
+    "弱牌进攻": percent(result.bluffActionRate),
+    "纯诈唬出手": percent(result.pureBluffActionRate),
     Agg: result.aggression.toFixed(2),
     "W$SD": percent(result.showdownWinRate),
     "Net BB": signed(result.netBb, 1),
@@ -565,6 +699,7 @@ export function formatReport(report) {
     ...rows.map(line),
     "",
     `零和校验：${signed(report.totalNetBb, 6)} BB`,
+    "Limp=未加注底池中的跟注/手；弱牌进攻=有合法主动动作的非价值候选中实际下注/加注的比例；纯诈唬出手进一步排除主要听牌。",
     "Agg=(bet+raise)/call；W$SD=进入摊牌后的主池胜率（平分按份额计）；CI 按每个牌桌手聚类近似。",
     `注意：这是共享牌力/策略核的快速回归，不是 CFR/GTO 求解器；权益敏感节点为吞吐量使用 ${report.config.equityIterations} 次采样，低于界面电脑的 300/600 次和实时教练的 600/1200 次。`,
   ].join("\n");

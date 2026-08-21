@@ -473,6 +473,11 @@ export function analyzeMultiplayerDecision(input: MultiplayerAiCoachInput): Mult
     preflopLimpers,
     preflopColdCallers,
     preflopPreviouslyRaised: raises.some((action) => action.playerId === hero.seat),
+    preflopPreviouslyLimped: input.street === "preflop" && currentStreetActions.some((action, index) => (
+      action.playerId === hero.seat
+        && action.kind === "call"
+        && (firstRaiseIndex < 0 || index < firstRaiseIndex)
+    )),
     preflopHand: heroPreflopHand,
     boardWetness: texture.wetness,
     boardPairing: texture.pairedness,

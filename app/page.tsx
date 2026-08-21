@@ -261,7 +261,7 @@ const STREET_LABELS: Record<Street, string> = {
 
 const PREFLOP_SCENARIO_LABELS = {
   open: "首入池",
-  isolate: "隔离跛入者",
+  isolate: "面对跛入者",
   "check-option": "大盲免费过牌",
   "vs-open": "面对开池",
   "vs-three-bet": "面对 3-bet",
@@ -558,6 +558,9 @@ function buildPokerPolicyInput(
     preflopLimpers: preflopActions.filter((action) => action.kind === "call" && action.raiseCountBefore === 0).length,
     preflopColdCallers: preflopActions.filter((action) => action.kind === "call" && action.raiseCountBefore > 0).length,
     preflopPreviouslyRaised: preflopActions.some((action) => action.playerId === player.id && action.kind === "raise"),
+    preflopPreviouslyLimped: preflopActions.some((action) => (
+      action.playerId === player.id && action.kind === "call" && action.raiseCountBefore === 0
+    )),
     boardWetness: boardTexture.wetness,
     boardPairing: boardTexture.pairedness,
     boardHighCard: boardTexture.highCard,
@@ -1137,7 +1140,7 @@ function getAdvice(game: Game, player: Player, equity: number) {
         ? `估算摊牌权益约 ${estimatedEquity}%，直接价格为 ${directPrice}%；当前倾向弃牌。`
         : `直接价格为 ${directPrice}%；再计入位置和后续行动风险，启发式继续参考线约 ${realizationPrice}%，当前倾向弃牌。`;
     } else if (action === "raise") {
-      note = policyPlan.nutAdvantage >= 0.55
+      note = policyPlan.strong
         ? `估算摊牌权益约 ${estimatedEquity}%，当前组合靠近价值范围顶端，主线用加注获取价值并保留少量慢打。`
         : `估算摊牌权益约 ${estimatedEquity}%；听牌、阻断牌和对手下注尺度共同支持一部分半诈唬/极化加注。`;
     } else {
@@ -1145,10 +1148,10 @@ function getAdvice(game: Game, player: Player, equity: number) {
     }
     if (!terminalCallLine && (action === "fold" || action === "call")) note += chipEvText;
   } else if (action === "raise") {
-    note = policyPlan.rangeAdvantage > 0.06 && policyPlan.nutAdvantage < 0.55
-      ? `当前组合权益、位置、主动权与牌面纹理共同支持多尺度下注；中等牌力仍保留过牌保护。`
-      : policyPlan.nutAdvantage >= 0.55
-        ? `当前组合靠近价值范围顶端，价值下注是主线；尺度会随 SPR、牌面动态性和河牌极化程度改变。`
+    note = policyPlan.strong
+      ? `当前组合进入价值下注区域；尺度会随 SPR、牌面动态性和河牌极化程度改变，并保留部分强牌过牌。`
+      : policyPlan.rangeAdvantage > 0.06
+        ? `公开行动、位置与牌面令整体范围保有主动权；当前低摊牌价值组合按听牌、阻断牌和目标诈唬比例混合下注。`
         : `听牌与关键阻断牌支持低到中频进攻，剩余组合进入过牌范围。`;
   } else {
     note = `当前组合更适合进入过牌分支，并为整体过牌范围保留一定强牌；并非所有可下注组合都使用同一固定频率。`;
