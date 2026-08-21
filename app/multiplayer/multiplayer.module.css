@@ -1683,7 +1683,7 @@
   font: 600 18px/1.1 Georgia, serif;
 }
 
-.multiplayerPage .controlSummary > span:last-child {
+.multiplayerPage .controlSummary > span:last-of-type {
   color: #747a74;
   font-size: 8px;
   line-height: 1.45;
@@ -2242,7 +2242,8 @@
 }
 
 .modeOptions,
-.depthOptions {
+.depthOptions,
+.aiAssistOptions {
   display: grid;
   gap: 8px;
 }
@@ -2255,8 +2256,13 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.aiAssistOptions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .modeOptions button,
-.depthOptions button {
+.depthOptions button,
+.aiAssistOptions button {
   min-width: 0;
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 6px;
@@ -2265,6 +2271,26 @@
   cursor: pointer;
   text-align: left;
   transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+
+.aiAssistOptions button {
+  min-height: 64px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+}
+
+.aiAssistOptions strong {
+  color: #d7d3c9;
+  font: 600 13px/1 Georgia, "Songti SC", serif;
+}
+
+.aiAssistOptions span {
+  color: #6f756f;
+  font-size: 8px;
+  line-height: 1.45;
 }
 
 .modeOptions button {
@@ -2312,13 +2338,15 @@
 }
 
 .modeOptions button:hover,
-.depthOptions button:hover {
+.depthOptions button:hover,
+.aiAssistOptions button:hover {
   transform: translateY(-1px);
   border-color: rgba(255, 255, 255, 0.18);
 }
 
 .modeOptions .modeOptionActive,
-.depthOptions .depthOptionActive {
+.depthOptions .depthOptionActive,
+.aiAssistOptions .aiAssistOptionActive {
   border-color: rgba(99, 196, 156, 0.5);
   background: linear-gradient(145deg, rgba(99, 196, 156, 0.105), rgba(99, 196, 156, 0.025));
   box-shadow: inset 0 0 0 1px rgba(99, 196, 156, 0.06);
@@ -2512,6 +2540,259 @@
   flex-direction: row;
   justify-content: space-between;
   gap: 6px;
+}
+
+.decisionResourceButtons {
+  width: 100%;
+  display: grid;
+  gap: 5px;
+}
+
+.aiAssistButton {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 3px;
+  border: 1px solid rgba(99, 196, 156, 0.42);
+  border-radius: 5px;
+  color: #d7f3e6;
+  background: linear-gradient(145deg, rgba(40, 112, 85, 0.3), rgba(24, 61, 48, 0.18));
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+
+.aiAssistButton:not(:disabled):hover {
+  border-color: rgba(121, 221, 179, 0.72);
+  background: linear-gradient(145deg, rgba(48, 132, 99, 0.4), rgba(26, 72, 55, 0.24));
+  transform: translateY(-1px);
+}
+
+.aiAssistButton strong {
+  font-size: 9px;
+  letter-spacing: 0.02em;
+}
+
+.aiAssistButton small {
+  color: #78a993;
+  font-size: 7px;
+  line-height: 1.3;
+}
+
+.aiAssistButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.aiAnalysisPanel {
+  width: 100%;
+  max-height: min(430px, calc(100vh - 210px));
+  padding: 16px;
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  bottom: calc(100% + 10px);
+  overflow-y: auto;
+  border: 1px solid rgba(99, 196, 156, 0.34);
+  border-radius: 10px;
+  color: #d8ddd8;
+  background:
+    radial-gradient(circle at 86% 0%, rgba(99, 196, 156, 0.1), transparent 34%),
+    rgba(16, 22, 19, 0.985);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(18px);
+}
+
+.aiAnalysisHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.aiAnalysisHeader > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.aiAnalysisHeader span,
+.aiAnalysisSectionTitle > span {
+  color: #71c9a5;
+  font-size: 8px;
+  letter-spacing: 0.12em;
+}
+
+.aiAnalysisHeader strong {
+  color: #ecf3ee;
+  font: 600 21px/1.15 Georgia, "Songti SC", serif;
+}
+
+.aiAnalysisHeader > button {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 50%;
+  color: #a9b3ad;
+  background: rgba(255, 255, 255, 0.025);
+  cursor: pointer;
+  font-size: 18px;
+}
+
+.aiAnalysisSummary {
+  margin: 12px 0;
+  color: #aeb9b2;
+  font-size: 10px;
+  line-height: 1.7;
+}
+
+.aiAnalysisMetrics,
+.aiAnalysisContext {
+  display: grid;
+  gap: 7px;
+}
+
+.aiAnalysisMetrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.aiAnalysisContext {
+  margin-top: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.aiAnalysisMetrics > div,
+.aiAnalysisContext > div {
+  padding: 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.022);
+}
+
+.aiAnalysisMetrics span,
+.aiAnalysisContext span {
+  color: #69736d;
+  font-size: 7px;
+  letter-spacing: 0.08em;
+}
+
+.aiAnalysisMetrics strong,
+.aiAnalysisContext strong {
+  color: #dbe4df;
+  font-size: 11px;
+}
+
+.aiAnalysisMix,
+.aiSizingSection {
+  margin-top: 13px;
+}
+
+.aiAnalysisSectionTitle {
+  margin-bottom: 7px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.aiAnalysisSectionTitle small {
+  color: #626d67;
+  font-size: 7px;
+}
+
+.aiFrequencyRow {
+  min-height: 24px;
+  display: grid;
+  grid-template-columns: 72px minmax(100px, 1fr) 38px;
+  align-items: center;
+  gap: 9px;
+  font-size: 9px;
+}
+
+.aiFrequencyRow > span {
+  color: #bcc6c0;
+}
+
+.aiFrequencyRow > div {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.aiFrequencyRow i {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #4ca47f, #8ad8b7);
+}
+
+.aiFrequencyRow > strong {
+  color: #9fc8b6;
+  text-align: right;
+}
+
+.aiSizingRoutes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.aiSizingRoutes > div {
+  padding: 7px 9px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(216, 183, 116, 0.18);
+  border-radius: 5px;
+  background: rgba(216, 183, 116, 0.04);
+}
+
+.aiSizingRoutes strong {
+  color: #d7c7a6;
+  font-size: 8px;
+}
+
+.aiSizingRoutes span {
+  color: #8c8068;
+  font-size: 8px;
+}
+
+.aiAnalysisFactors {
+  margin: 10px 0 0;
+  padding-left: 17px;
+  color: #87928b;
+  font-size: 8px;
+  line-height: 1.65;
+}
+
+.aiAnalysisSource {
+  margin-top: 11px;
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.aiAnalysisSource strong {
+  color: #d7b774;
+  font-size: 8px;
+}
+
+.aiAnalysisSource span {
+  color: #626d67;
+  font-size: 7px;
+  line-height: 1.55;
 }
 
 .raiseControl {
@@ -2794,7 +3075,8 @@
   }
 
   .modeOptions,
-  .depthOptions {
+  .depthOptions,
+  .aiAssistOptions {
     grid-template-columns: 1fr;
   }
 
@@ -2896,8 +3178,27 @@
     grid-column: 1 / -1;
   }
 
-  .multiplayerPage .timeBankButton {
+  .multiplayerPage .timeBankButton,
+  .decisionResourceButtons {
     grid-column: 1 / -1;
+  }
+
+  .decisionResourceButtons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .aiAnalysisPanel {
+    width: calc(100% - 12px);
+    max-height: min(68svh, 520px);
+    left: 6px;
+  }
+
+  .aiAnalysisMetrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .aiAnalysisContext {
+    grid-template-columns: 1fr;
   }
 
   .primaryActions,

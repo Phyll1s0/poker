@@ -179,6 +179,7 @@ export type MultiplayerRoomSettings = {
   startingStack: number;
   actionTimeMs: number;
   initialTimeBankMs: number;
+  aiAssistLimit: 0 | 5 | 10;
 };
 
 export function normalizeRoomSettings(value: {
@@ -186,6 +187,7 @@ export function normalizeRoomSettings(value: {
   startingStack?: unknown;
   actionSeconds?: unknown;
   timeBankSeconds?: unknown;
+  aiAssistLimit?: unknown;
 } = {}): MultiplayerRoomSettings {
   const tableMode = value.tableMode ?? "cash";
   if (tableMode !== "cash" && tableMode !== "tournament") {
@@ -212,11 +214,16 @@ export function normalizeRoomSettings(value: {
   if (!Number.isInteger(initialTimeBankMs) || initialTimeBankMs < 0 || initialTimeBankMs > ONLINE_MAX_TIME_BANK_MS) {
     throw new MultiplayerStoreError("INVALID_ROOM", "整局时间库需要是 0–600 秒。");
   }
+  const aiAssistLimit = value.aiAssistLimit ?? 5;
+  if (aiAssistLimit !== 0 && aiAssistLimit !== 5 && aiAssistLimit !== 10) {
+    throw new MultiplayerStoreError("INVALID_ROOM", "AI 辅助次数需要是 0、5 或 10。");
+  }
   return {
     tableMode,
     startingStack: Number(startingStack),
     actionTimeMs,
     initialTimeBankMs,
+    aiAssistLimit,
   };
 }
 

@@ -40,6 +40,7 @@ export async function POST(request: Request) {
       startingStack: payload.startingStack,
       actionSeconds: payload.actionSeconds,
       timeBankSeconds: payload.timeBankSeconds,
+      aiAssistLimit: payload.aiAssistLimit,
     });
     return privateJson({ room }, { status: 201 });
   } catch (error) {

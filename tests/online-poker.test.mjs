@@ -5,6 +5,7 @@ import {
   ONLINE_BIG_BLIND,
   ONLINE_COMMAND_RECEIPT_LIMIT,
   ONLINE_DEFAULT_ACTION_TIME_MS,
+  ONLINE_DEFAULT_AI_ASSIST_LIMIT,
   ONLINE_HAND_HISTORY_LIMIT,
   ONLINE_NEXT_HAND_DELAY_MS,
   ONLINE_STARTING_STACK,
@@ -288,6 +289,221 @@ test("new rooms default to twenty-second turns while stored room settings remain
   storedRoom = accepted(command(storedRoom, actors[0], { type: "start" }, defaultScenario.options));
   assert.equal(storedRoom.actionTimeMs, 10_000, "normalization preserves an existing room's valid setting");
   assert.equal(storedRoom.hand.actionDeadlineAt, 1_010_000);
+});
+
+test("AI assist configuration accepts only 0, 5 or 10 and initializes every joined seat", () => {
+  const options = deterministicOptions();
+  assert.equal(ONLINE_DEFAULT_AI_ASSIST_LIMIT, 5);
+  for (const invalidLimit of [-1, 1, 6, 10.5]) {
+    assert.throws(
+      () => createOnlineRoom({
+        roomId: `invalid-ai-limit-${invalidLimit}`,
+        owner: actors[0],
+        aiAssistLimit: invalidLimit,
+      }),
+      /0、5 或 10/,
+    );
+  }
+
+  for (const limit of [0, 5, 10]) {
+    let room = createOnlineRoom({
+      roomId: `ai-limit-${limit}`,
+      owner: actors[0],
+      maxPlayers: 2,
+      aiAssistLimit: limit,
+    });
+    assert.equal(room.aiAssistLimit, limit);
+    assert.equal(room.seats[0].aiAssistsRemaining, limit);
+    room = accepted(command(room, actors[1], { type: "join" }, options));
+    assert.deepEqual(room.seats.map((seat) => seat.aiAssistsRemaining), [limit, limit]);
+
+    const projected = projectRoomState(room, null);
+    assert.equal(projected.aiAssistLimit, limit);
+    assert.deepEqual(projected.seats.map((seat) => seat.aiAssistsRemaining), [limit, limit]);
+    assert.ok(projected.seats.every((seat) => !("accountId" in seat)));
+  }
+
+  const defaultRoom = createOnlineRoom({ roomId: "default-ai-limit", owner: actors[0] });
+  assert.equal(defaultRoom.aiAssistLimit, 5);
+  assert.equal(defaultRoom.seats[0].aiAssistsRemaining, 5);
+});
+
+test("AI assist consumption is authoritative, idempotent and invisible to hand actions and clocks", () => {
+  const { room: started, options } = startRoom(2, {
+    roomOptions: { aiAssistLimit: 5 },
+  });
+  const deadline = started.hand.actionDeadlineAt;
+  const actionStartedAt = started.hand.actionStartedAt;
+  const actionSeq = started.hand.actionSeq;
+  const recentActions = structuredClone(started.hand.recentActions);
+  const actionHistory = structuredClone(started.hand.actionHistory);
+  const payload = {
+    type: "use-ai-assist",
+    handId: started.hand.id,
+    commandId: "ai-assist-once",
+    expectedRevision: started.revision,
+  };
+
+  const first = applyOnlinePokerCommand(started, actors[0], payload, options);
+  assert.equal(first.ok, true);
+  let room = first.state;
+  assert.equal(room.revision, started.revision + 1);
+  assert.equal(room.seats[0].aiAssistsRemaining, 4);
+  assert.equal(room.session.players.find((player) => player.seat === 0).aiAssistsUsed, 1);
+  assert.equal(room.hand.actionStartedAt, actionStartedAt);
+  assert.equal(room.hand.actionDeadlineAt, deadline);
+  assert.equal(room.hand.actionSeq, actionSeq);
+  assert.deepEqual(room.hand.recentActions, recentActions);
+  assert.deepEqual(room.hand.actionHistory, actionHistory);
+
+  const duplicate = applyOnlinePokerCommand(room, actors[0], payload, options);
+  assert.equal(duplicate.ok, true);
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(duplicate.state.revision, room.revision);
+  assert.equal(duplicate.state.seats[0].aiAssistsRemaining, 4);
+  assert.equal(duplicate.state.session.players.find((player) => player.seat === 0).aiAssistsUsed, 1);
+
+  rejected(applyOnlinePokerCommand(room, actors[0], {
+    ...payload,
+    handId: "another-hand",
+  }, options), "COMMAND_ID_CONFLICT");
+
+  room = JSON.parse(JSON.stringify(room));
+  for (let remaining = 3; remaining >= 0; remaining -= 1) {
+    room = accepted(command(room, actors[0], {
+      type: "use-ai-assist",
+      handId: room.hand.id,
+    }, options));
+    assert.equal(room.seats[0].aiAssistsRemaining, remaining);
+  }
+  assert.equal(room.session.players.find((player) => player.seat === 0).aiAssistsUsed, 5);
+  const empty = command(room, actors[0], { type: "use-ai-assist", handId: room.hand.id }, options);
+  rejected(empty, "AI_ASSIST_EMPTY");
+  assert.equal(empty.state, room);
+  assert.equal(empty.state.revision, room.revision);
+});
+
+test("AI assist rejects invalid phase, hand, actor, deadline, disabled rooms and missing private cards", () => {
+  const options = deterministicOptions();
+  const lobby = createOnlineRoom({ roomId: "ai-lobby", owner: actors[0], aiAssistLimit: 5 });
+  rejected(command(lobby, actors[0], { type: "use-ai-assist", handId: "none" }, options), "WRONG_PHASE");
+
+  const enabled = startRoom(2, { roomOptions: { aiAssistLimit: 5 } });
+  rejected(command(enabled.room, actors[0], {
+    type: "use-ai-assist",
+    handId: "wrong-hand",
+  }, enabled.options), "WRONG_HAND");
+  rejected(command(enabled.room, actors[1], {
+    type: "use-ai-assist",
+    handId: enabled.room.hand.id,
+  }, enabled.options), "NOT_YOUR_TURN");
+
+  const withoutPrivateCards = {
+    ...enabled.room,
+    hand: {
+      ...enabled.room.hand,
+      players: enabled.room.hand.players.filter((player) => player.seat !== enabled.room.hand.currentSeat),
+    },
+  };
+  rejected(command(withoutPrivateCards, actors[0], {
+    type: "use-ai-assist",
+    handId: withoutPrivateCards.hand.id,
+  }, enabled.options), "AI_ASSIST_DISABLED");
+
+  enabled.options.now = () => enabled.room.hand.actionDeadlineAt;
+  rejected(command(enabled.room, actors[0], {
+    type: "use-ai-assist",
+    handId: enabled.room.hand.id,
+  }, enabled.options), "TIME_EXPIRED");
+
+  const disabled = startRoom(2, { roomOptions: { aiAssistLimit: 0 } });
+  rejected(command(disabled.room, actors[0], {
+    type: "use-ai-assist",
+    handId: disabled.room.hand.id,
+  }, disabled.options), "AI_ASSIST_DISABLED");
+});
+
+test("AI assist allowances persist across hands, appear in the final report and reset only on restart", () => {
+  const { room: started, options } = startRoom(2, {
+    roomOptions: { aiAssistLimit: 10 },
+  });
+  let room = accepted(command(started, actors[0], {
+    type: "use-ai-assist",
+    handId: started.hand.id,
+  }, options));
+  room = accepted(act(room, actors[0], "fold", options));
+  room = accepted(command(room, actors[0], { type: "ready", ready: true }, options));
+  room = accepted(command(room, actors[1], { type: "ready", ready: true }, options));
+
+  assert.equal(room.phase, "playing");
+  assert.equal(room.hand.number, 2);
+  assert.deepEqual(room.seats.map((seat) => seat.aiAssistsRemaining), [9, 10]);
+  assert.equal(room.session.players.find((player) => player.seat === 0).aiAssistsUsed, 1);
+
+  const currentSeat = room.hand.currentSeat;
+  room = accepted(command(room, actors[currentSeat], {
+    type: "use-ai-assist",
+    handId: room.hand.id,
+  }, options));
+  assert.equal(room.seats.find((seat) => seat.seat === currentSeat).aiAssistsRemaining, 9);
+
+  room = accepted(command(room, actors[0], { type: "finish" }, options));
+  room = accepted(act(room, actors[currentSeat], "fold", options));
+  const pendingShowSeat = room.hand.pendingShowSeat;
+  assert.notEqual(pendingShowSeat, null);
+  room = accepted(command(room, actors[pendingShowSeat], {
+    type: "show",
+    handId: room.hand.id,
+    show: false,
+  }, options));
+  const nextHandAt = room.hand.nextHandAt;
+  options.now = () => nextHandAt;
+  room = accepted(command(room, actors[0], { type: "timeout", handId: room.hand.id }, options));
+  assert.equal(room.phase, "finished");
+  const report = projectRoomState(room, null).sessionReport;
+  assert.deepEqual(
+    report.players.map((player) => [player.seat, player.aiAssistsUsed]).sort((left, right) => left[0] - right[0]),
+    [[0, 1], [1, 1]],
+  );
+  assert.ok(room.handHistory.every((entry) => entry.actions.every((action) => action.action !== "use-ai-assist")));
+
+  room = accepted(command(room, actors[0], { type: "restart" }, options));
+  assert.equal(room.aiAssistLimit, 10);
+  assert.deepEqual(room.seats.map((seat) => seat.aiAssistsRemaining), [10, 10]);
+  assert.equal(room.session.players.length, 0);
+  assert.equal(projectRoomState(room, actors[0].accountId).sessionReport, null);
+});
+
+test("legacy rooms normalize missing AI allowances to disabled without granting refresh refills", () => {
+  const configured = startRoom(2, { roomOptions: { aiAssistLimit: 10 } });
+  const partialSeatState = JSON.parse(JSON.stringify(configured.room));
+  partialSeatState.seats.forEach((seat) => { delete seat.aiAssistsRemaining; });
+  let normalized = accepted(command(partialSeatState, actors[0], {
+    type: "use-time-bank",
+    handId: partialSeatState.hand.id,
+  }, configured.options));
+  assert.equal(normalized.aiAssistLimit, 10);
+  assert.deepEqual(normalized.seats.map((seat) => seat.aiAssistsRemaining), [0, 0]);
+
+  const legacy = JSON.parse(JSON.stringify(configured.room));
+  delete legacy.aiAssistLimit;
+  legacy.seats.forEach((seat) => { delete seat.aiAssistsRemaining; });
+  legacy.session.players.forEach((player) => { delete player.aiAssistsUsed; });
+  const legacyProjection = projectRoomState(legacy, actors[0].accountId);
+  assert.equal(legacyProjection.aiAssistLimit, 0);
+  assert.deepEqual(legacyProjection.seats.map((seat) => seat.aiAssistsRemaining), [0, 0]);
+
+  normalized = accepted(command(legacy, actors[0], {
+    type: "use-time-bank",
+    handId: legacy.hand.id,
+  }, configured.options));
+  assert.equal(normalized.aiAssistLimit, 0);
+  assert.deepEqual(normalized.seats.map((seat) => seat.aiAssistsRemaining), [0, 0]);
+  assert.ok(normalized.session.players.every((player) => player.aiAssistsUsed === 0));
+  rejected(command(normalized, actors[0], {
+    type: "use-ai-assist",
+    handId: normalized.hand.id,
+  }, configured.options), "AI_ASSIST_DISABLED");
 });
 
 test("time cards extend only the current turn and timeout is server-authoritative", () => {

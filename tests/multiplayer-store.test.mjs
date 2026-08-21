@@ -140,12 +140,20 @@ test("room inputs are normalized and constrained to private table limits", () =>
     startingStack: 2_000,
     actionSeconds: 10,
     timeBankSeconds: 100,
+    aiAssistLimit: 10,
   }), {
     tableMode: "cash",
     startingStack: 2_000,
     actionTimeMs: 10_000,
     initialTimeBankMs: 100_000,
+    aiAssistLimit: 10,
   });
+  assert.equal(normalizeRoomSettings().aiAssistLimit, 5);
+  assert.equal(normalizeRoomSettings({ aiAssistLimit: 0 }).aiAssistLimit, 0);
+  assert.throws(
+    () => normalizeRoomSettings({ aiAssistLimit: 1 }),
+    (error) => error instanceof MultiplayerStoreError && error.code === "INVALID_ROOM",
+  );
   assert.throws(
     () => normalizeRoomSettings({ startingStack: 205 }),
     (error) => error instanceof MultiplayerStoreError && error.code === "INVALID_ROOM",
@@ -161,6 +169,28 @@ test("join codes tolerate visual separators but reject ambiguous characters", ()
   const generated = Array.from({ length: 64 }, generateJoinCode);
   assert.ok(generated.every((code) => /^[2-9A-HJ-NP-Z]{8}$/.test(code)));
   assert.equal(new Set(generated).size, generated.length);
+});
+
+test("multiplayer command parsing accepts one hand-scoped AI assist request", () => {
+  assert.deepEqual(parseMultiplayerCommand({
+    type: "use-ai-assist",
+    handId: "hand-room-1",
+    requestId: "ai-assist-request-1",
+    expectedRevision: 7,
+  }), {
+    type: "use-ai-assist",
+    handId: "hand-room-1",
+    commandId: "ai-assist-request-1",
+    expectedRevision: 7,
+  });
+  assert.throws(
+    () => parseMultiplayerCommand({
+      type: "use-ai-assist",
+      requestId: "ai-assist-request-2",
+      expectedRevision: 7,
+    }),
+    (error) => error instanceof MultiplayerGameError && error.code === "INVALID_COMMAND",
+  );
 });
 
 test("registration is idempotent and normalized handles stay unique", async (context) => {
@@ -194,6 +224,7 @@ test("room creation seats the owner and concurrent joins cannot exceed capacity"
     startingStack: 2_000,
     actionSeconds: 10,
     timeBankSeconds: 100,
+    aiAssistLimit: 10,
   });
 
   assert.equal(room.name, "周五 练习桌");
@@ -205,6 +236,7 @@ test("room creation seats the owner and concurrent joins cannot exceed capacity"
   assert.equal(persistedState.startingStack, 2_000);
   assert.equal(persistedState.actionTimeMs, 10_000);
   assert.equal(persistedState.initialTimeBankMs, 100_000);
+  assert.equal(persistedState.aiAssistLimit, 10);
 
   const attempts = await Promise.allSettled([
     store.joinRoom(guestOne.id, `${room.joinCode.slice(0, 4)}-${room.joinCode.slice(4)}`),
@@ -320,6 +352,7 @@ test("schema and routes keep identity server-owned and enable the D1 binding", a
     assert.doesNotMatch(route, /payload\.email/);
   }
   assert.match(accountRoute, /registerAccount\(user\.userId, payload\.handle\)/);
+  assert.match(roomsRoute, /aiAssistLimit: payload\.aiAssistLimit/);
   assert.match(joinRoute, /joinRoom\(account\.id, payload\.joinCode\)/);
 });
 
@@ -414,6 +447,8 @@ test("D1 room state executes commands and never projects another player's hole c
     const service = new MultiplayerGameService(new SqliteD1Database(sqlite));
     let ownerView = await service.getSnapshot(room.id, owner.id);
     assert.equal(ownerView.table.phase, "lobby");
+    assert.equal(ownerView.table.aiAssistLimit, 5);
+    assert.ok(ownerView.players.every((player) => player.aiAssistsRemaining === 5));
     assert.equal(ownerView.room.revision, 1);
 
     ownerView = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
@@ -433,9 +468,17 @@ test("D1 room state executes commands and never projects another player's hole c
       requestId: "start-owner-0001",
       expectedRevision: guestView.room.revision,
     }));
+    ownerView = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
+      type: "use-ai-assist",
+      handId: ownerView.table.hand.id,
+      requestId: "assist-owner-0001",
+      expectedRevision: ownerView.room.revision,
+    }));
 
     assert.equal(ownerView.table.phase, "playing");
     assert.equal(ownerView.table.viewerSeat, 0);
+    assert.equal(ownerView.table.seats[0].aiAssistsRemaining, 4);
+    assert.equal(ownerView.players[0].aiAssistsRemaining, 4);
     assert.ok(ownerView.table.seats[0].holeCards);
     assert.equal(ownerView.table.seats[1].holeCards, null);
     const ownerPayload = JSON.stringify(ownerView);
@@ -495,6 +538,16 @@ test("D1 winner snapshots expose authoritative best five only for publicly shown
       requestId: "five-owner-all-in",
       expectedRevision: view.room.revision,
     }));
+    assert.deepEqual(
+      (({ amount, toAmount, raiseTo, potAfter, stackAfter }) => ({
+        amount,
+        toAmount,
+        raiseTo,
+        potAfter,
+        stackAfter,
+      }))(view.game.recentActions.at(-1)),
+      { amount: 995, toAmount: 1000, raiseTo: 1000, potAfter: 1010, stackAfter: 0 },
+    );
     view = await service.applyCommand(room.id, guest.id, parseMultiplayerCommand({
       type: "act",
       handId: view.game.handId,

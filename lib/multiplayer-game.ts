@@ -55,6 +55,7 @@ export type ClientPublicPlayer = {
   status: "waiting" | "active" | "folded" | "all-in" | "out";
   ready: boolean;
   timeBankMs: number;
+  aiAssistsRemaining: number;
   isOwner: boolean;
   isDealer: boolean;
   holeCards?: ClientCard[];
@@ -79,6 +80,11 @@ export type ClientPublicGame = {
     seat: number;
     street: "preflop" | "flop" | "turn" | "river";
     action: "fold" | "check" | "call" | "raise";
+    amount: number | null;
+    toAmount: number | null;
+    raiseTo: number | null;
+    potAfter: number | null;
+    stackAfter: number | null;
     timedOut: boolean;
     occurredAt: number;
   }[];
@@ -225,7 +231,9 @@ export function parseMultiplayerCommand(payload: Record<string, unknown>): Parse
   }
 
   const handId = requiredString(payload.handId, "handId");
-  if (type === "use-time-bank" || type === "timeout") return { ...base, type, handId };
+  if (type === "use-time-bank" || type === "use-ai-assist" || type === "timeout") {
+    return { ...base, type, handId };
+  }
   if (type === "show") {
     if (typeof payload.show !== "boolean") {
       throw new MultiplayerGameError(400, "INVALID_COMMAND", "show 必须是布尔值。" );
@@ -372,6 +380,7 @@ function clientPlayers(table: OnlinePublicRoomState): ClientPublicPlayer[] {
       status,
       ready: seat.ready,
       timeBankMs: seat.timeBankMs,
+      aiAssistsRemaining: seat.aiAssistsRemaining,
       isOwner: seat.seat === table.ownerSeat,
       isDealer: seat.seat === table.hand?.dealerSeat,
       ...(seat.holeCards ? { holeCards: seat.holeCards.map(clientCard) } : {}),
@@ -403,6 +412,7 @@ function clientGame(table: OnlinePublicRoomState, players: ClientPublicPlayer[])
             status: "out" as const,
             ready: false,
             timeBankMs: 0,
+            aiAssistsRemaining: 0,
             isOwner: false,
             isDealer: winner.seat === hand.dealerSeat,
             ...(winner.holeCards ? { holeCards: winner.holeCards.map(clientCard) } : {}),
@@ -464,6 +474,11 @@ function clientGame(table: OnlinePublicRoomState, players: ClientPublicPlayer[])
       seat: event.seat,
       street: event.street,
       action: event.action,
+      amount: event.amount,
+      toAmount: event.toAmount,
+      raiseTo: event.raiseTo,
+      potAfter: event.potAfter,
+      stackAfter: event.stackAfter,
       timedOut: event.timedOut,
       occurredAt: event.occurredAt,
     })),

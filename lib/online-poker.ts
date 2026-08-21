@@ -10,6 +10,8 @@ export const ONLINE_MIN_ACTION_TIME_MS = 5_000;
 export const ONLINE_MAX_ACTION_TIME_MS = 60_000;
 export const ONLINE_DEFAULT_TIME_BANK_MS = 100_000;
 export const ONLINE_MAX_TIME_BANK_MS = 600_000;
+export const ONLINE_AI_ASSIST_LIMITS = [0, 5, 10] as const;
+export const ONLINE_DEFAULT_AI_ASSIST_LIMIT = 5;
 /** Bounded replay window so a long-running room cannot grow state forever. */
 export const ONLINE_COMMAND_RECEIPT_LIMIT = 2_048;
 /** Enough public action history for clients that briefly miss several polls. */
@@ -30,6 +32,7 @@ export type OnlineActionKind = "fold" | "check" | "call" | "raise";
 export type OnlineActionSource = "player" | "timeout" | "leave";
 export type OnlineRoomPhase = "lobby" | "playing" | "showdown" | "between_hands" | "finished" | "closed";
 export type OnlineTableMode = "cash" | "tournament";
+export type OnlineAiAssistLimit = 0 | 5 | 10;
 
 export type OnlineActor = {
   accountId: string;
@@ -43,6 +46,8 @@ export type OnlineSeatState = {
   stack: number;
   ready: boolean;
   timeBankMs: number;
+  /** Server-authoritative allowance for the current whole session. */
+  aiAssistsRemaining: number;
   connected: boolean;
   disconnectedAt: number | null;
   /** Explicitly leaving; retained only while the current hand still needs this seat. */
@@ -228,6 +233,7 @@ export type OnlineSessionPlayerStats = {
   postflopCheckActions: number;
   allInHands: number;
   voluntaryShows: number;
+  aiAssistsUsed: number;
   biggestWin: number;
   /** Positive magnitude of the largest single-hand loss. */
   biggestLoss: number;
@@ -255,6 +261,7 @@ export type OnlineRoomState = {
   tableMode: OnlineTableMode;
   actionTimeMs: number;
   initialTimeBankMs: number;
+  aiAssistLimit: OnlineAiAssistLimit;
   seats: OnlineSeatState[];
   hand: OnlineHandState | null;
   /** Server-private sealed replay snapshots, oldest first. */
@@ -276,6 +283,7 @@ export type OnlinePokerCommand =
   | (CommandBase & { type: "finish" })
   | (CommandBase & { type: "restart" })
   | (CommandBase & { type: "use-time-bank"; handId: string })
+  | (CommandBase & { type: "use-ai-assist"; handId: string })
   | (CommandBase & { type: "timeout"; handId: string })
   | (CommandBase & {
       type: "act";
@@ -306,6 +314,8 @@ export type OnlinePokerErrorCode =
   | "INVALID_RAISE"
   | "SHOW_NOT_ALLOWED"
   | "TIME_BANK_EMPTY"
+  | "AI_ASSIST_DISABLED"
+  | "AI_ASSIST_EMPTY"
   | "TIME_NOT_EXPIRED"
   | "TIME_EXPIRED";
 
@@ -353,6 +363,7 @@ export type OnlinePublicSeat = {
   stack: number;
   ready: boolean;
   timeBankMs: number;
+  aiAssistsRemaining: number;
   connected: boolean;
   pendingLeave: boolean;
   folded: boolean;
@@ -449,6 +460,7 @@ export type OnlinePublicSessionPlayerReport = {
   allInHands: number;
   timeoutPercent: number;
   voluntaryShows: number;
+  aiAssistsUsed: number;
   biggestWin: number;
   biggestLoss: number;
   decisions: number;
@@ -483,6 +495,7 @@ export type OnlinePublicRoomState = {
   tableMode: OnlineTableMode;
   actionTimeMs: number;
   initialTimeBankMs: number;
+  aiAssistLimit: OnlineAiAssistLimit;
   timeBankUnitMs: number;
   viewerSeat: number | null;
   seats: OnlinePublicSeat[];
@@ -664,6 +677,7 @@ function makeSessionPlayer(seat: OnlineSeatState, buyInTotal: number): OnlineSes
     postflopCheckActions: 0,
     allInHands: 0,
     voluntaryShows: 0,
+    aiAssistsUsed: 0,
     biggestWin: 0,
     biggestLoss: 0,
   };
@@ -799,6 +813,10 @@ function integerInRange(value: number, minimum: number, maximum: number, label: 
   return value;
 }
 
+function isOnlineAiAssistLimit(value: unknown): value is OnlineAiAssistLimit {
+  return typeof value === "number" && ONLINE_AI_ASSIST_LIMITS.some((limit) => limit === value);
+}
+
 function normalizeStoredRoom(room: OnlineRoomState): void {
   const bootstrapActiveLegacyHand = !room.session
     || !Array.isArray(room.session.players)
@@ -810,10 +828,16 @@ function normalizeStoredRoom(room: OnlineRoomState): void {
   if (!Number.isInteger(room.initialTimeBankMs) || room.initialTimeBankMs < 0 || room.initialTimeBankMs > ONLINE_MAX_TIME_BANK_MS) {
     room.initialTimeBankMs = ONLINE_DEFAULT_TIME_BANK_MS;
   }
+  // A missing value means this room predates AI allowances. Preserve those
+  // sessions as disabled instead of silently granting a fresh allowance.
+  room.aiAssistLimit = isOnlineAiAssistLimit(room.aiAssistLimit) ? room.aiAssistLimit : 0;
   room.seats.forEach((seat) => {
     if (!Number.isInteger(seat.timeBankMs) || seat.timeBankMs < 0 || seat.timeBankMs > ONLINE_MAX_TIME_BANK_MS) {
       seat.timeBankMs = room.initialTimeBankMs;
     }
+    seat.aiAssistsRemaining = Number.isInteger(seat.aiAssistsRemaining) && seat.aiAssistsRemaining >= 0
+      ? Math.min(seat.aiAssistsRemaining, room.aiAssistLimit)
+      : 0;
     seat.pendingLeave = seat.pendingLeave === true;
   });
   if (!room.session || !Array.isArray(room.session.players)) {
@@ -847,6 +871,7 @@ function normalizeStoredRoom(room: OnlineRoomState): void {
       stack: nonNegativeInteger(stats.finalStack),
       ready: false,
       timeBankMs: room.initialTimeBankMs,
+      aiAssistsRemaining: 0,
       connected: false,
       disconnectedAt: null,
       pendingLeave: true,
@@ -856,7 +881,7 @@ function normalizeStoredRoom(room: OnlineRoomState): void {
       "sawFlopHands", "showdownHands", "showdownWins", "uncontestedWins", "decisions", "timeoutActions",
       "foldActions", "checkActions", "callActions", "raiseActions", "postflopBetActions",
       "postflopRaiseActions", "postflopCallActions", "postflopCheckActions", "allInHands",
-      "voluntaryShows", "biggestWin", "biggestLoss",
+      "voluntaryShows", "aiAssistsUsed", "biggestWin", "biggestLoss",
     ];
     counterKeys.forEach((key) => {
       const value = stats[key];
@@ -1048,6 +1073,7 @@ export function createOnlineRoom(options: {
   tableMode?: OnlineTableMode;
   actionTimeMs?: number;
   initialTimeBankMs?: number;
+  aiAssistLimit?: number;
 }): OnlineRoomState {
   assertNonEmpty(options.roomId, "roomId");
   assertNonEmpty(options.owner.accountId, "owner.accountId");
@@ -1078,6 +1104,10 @@ export function createOnlineRoom(options: {
   if (tableMode !== "cash" && tableMode !== "tournament") {
     throw new RangeError("tableMode 必须是 cash 或 tournament");
   }
+  const aiAssistLimit = options.aiAssistLimit ?? ONLINE_DEFAULT_AI_ASSIST_LIMIT;
+  if (!isOnlineAiAssistLimit(aiAssistLimit)) {
+    throw new RangeError("aiAssistLimit 必须是 0、5 或 10");
+  }
   return {
     roomId: options.roomId,
     ownerAccountId: options.owner.accountId,
@@ -1090,6 +1120,7 @@ export function createOnlineRoom(options: {
     tableMode,
     actionTimeMs,
     initialTimeBankMs,
+    aiAssistLimit,
     seats: [{
       seat: 0,
       accountId: options.owner.accountId,
@@ -1097,6 +1128,7 @@ export function createOnlineRoom(options: {
       stack: startingStack,
       ready: false,
       timeBankMs: initialTimeBankMs,
+      aiAssistsRemaining: aiAssistLimit,
       connected: true,
       disconnectedAt: null,
       pendingLeave: false,
@@ -2026,6 +2058,7 @@ function restartOnlineSession(room: OnlineRoomState): void {
     seat.stack = room.startingStack;
     seat.ready = false;
     seat.timeBankMs = room.initialTimeBankMs;
+    seat.aiAssistsRemaining = room.aiAssistLimit;
     seat.pendingLeave = false;
   });
 }
@@ -2201,7 +2234,7 @@ function commandFingerprint(command: OnlinePokerCommand) {
   if (command.type === "show") {
     return JSON.stringify([command.type, command.expectedRevision, command.handId, command.show]);
   }
-  if (command.type === "use-time-bank" || command.type === "timeout") {
+  if (command.type === "use-time-bank" || command.type === "use-ai-assist" || command.type === "timeout") {
     return JSON.stringify([command.type, command.expectedRevision, command.handId]);
   }
   return JSON.stringify([
@@ -2260,6 +2293,7 @@ export function applyOnlinePokerCommand(
       stack: next.startingStack,
       ready: false,
       timeBankMs: next.initialTimeBankMs,
+      aiAssistsRemaining: next.aiAssistLimit,
       connected: true,
       disconnectedAt: null,
       pendingLeave: false,
@@ -2326,6 +2360,26 @@ export function applyOnlinePokerCommand(
     const addedTime = Math.min(next.actionTimeMs, member.timeBankMs);
     member.timeBankMs -= addedTime;
     hand.actionDeadlineAt = (hand.actionDeadlineAt ?? commandNow) + addedTime;
+  } else if (command.type === "use-ai-assist") {
+    const hand = next.hand;
+    if (next.phase !== "playing" || !hand || hand.id !== command.handId) {
+      return fail(room, hand && hand.id !== command.handId ? "WRONG_HAND" : "WRONG_PHASE", "当前不能使用 AI 辅助");
+    }
+    if (hand.currentSeat !== member.seat) return fail(room, "NOT_YOUR_TURN", "只有当前行动玩家可以使用 AI 辅助");
+    if (turnExpired(next, commandNow)) return fail(room, "TIME_EXPIRED", "本次行动时间已经结束");
+    const player = playerBySeat(hand, member.seat);
+    if (
+      !player
+      || player.accountId !== actor.accountId
+      || !Array.isArray(player.hole)
+      || player.hole.length !== 2
+    ) {
+      return fail(room, "AI_ASSIST_DISABLED", "当前座位没有可供分析的私有底牌");
+    }
+    if (next.aiAssistLimit === 0) return fail(room, "AI_ASSIST_DISABLED", "本房间未启用 AI 辅助");
+    if (member.aiAssistsRemaining <= 0) return fail(room, "AI_ASSIST_EMPTY", "本局 AI 辅助次数已经用完");
+    member.aiAssistsRemaining -= 1;
+    ensureSessionPlayer(next, member).aiAssistsUsed += 1;
   } else if (command.type === "timeout") {
     const hand = next.hand;
     if (!hand || hand.id !== command.handId) {
@@ -2541,6 +2595,7 @@ function projectSessionReport(room: OnlineRoomState): OnlinePublicSessionReport 
         allInHands: stats.allInHands,
         timeoutPercent,
         voluntaryShows: stats.voluntaryShows,
+        aiAssistsUsed: nonNegativeInteger(stats.aiAssistsUsed),
         biggestWin: stats.biggestWin,
         biggestLoss: stats.biggestLoss,
         decisions: stats.decisions,
@@ -2598,6 +2653,7 @@ export function projectRoomState(room: OnlineRoomState, viewerAccountId: string 
   const tableMode: OnlineTableMode = room.tableMode === "cash" ? "cash" : "tournament";
   const actionTimeMs = Number.isInteger(room.actionTimeMs) ? room.actionTimeMs : ONLINE_DEFAULT_ACTION_TIME_MS;
   const initialTimeBankMs = Number.isInteger(room.initialTimeBankMs) ? room.initialTimeBankMs : ONLINE_DEFAULT_TIME_BANK_MS;
+  const aiAssistLimit = isOnlineAiAssistLimit(room.aiAssistLimit) ? room.aiAssistLimit : 0;
   const viewerSeat = viewerAccountId === null
     ? null
     : room.seats.find((seat) => seat.accountId === viewerAccountId)?.seat ?? null;
@@ -2615,6 +2671,9 @@ export function projectRoomState(room: OnlineRoomState, viewerAccountId: string 
       stack: seat.stack,
       ready: seat.ready,
       timeBankMs: Number.isInteger(seat.timeBankMs) ? seat.timeBankMs : initialTimeBankMs,
+      aiAssistsRemaining: Number.isInteger(seat.aiAssistsRemaining) && seat.aiAssistsRemaining >= 0
+        ? Math.min(seat.aiAssistsRemaining, aiAssistLimit)
+        : 0,
       connected: seat.connected,
       pendingLeave: seat.pendingLeave === true,
       folded: player?.folded ?? false,
@@ -2639,6 +2698,7 @@ export function projectRoomState(room: OnlineRoomState, viewerAccountId: string 
     tableMode,
     actionTimeMs,
     initialTimeBankMs,
+    aiAssistLimit,
     timeBankUnitMs: actionTimeMs,
     viewerSeat,
     seats: publicSeats,

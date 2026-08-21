@@ -57,7 +57,7 @@ test("server-renders the RangeCraft landing page before mounting a poker table",
 });
 
 test("keeps the multiplayer and strategy boundaries with product metadata", async () => {
-  const [page, globalsCss, multiplayerClient, multiplayerCss, staticMultiplayer, edgeFunction, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, history, packageJson, multiplayerAudio, pokerAudio, rulesModal] = await Promise.all([
+  const [page, globalsCss, multiplayerClient, multiplayerCss, staticMultiplayer, edgeFunction, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, history, packageJson, multiplayerAudio, pokerAudio, rulesModal, multiplayerCoach] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/multiplayer/MultiplayerClient.tsx", import.meta.url), "utf8"),
@@ -78,6 +78,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
     readFile(new URL("../lib/multiplayer-audio-events.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/poker-audio.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/PokerRulesModal.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../lib/multiplayer-ai-coach.ts", import.meta.url), "utf8"),
   ]);
 
   const landingSource = sourceBetween(page, "function LandingHome", "function SoloTrainer");
@@ -279,6 +280,13 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /单桌淘汰赛结束/);
   assert.match(multiplayerClient, /整局时间库/);
   assert.match(multiplayerClient, /时间牌 \+/);
+  assert.match(multiplayerClient, /每人整局 AI 辅助/);
+  assert.match(multiplayerClient, /AI_ASSIST_OPTIONS/);
+  assert.match(multiplayerClient, /type: "use-ai-assist"/);
+  assert.match(multiplayerClient, /本局剩余 \{selfPlayer\.aiAssistsRemaining\}/);
+  assert.match(multiplayerClient, /AI ASSIST · 本次决策近似分析/);
+  assert.match(multiplayerClient, /行动倒计时仍在继续/);
+  assert.match(multiplayerClient, /analyzeMultiplayerDecision/);
   assert.match(multiplayerClient, /type: "timeout"/);
   assert.match(multiplayerClient, /player\.streetCommitted > 0/);
   assert.doesNotMatch(multiplayerClient, /player\.committed > 0/);
@@ -325,21 +333,36 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.doesNotMatch(multiplayerCss, /\.showDecisionPanel/);
   assert.match(multiplayerCss, /\.sessionSummary\s*\{/);
   assert.match(multiplayerCss, /\.summaryGrid\s*\{/);
+  assert.match(multiplayerCss, /\.aiAssistButton\s*\{/);
+  assert.match(multiplayerCss, /\.aiAnalysisPanel\s*\{/);
+  assert.match(multiplayerCss, /\.aiFrequencyRow\s*\{/);
   assert.match(staticMultiplayer, /supabase\.co\/functions\/v1\/poker-api/);
   assert.match(staticMultiplayer, /rangecraft\.multiplayer\.guest-token/);
   assert.match(staticMultiplayer, /signOutLabel="返回首页"/);
   assert.doesNotMatch(staticMultiplayer, /onSignOut=\{clearToken\}/);
   assert.match(edgeFunction, /function normalizeRoomSettings/);
+  assert.match(edgeFunction, /const aiAssistLimit = payload\.aiAssistLimit \?\? 5/);
+  assert.match(edgeFunction, /aiAssistsRemaining: seat\.aiAssistsRemaining/);
   assert.match(edgeFunction, /result\?\.totalPot \?\? hand\.committedPot/);
   assert.match(edgeFunction, /raiseAllInOnly: table\.legalActions\.raise\?\.allInOnly \?\? false/);
   assert.match(edgeFunction, /result\.winnerDetails/);
   assert.match(edgeFunction, /bestOnlineHand\(\[\.\.\.hand\.community, \.\.\.detail\.holeCards\]\)/);
   assert.match(edgeFunction, /if \(!detail\?\.holeCards/);
-  assert.match(edgeFunction, /type === "use-time-bank" \|\| type === "timeout"/);
+  assert.match(edgeFunction, /type === "use-time-bank" \|\| type === "use-ai-assist" \|\| type === "timeout"/);
   assert.match(edgeFunction, /type === "finish"/);
   assert.match(edgeFunction, /type === "restart"/);
   assert.match(edgeFunction, /actionSeq: hand\.actionSeq/);
   assert.match(edgeFunction, /recentActions: hand\.recentActions\.map/);
+  assert.match(edgeFunction, /amount: event\.amount/);
+  assert.match(edgeFunction, /toAmount: event\.toAmount/);
+  assert.match(edgeFunction, /raiseTo: event\.raiseTo/);
+  assert.match(edgeFunction, /potAfter: event\.potAfter/);
+  assert.match(edgeFunction, /stackAfter: event\.stackAfter/);
+  assert.match(multiplayerCoach, /pokerContestablePotAtDecision/);
+  assert.match(multiplayerCoach, /pokerCallClosesContestableLayers/);
+  assert.match(multiplayerCoach, /createPublicOpponentRanges/);
+  assert.match(multiplayerCoach, /公开信息近似模型/);
+  assert.match(multiplayerCoach, /不读取任何对手暗牌/);
   assert.match(multiplayerAudio, /MULTIPLAYER_AUDIO_EVENT_MAX_AGE_MS = 5_000/);
   assert.match(multiplayerAudio, /event\.seq > previous\.actionSeq/);
   assert.match(multiplayerAudio, /sound: "deal"/);

@@ -15,6 +15,10 @@ import {
   type MultiplayerAudioFrame,
 } from "../../lib/multiplayer-audio-events";
 import {
+  analyzeMultiplayerDecision,
+  type MultiplayerAiAnalysis,
+} from "../../lib/multiplayer-ai-coach";
+import {
   isPokerAudioEnabled,
   playPokerSound,
   setPokerAudioEnabled,
@@ -124,6 +128,7 @@ type PublicPlayer = {
   status: "waiting" | "active" | "folded" | "all-in" | "out";
   ready: boolean;
   timeBankMs: number;
+  aiAssistsRemaining: number;
   isOwner: boolean;
   isDealer: boolean;
   holeCards?: Card[];
@@ -157,6 +162,11 @@ type PublicGame = {
     seat: number;
     street: "preflop" | "flop" | "turn" | "river";
     action: "fold" | "check" | "call" | "raise";
+    amount?: number | null;
+    toAmount?: number | null;
+    raiseTo?: number | null;
+    potAfter?: number | null;
+    stackAfter?: number | null;
     timedOut: boolean;
     occurredAt: number;
   }[];
@@ -196,6 +206,7 @@ type SessionReportPlayer = {
   allInHands: number;
   timeoutPercent: number;
   voluntaryShows: number;
+  aiAssistsUsed: number;
   biggestWin: number;
   biggestLoss: number;
   decisions: number;
@@ -233,6 +244,7 @@ type RoomSnapshot = {
     actionTimeMs: number;
     initialTimeBankMs: number;
     timeBankUnitMs: number;
+    aiAssistLimit: number;
     finishRequested: boolean;
     sessionReport: SessionReport | null;
     handHistory: HandHistoryEntry[];
@@ -272,6 +284,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   RAISE_NOT_ALLOWED: "这次不足额全下没有重新开放加注权。",
   SHOW_NOT_ALLOWED: "现在不能执行秀牌操作。",
   TIME_BANK_EMPTY: "你本局的额外思考时间已经用完。",
+  AI_ASSIST_DISABLED: "这个房间没有开启 AI 辅助。",
+  AI_ASSIST_EMPTY: "你本局的 AI 辅助次数已经用完。",
   TIME_NOT_EXPIRED: "当前玩家仍有思考时间。",
   TIME_EXPIRED: "本次行动已经超时。",
   ILLEGAL_ACTION: "这个行动在当前局面不合法。",
@@ -440,6 +454,12 @@ const STACK_DEPTH_OPTIONS = [
   { key: "deep", label: "深筹", bigBlinds: 200, stack: 2_000 },
 ] as const;
 
+const AI_ASSIST_OPTIONS = [
+  { value: 0 as const, label: "关闭", description: "纯实战，不显示策略分析" },
+  { value: 5 as const, label: "5 次", description: "每位玩家整局可分析 5 个决策" },
+  { value: 10 as const, label: "10 次", description: "更适合教学与长局复盘" },
+] as const;
+
 const VISUAL_SEATS_BY_PLAYER_COUNT: Record<number, number[]> = {
   1: [0],
   2: [0, 3],
@@ -463,6 +483,7 @@ function PlayerSeat({
   actorAccountId,
   visualSeat,
   actionSecondsLeft,
+  aiAssistEnabled,
   tableMessage,
 }: {
   player: PublicPlayer;
@@ -470,6 +491,7 @@ function PlayerSeat({
   actorAccountId: string | null;
   visualSeat: number;
   actionSecondsLeft: number | null;
+  aiAssistEnabled: boolean;
   tableMessage?: MultiplayerChatMessage;
 }) {
   const cards = player.holeCards ?? [];
@@ -511,7 +533,7 @@ function PlayerSeat({
       {player.streetCommitted > 0 && <div className={styles.tableBet}><i />{player.streetCommitted}</div>}
       <div className={`${styles.seatClock} ${player.accountId === actorAccountId ? styles.seatClockActive : ""}`}>
         {player.accountId === actorAccountId && <strong>{actionSecondsLeft ?? "—"}s</strong>}
-        <span>时间库 {Math.ceil(player.timeBankMs / 1_000)}s</span>
+        <span>时间库 {Math.ceil(player.timeBankMs / 1_000)}s{aiAssistEnabled ? ` · AI ${player.aiAssistsRemaining}次` : ""}</span>
       </div>
       {(player.status === "folded" || player.status === "out") && <div className={styles.foldLabel}>{PLAYER_STATUS_LABELS[player.status]}</div>}
     </div>
@@ -525,6 +547,7 @@ function TableSurface({
   actionSecondsLeft,
   boardDeal,
   seatMessages,
+  aiAssistEnabled,
 }: {
   players: PublicPlayer[];
   selfAccountId: string;
@@ -532,6 +555,7 @@ function TableSurface({
   actionSecondsLeft: number | null;
   boardDeal: MultiplayerBoardDeal | null;
   seatMessages: ReadonlyMap<number, MultiplayerChatMessage>;
+  aiAssistEnabled: boolean;
 }) {
   const selfSeat = players.find((player) => player.accountId === selfAccountId)?.seat ?? 0;
   const orderedPlayers = useMemo(() => [...players].sort((left, right) => {
@@ -580,8 +604,9 @@ function TableSurface({
           selfAccountId={selfAccountId}
           actorAccountId={game?.actorAccountId ?? null}
           visualSeat={visualSeats[index] ?? index}
-          actionSecondsLeft={actionSecondsLeft}
-          tableMessage={seatMessages.get(player.seat)}
+            actionSecondsLeft={actionSecondsLeft}
+            aiAssistEnabled={aiAssistEnabled}
+            tableMessage={seatMessages.get(player.seat)}
         />
       ))}
     </div>
@@ -1225,6 +1250,82 @@ function formatSigned(value: number, suffix = "") {
   return `${value > 0 ? "+" : ""}${rounded}${suffix}`;
 }
 
+function formatAnalysisPercent(value: number) {
+  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
+}
+
+function AiAssistAnalysisPanel({
+  analysis,
+  onClose,
+}: {
+  analysis: MultiplayerAiAnalysis;
+  onClose: () => void;
+}) {
+  return (
+    <article className={styles.aiAnalysisPanel} aria-live="polite">
+      <header className={styles.aiAnalysisHeader}>
+        <div>
+          <span>AI ASSIST · 本次决策近似分析</span>
+          <strong>{analysis.recommendedLabel}</strong>
+        </div>
+        <button type="button" onClick={onClose} aria-label="关闭 AI 辅助分析">×</button>
+      </header>
+
+      <p className={styles.aiAnalysisSummary}>{analysis.summary}</p>
+      <div className={styles.aiAnalysisMetrics}>
+        <div><span>范围胜率</span><strong>{formatAnalysisPercent(analysis.equity)}</strong></div>
+        <div><span>直接赔率</span><strong>{formatAnalysisPercent(analysis.potOdds)}</strong></div>
+        <div><span>当前 SPR</span><strong>{analysis.spr.toFixed(1)}</strong></div>
+        <div><span>位置</span><strong>{analysis.position} · {analysis.inPosition ? "IP" : "OOP"}</strong></div>
+      </div>
+
+      <section className={styles.aiAnalysisMix} aria-label="建议行动混合频率">
+        <div className={styles.aiAnalysisSectionTitle}>
+          <span>建议行动混合</span>
+          <small>不是机械选择最高频；真实混合需要按频率随机执行</small>
+        </div>
+        {analysis.frequencies.map((route) => (
+          <div className={styles.aiFrequencyRow} key={route.action}>
+            <span>{route.label}</span>
+            <div><i style={{ width: formatAnalysisPercent(route.frequency) }} /></div>
+            <strong>{formatAnalysisPercent(route.frequency)}</strong>
+          </div>
+        ))}
+      </section>
+
+      {analysis.sizing.length > 0 && (
+        <section className={styles.aiSizingSection} aria-label="建议下注尺寸混合">
+          <div className={styles.aiAnalysisSectionTitle}>
+            <span>加注尺寸路线</span>
+            <small>金额表示本街累计下注到</small>
+          </div>
+          <div className={styles.aiSizingRoutes}>
+            {analysis.sizing.map((route) => (
+              <div key={route.target}>
+                <strong>{route.allIn ? `全下 ${route.target}` : route.label}</strong>
+                <span>{formatAnalysisPercent(route.frequency)}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <div className={styles.aiAnalysisContext}>
+        <div><span>手牌</span><strong>{analysis.handLabel}</strong></div>
+        <div><span>牌面</span><strong>{analysis.boardLabel}</strong></div>
+        <div><span>听牌</span><strong>{analysis.drawLabel}</strong></div>
+      </div>
+      <ul className={styles.aiAnalysisFactors}>
+        {analysis.factors.map((factor) => <li key={factor}>{factor}</li>)}
+      </ul>
+      <footer className={styles.aiAnalysisSource}>
+        <strong>已消耗 1 次 AI 辅助；行动倒计时仍在继续。</strong>
+        <span>{analysis.sourceNote}</span>
+      </footer>
+    </article>
+  );
+}
+
 function formatSessionDuration(durationMs: number) {
   const minutes = Math.max(0, Math.round(durationMs / 60_000));
   if (minutes < 1) return "不到 1 分钟";
@@ -1340,7 +1441,7 @@ function SessionSummary({
                 </ul>
                 <footer>
                   <span>决策 {player.decisions} · 弃 {player.foldActions} / 过 {player.checkActions} / 跟 {player.callActions} / 加 {player.raiseActions}</span>
-                  <span>全下 {player.allInHands} 手 · 超时 {formatSessionPercent(player.timeoutPercent)} · 主动亮牌 {player.voluntaryShows} 次</span>
+                  <span>全下 {player.allInHands} 手 · 超时 {formatSessionPercent(player.timeoutPercent)} · 主动亮牌 {player.voluntaryShows} 次 · AI 辅助 {player.aiAssistsUsed} 次</span>
                 </footer>
               </article>
             ))}
@@ -1351,7 +1452,7 @@ function SessionSummary({
       <div className={styles.summaryActions}>
         <div>
           <strong>{isOwner ? "你可以保留邀请码再开一局" : "等待房主决定是否再开一局"}</strong>
-          <span>再开一局会重置筹码、时间库和本局统计，所有人需要重新准备。</span>
+          <span>再开一局会重置筹码、时间库、AI 辅助次数和本局统计，所有人需要重新准备。</span>
         </div>
         {isOwner && <button className={styles.primaryButton} type="button" disabled={busy} onClick={onRestart}>再开一局</button>}
         <button className={styles.secondaryButton} type="button" disabled={busy} onClick={onLeave}>离开房间</button>
@@ -1387,6 +1488,7 @@ export default function MultiplayerClient({
   const [startingStack, setStartingStack] = useState(1_000);
   const [actionSeconds, setActionSeconds] = useState(20);
   const [timeBankSeconds, setTimeBankSeconds] = useState(100);
+  const [aiAssistLimit, setAiAssistLimit] = useState<0 | 5 | 10>(5);
   const [joinCode, setJoinCode] = useState("");
   const [raiseDraft, setRaiseDraft] = useState<{ turnKey: string; value: number } | null>(null);
   const [chatMessages, setChatMessages] = useState<MultiplayerChatMessage[]>([]);
@@ -1398,6 +1500,9 @@ export default function MultiplayerClient({
   const [rulesOpen, setRulesOpen] = useState(false);
   const [tableHintOpen, setTableHintOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [aiAnalysis, setAiAnalysis] = useState<MultiplayerAiAnalysis | null>(null);
+  const [lastAiAssistedDecisionId, setLastAiAssistedDecisionId] = useState<string | null>(null);
+  const [aiAssistBusy, setAiAssistBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1417,6 +1522,7 @@ export default function MultiplayerClient({
   const chatSendingRef = useRef(false);
   const chatPinnedRef = useRef(true);
   const viewerSeatRef = useRef<number | null>(null);
+  const aiAssistBusyRef = useRef(false);
 
   const acceptSnapshot = useCallback((next: RoomSnapshot) => {
     viewerSeatRef.current = next.table.viewerSeat;
@@ -1489,6 +1595,10 @@ export default function MultiplayerClient({
     setUnreadChatCount(0);
     setChatError(null);
     setHistoryOpen(false);
+    aiAssistBusyRef.current = false;
+    setAiAssistBusy(false);
+    setAiAnalysis(null);
+    setLastAiAssistedDecisionId(null);
     setSnapshot(null);
   }, []);
 
@@ -1579,6 +1689,10 @@ export default function MultiplayerClient({
       setUnreadChatCount(0);
       setChatError(null);
       setHistoryOpen(false);
+      aiAssistBusyRef.current = false;
+      setAiAssistBusy(false);
+      setAiAnalysis(null);
+      setLastAiAssistedDecisionId(null);
     } else if (viewedRoomId.current !== roomId) {
       return;
     }
@@ -1703,6 +1817,7 @@ export default function MultiplayerClient({
         startingStack,
         actionSeconds,
         timeBankSeconds,
+        aiAssistLimit,
       });
       await loadRoom(body.room.id);
       await loadRooms();
@@ -2018,6 +2133,11 @@ export default function MultiplayerClient({
     ? snapshot.players.find((player) => player.stack > 0 && player.status !== "out") ?? null
     : null;
   const latestChatCreatedAt = chatMessages.at(-1)?.createdAt ?? null;
+  const aiDecisionId = game && isMyTurn && selfPlayer
+    ? `${game.handId}:${game.street}:${game.actionSeq ?? 0}:${game.actorAccountId ?? "none"}:${game.currentBet}:${selfPlayer.streetCommitted}`
+    : null;
+  const hasAiAssistedCurrentDecision = aiDecisionId !== null
+    && lastAiAssistedDecisionId === aiDecisionId;
   const seatChatMessages = useMemo(() => {
     const recent = new Map<number, MultiplayerChatMessage>();
     for (const message of chatMessages) {
@@ -2028,6 +2148,56 @@ export default function MultiplayerClient({
     }
     return recent;
   }, [chatMessages, clockNow, snapshot?.players]);
+
+  const requestAiAssist = useCallback(async () => {
+    if (
+      !snapshot
+      || !game
+      || !legal
+      || !selfPlayer
+      || !isMyTurn
+      || !aiDecisionId
+      || aiAssistBusyRef.current
+      || lastAiAssistedDecisionId === aiDecisionId
+      || snapshot.table.aiAssistLimit <= 0
+      || selfPlayer.aiAssistsRemaining <= 0
+      || selfPlayer.holeCards?.length !== 2
+      || game.street === "showdown"
+      || game.street === "complete"
+    ) return;
+
+    aiAssistBusyRef.current = true;
+    setAiAssistBusy(true);
+    setError(null);
+    try {
+      // Let the loading state paint before the deterministic range sampling runs.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      const analysis = analyzeMultiplayerDecision({
+        decisionId: aiDecisionId,
+        heroAccountId: snapshot.selfAccountId,
+        heroCards: selfPlayer.holeCards,
+        board: game.board,
+        street: game.street,
+        pot: game.pot,
+        currentBet: game.currentBet,
+        bigBlind: snapshot.table.bigBlind,
+        startingStack: snapshot.table.startingStack,
+        dealerSeat: game.dealerSeat,
+        players: game.players,
+        recentActions: game.recentActions ?? [],
+        legalActions: legal,
+      });
+      const succeeded = await sendCommand({ type: "use-ai-assist", handId: game.handId });
+      if (!succeeded) return;
+      setLastAiAssistedDecisionId(aiDecisionId);
+      setAiAnalysis(analysis);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "AI 辅助分析失败，本次不会扣除次数。");
+    } finally {
+      aiAssistBusyRef.current = false;
+      setAiAssistBusy(false);
+    }
+  }, [aiDecisionId, game, isMyTurn, lastAiAssistedDecisionId, legal, selfPlayer, sendCommand, snapshot]);
 
   useEffect(() => {
     const hasRunningClock = phase === "playing"
@@ -2173,7 +2343,13 @@ export default function MultiplayerClient({
         eyebrow: "YOUR TURN",
         title: `${STREET_LABELS[game.street]} · 还剩 ${actionSecondsLeft ?? "—"}s`,
         summary: actionLine,
-        details: [raiseLine, selfPlayer?.timeBankMs ? `时间库还剩 ${Math.ceil(selfPlayer.timeBankMs / 1_000)}s，可主动使用时间牌。` : "当前没有可用时间牌。"],
+        details: [
+          raiseLine,
+          selfPlayer?.timeBankMs ? `时间库还剩 ${Math.ceil(selfPlayer.timeBankMs / 1_000)}s，可主动使用时间牌。` : "当前没有可用时间牌。",
+          snapshot.table.aiAssistLimit > 0
+            ? `AI 辅助还剩 ${selfPlayer?.aiAssistsRemaining ?? 0}/${snapshot.table.aiAssistLimit} 次；分析不会暂停行动倒计时。`
+            : "本桌没有开启 AI 辅助。",
+        ],
       };
     }
     return {
@@ -2397,9 +2573,27 @@ export default function MultiplayerClient({
                     <label htmlFor="time-bank-seconds">整局时间库</label>
                     <input id="time-bank-seconds" type="number" min={0} max={600} step={10} value={timeBankSeconds} onChange={(event) => setTimeBankSeconds(Number(event.target.value))} required />
                   </div>
+                  <div className={`${styles.field} ${styles.createWideField}`}>
+                    <span className={styles.fieldLabel}>每人整局 AI 辅助</span>
+                    <div className={styles.aiAssistOptions} role="radiogroup" aria-label="每人整局 AI 辅助次数">
+                      {AI_ASSIST_OPTIONS.map((option) => (
+                        <button
+                          className={aiAssistLimit === option.value ? styles.aiAssistOptionActive : ""}
+                          type="button"
+                          role="radio"
+                          aria-checked={aiAssistLimit === option.value}
+                          key={option.value}
+                          onClick={() => setAiAssistLimit(option.value)}
+                        >
+                          <strong>{option.label}</strong>
+                          <span>{option.description}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <div className={styles.roomRulePreview}>
-                    <strong>{tableMode === "cash" ? "现金练习" : "单桌淘汰"} · {selectedDepthBb}BB · {actionSeconds}/{timeBankSeconds}</strong>
-                    <span>盲注 5/10；每次 {actionSeconds}s；每人整局额外 {timeBankSeconds}s，主动使用时间牌继续思考。</span>
+                    <strong>{tableMode === "cash" ? "现金练习" : "单桌淘汰"} · {selectedDepthBb}BB · {actionSeconds}/{timeBankSeconds} · AI {aiAssistLimit || "关"}</strong>
+                    <span>盲注 5/10；每次 {actionSeconds}s；每人整局额外 {timeBankSeconds}s；{aiAssistLimit ? `每人可使用 ${aiAssistLimit} 次 AI 决策分析。` : "本桌关闭 AI 决策分析。"}</span>
                   </div>
                   <button className={`${styles.primaryButton} ${styles.createRoomButton}`} type="submit" disabled={busy}>创建牌桌</button>
                 </form>
@@ -2468,6 +2662,7 @@ export default function MultiplayerClient({
                   <span className={styles.statusPill}>{tableModeLabel(snapshot.table.tableMode)} · {tableDepthBb} BB</span>
                   <span className={styles.statusPill}>盲注 {snapshot.table.smallBlind}/{snapshot.table.bigBlind}</span>
                   <span className={styles.statusPill}>读秒 {snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s</span>
+                  <span className={styles.statusPill}>AI 辅助 {snapshot.table.aiAssistLimit ? `${snapshot.table.aiAssistLimit}次/人` : "关闭"}</span>
                   <span className={styles.statusPill}>{snapshot.players.length}/{snapshot.room.maxPlayers} 人</span>
                   {snapshot.table.finishRequested && phase !== "finished" && <span className={`${styles.statusPill} ${styles.finishRequestedPill}`}>本手后结算</span>}
                   {isOwner && phase !== "lobby" && phase !== "finished" && phase !== "closed" && (
@@ -2488,6 +2683,7 @@ export default function MultiplayerClient({
                   actionSecondsLeft={actionSecondsLeft}
                   boardDeal={boardDeal?.roomId === snapshot.room.id ? boardDeal : null}
                   seatMessages={seatChatMessages}
+                  aiAssistEnabled={snapshot.table.aiAssistLimit > 0}
                 />
               )}
 
@@ -2531,7 +2727,7 @@ export default function MultiplayerClient({
                 <div>
                   <p className={styles.panelKicker}>WAITING ROOM</p>
                   <h2 className={styles.panelTitle}>人齐后确认准备</h2>
-                  <p className={styles.tableRuleLine}>{tableModeLabel(snapshot.table.tableMode)} · {tableDepthBb}BB · 盲注 {snapshot.table.smallBlind}/{snapshot.table.bigBlind} · 行动/时间库 {snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s</p>
+                  <p className={styles.tableRuleLine}>{tableModeLabel(snapshot.table.tableMode)} · {tableDepthBb}BB · 盲注 {snapshot.table.smallBlind}/{snapshot.table.bigBlind} · 行动/时间库 {snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s · AI 辅助 {snapshot.table.aiAssistLimit ? `${snapshot.table.aiAssistLimit} 次/人` : "关闭"}</p>
                 </div>
                 <div className={styles.lobbyPlayers}>
                   {snapshot.players.map((player) => (
@@ -2579,16 +2775,31 @@ export default function MultiplayerClient({
                         ? `等待 ${actingPlayer?.handle ?? "对手"} 行动`
                         : "本手已结束"}
                   </span>
-                  {isMyTurn && selfPlayer && selfPlayer.timeBankMs > 0 && (
-                    <button
-                      className={styles.timeBankButton}
-                      type="button"
-                      disabled={busy || actionMillisecondsLeft === 0}
-                      onClick={() => void sendCommand({ type: "use-time-bank", handId: game.handId })}
-                    >
-                      <strong>使用时间牌 +{Math.ceil(Math.min(snapshot.table.timeBankUnitMs, selfPlayer.timeBankMs) / 1_000)}s</strong>
-                      <small>剩余 {Math.ceil(selfPlayer.timeBankMs / 1_000)}s</small>
-                    </button>
+                  {isMyTurn && selfPlayer && (selfPlayer.timeBankMs > 0 || snapshot.table.aiAssistLimit > 0) && (
+                    <div className={styles.decisionResourceButtons}>
+                      {selfPlayer.timeBankMs > 0 && (
+                        <button
+                          className={styles.timeBankButton}
+                          type="button"
+                          disabled={busy || aiAssistBusy || actionMillisecondsLeft === 0}
+                          onClick={() => void sendCommand({ type: "use-time-bank", handId: game.handId })}
+                        >
+                          <strong>使用时间牌 +{Math.ceil(Math.min(snapshot.table.timeBankUnitMs, selfPlayer.timeBankMs) / 1_000)}s</strong>
+                          <small>剩余 {Math.ceil(selfPlayer.timeBankMs / 1_000)}s</small>
+                        </button>
+                      )}
+                      {snapshot.table.aiAssistLimit > 0 && (
+                        <button
+                          className={styles.aiAssistButton}
+                          type="button"
+                          disabled={busy || aiAssistBusy || hasAiAssistedCurrentDecision || selfPlayer.aiAssistsRemaining <= 0 || actionMillisecondsLeft === 0}
+                          onClick={() => void requestAiAssist()}
+                        >
+                          <strong>{aiAssistBusy ? "正在分析…" : hasAiAssistedCurrentDecision ? "本次已分析" : "AI 辅助 · 分析本次"}</strong>
+                          <small>本局剩余 {selfPlayer.aiAssistsRemaining}/{snapshot.table.aiAssistLimit} 次 · 不暂停计时</small>
+                        </button>
+                      )}
+                    </div>
                   )}
                     </div>
 
@@ -2674,6 +2885,9 @@ export default function MultiplayerClient({
                         <span>桌上行动进行中</span>
                         <strong>{isMyTurn ? "当前没有可用的加注路线" : `等待 ${actingPlayer?.handle ?? "牌桌"}`}</strong>
                       </div>
+                    )}
+                    {aiAnalysis && aiAnalysis.decisionId === aiDecisionId && (
+                      <AiAssistAnalysisPanel analysis={aiAnalysis} onClose={() => setAiAnalysis(null)} />
                     )}
                   </>
                 )}

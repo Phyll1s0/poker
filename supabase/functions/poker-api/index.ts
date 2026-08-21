@@ -116,6 +116,7 @@ type ClientPlayer = {
   status: "waiting" | "active" | "folded" | "all-in" | "out";
   ready: boolean;
   timeBankMs: number;
+  aiAssistsRemaining: number;
   isOwner: boolean;
   isDealer: boolean;
   holeCards?: ClientCard[];
@@ -236,7 +237,13 @@ function normalizeMaxPlayers(value: unknown): number {
   return Number(value);
 }
 
-function normalizeRoomSettings(payload: JsonObject) {
+function normalizeRoomSettings(payload: JsonObject): {
+  tableMode: "cash" | "tournament";
+  startingStack: number;
+  actionTimeMs: number;
+  initialTimeBankMs: number;
+  aiAssistLimit: 0 | 5 | 10;
+} {
   const tableMode = payload.tableMode ?? "cash";
   if (tableMode !== "cash" && tableMode !== "tournament") {
     throw new ApiError(400, "INVALID_ROOM", "牌局模式不正确。");
@@ -262,11 +269,16 @@ function normalizeRoomSettings(payload: JsonObject) {
   if (!Number.isInteger(initialTimeBankMs) || initialTimeBankMs < 0 || initialTimeBankMs > ONLINE_MAX_TIME_BANK_MS) {
     throw new ApiError(400, "INVALID_ROOM", "整局时间库需要是 0–600 秒。");
   }
+  const aiAssistLimit = payload.aiAssistLimit ?? 5;
+  if (aiAssistLimit !== 0 && aiAssistLimit !== 5 && aiAssistLimit !== 10) {
+    throw new ApiError(400, "INVALID_ROOM", "AI 辅助次数需要是 0、5 或 10。");
+  }
   return {
     tableMode,
     startingStack: Number(startingStack),
     actionTimeMs,
     initialTimeBankMs,
+    aiAssistLimit,
   };
 }
 
@@ -386,6 +398,7 @@ function clientPlayers(table: OnlinePublicRoomState): ClientPlayer[] {
       status,
       ready: seat.ready,
       timeBankMs: seat.timeBankMs,
+      aiAssistsRemaining: seat.aiAssistsRemaining,
       isOwner: seat.seat === table.ownerSeat,
       isDealer: seat.seat === table.hand?.dealerSeat,
       ...(seat.holeCards ? { holeCards: seat.holeCards.map(clientCard) } : {}),
@@ -436,6 +449,7 @@ function makeSnapshot(row: RoomRow, state: OnlineRoomState, guestId: string) {
               status: "out" as const,
               ready: false,
               timeBankMs: 0,
+              aiAssistsRemaining: 0,
               isOwner: false,
               isDealer: winner.seat === hand.dealerSeat,
               ...(winner.holeCards ? { holeCards: winner.holeCards.map(clientCard) } : {}),
@@ -490,6 +504,11 @@ function makeSnapshot(row: RoomRow, state: OnlineRoomState, guestId: string) {
         seat: event.seat,
         street: event.street,
         action: event.action,
+        amount: event.amount,
+        toAmount: event.toAmount,
+        raiseTo: event.raiseTo,
+        potAfter: event.potAfter,
+        stackAfter: event.stackAfter,
         timedOut: event.timedOut,
         occurredAt: event.occurredAt,
       })),
@@ -812,7 +831,9 @@ function parseCommand(payload: JsonObject): Exclude<OnlinePokerCommand, { type: 
     return { ...base, type };
   }
   const handId = requiredString(payload.handId, "handId");
-  if (type === "use-time-bank" || type === "timeout") return { ...base, type, handId };
+  if (type === "use-time-bank" || type === "use-ai-assist" || type === "timeout") {
+    return { ...base, type, handId };
+  }
   if (type === "show") {
     if (typeof payload.show !== "boolean") throw new ApiError(400, "INVALID_COMMAND", "show 必须是布尔值。");
     return { ...base, type, handId, show: payload.show };
