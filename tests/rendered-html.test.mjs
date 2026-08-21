@@ -132,7 +132,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /type GameMode = "per_hand" \| "session" \| "endless"/);
   assert.match(page, /无尽对局/);
   assert.match(page, /画像自适应 · 主动结束复盘/);
-  assert.match(page, /结束无尽局并复盘/);
+  assert.match(page, /结束无尽局并生成点评/);
   assert.match(page, /function pokerRunBbPer100|pokerRunBbPer100/);
   assert.match(page, /BB \/ 100/);
   assert.match(page, /mode === "endless" \? 1\.5 : 0\.85/);
@@ -185,6 +185,14 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /桌上底池 0/);
   assert.match(page, /replay\.table\.settled && <em>已结算<\/em>/);
   assert.match(page, /<HandHistoryReplayTable entry=\{selectedHistory\} replay=\{replayState\}/);
+  assert.match(page, /本手策略点评/);
+  assert.match(page, /整局策略点评/);
+  assert.match(page, /策略点评看原因，牌桌回放看过程/);
+  assert.match(page, /打开牌桌回放/);
+  assert.match(page, /onClick=\{\(\) => openHandHistory\(currentReviewHistory\?\.id\)\}/);
+  assert.match(page, /entry\.runId === historyRunId/);
+  assert.match(page, /currentRunHistory\.find\(\(entry\) => entry\.hand === item\.hand\)/);
+  assert.match(page, /aria-label=\{`回放第 \$\{item\.hand\} 手牌桌`\}/);
   assert.match(page, /本轮结束后解锁完整牌谱/);
   assert.match(page, /window\.localStorage\.setItem\(POKER_HAND_HISTORY_STORAGE_KEY/);
   assert.match(globalsCss, /\.hand-history-modal/);
@@ -192,6 +200,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(globalsCss, /\.hand-history-table-stage/);
   assert.match(globalsCss, /\.hand-history-table-seat\.is-current/);
   assert.match(globalsCss, /\.hand-history-action-banner/);
+  assert.match(globalsCss, /\.strategy-review-replay/);
+  assert.match(globalsCss, /\.session-hand-replay/);
   assert.match(history, /POKER_HAND_HISTORY_LIMIT = 30/);
   assert.match(history, /rangecraft\.solo-hand-history\.v1/);
   assert.match(history, /function buildPokerReplayEvents/);
@@ -407,6 +417,11 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(selfPlay, /pokerCallClosesContestableLayers/);
   assert.match(selfPlay, /pokerContestablePotAtDecision/);
   assert.match(serviceWorker, /key\.startsWith\("rangecraft-"\)/);
+  assert.match(serviceWorker, /rangecraft-v5/);
+  assert.match(serviceWorker, /request\.destination === "script" \|\| request\.destination === "style"/);
+  assert.match(page, /updateViaCache: "none"/);
+  assert.match(page, /controllerchange/);
+  assert.match(page, /registration\.update\(\)/);
   assert.match(pagesIndex, /https:\/\/phyll1s0\.com\/poker\//);
   assert.match(pagesIndex, /在线多人入口/);
   assert.match(packageJson, /"name": "rangecraft-poker-trainer"/);

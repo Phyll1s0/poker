@@ -1,4 +1,4 @@
-const CACHE_NAME = "rangecraft-v4";
+const CACHE_NAME = "rangecraft-v5";
 const APP_SCOPE = new URL("./", self.registration.scope);
 const appAsset = (path) => new URL(path, APP_SCOPE).href;
 const STATIC_ASSETS = [
@@ -28,7 +28,14 @@ function isPrivatePath(pathname) {
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(STATIC_ASSETS))
+      .then((cache) => Promise.all(STATIC_ASSETS.map(async (asset) => {
+        try {
+          const response = await fetch(asset, { cache: "reload" });
+          if (response.ok) await cache.put(asset, response);
+        } catch {
+          // An optional asset failure must not keep an obsolete worker active.
+        }
+      })))
       .then(() => self.skipWaiting()),
   );
 });
@@ -70,6 +77,25 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (!STATIC_ASSETS.includes(request.url) && !CACHEABLE_DESTINATIONS.has(request.destination)) return;
+
+  // An installed app must prefer the newest deployed interface. Cached code
+  // remains available only as an offline fallback.
+  if (request.destination === "script" || request.destination === "style") {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (!response.ok) return response;
+          return caches.open(CACHE_NAME)
+            .then((cache) => cache.put(request, response.clone()))
+            .then(() => response);
+        })
+        .catch(() => caches.match(request).then((cached) => cached || new Response(
+          "RangeCraft 资源暂时无法连接，请恢复网络后重试。",
+          { status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" } },
+        ))),
+    );
+    return;
+  }
 
   event.respondWith(
     caches.match(request).then((cached) => cached || fetch(request).then((response) => {

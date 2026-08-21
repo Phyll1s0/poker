@@ -1006,6 +1006,38 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
 .review-summary h3 { margin: 0; font: 500 14px/1.2 Georgia, serif; }
 .review-summary > strong { display: flex; flex-direction: column; align-items: center; color: #eee9de; font: 500 25px/1 Georgia, serif; }
 .review-summary > strong small { margin-top: 3px; color: #6d716c; font: 7px/1 Arial, sans-serif; }
+.strategy-review-replay {
+  margin: -4px 0 22px;
+  padding: 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid rgba(216,183,116,.2);
+  border-radius: 7px;
+  background: linear-gradient(120deg, rgba(216,183,116,.075), rgba(62,157,121,.045));
+}
+.strategy-review-replay > div { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.strategy-review-replay > div > span { color: var(--gold); font-size: 7px; letter-spacing: .14em; }
+.strategy-review-replay > div > strong { color: #ded9cf; font: 500 12px/1.25 Georgia, "Songti SC", serif; }
+.strategy-review-replay p { margin: 0; color: #747a74; font-size: 8px; line-height: 1.55; }
+.strategy-review-replay > button, .session-hand-replay {
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid rgba(101,198,159,.34);
+  border-radius: 5px;
+  background: rgba(62,157,121,.12);
+  color: #d7ece2;
+  cursor: pointer;
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: .035em;
+  white-space: nowrap;
+}
+.strategy-review-replay > button:hover:not(:disabled), .strategy-review-replay > button:focus-visible,
+.session-hand-replay:hover:not(:disabled), .session-hand-replay:focus-visible { border-color: rgba(101,198,159,.62); background: rgba(62,157,121,.2); outline: none; }
+.strategy-review-replay > button:disabled, .session-hand-replay:disabled { opacity: .38; cursor: not-allowed; }
+.strategy-review-replay > button span, .session-hand-replay span { margin-left: 4px; color: var(--gold); }
 .hand-log > div:not(.section-label) { display: grid; grid-template-columns: 24px 1fr; gap: 8px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.045); }
 .hand-log time { color: #565b56; font: 8px/1.4 Georgia, serif; }
 .hand-log p { margin: 0; color: #a19f97; font-size: 9px; line-height: 1.4; }
@@ -1072,13 +1104,14 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
 .session-stats span { color: #676c67; font-size: 8px; }
 .session-stats strong { color: #d9d5cb; font: 500 14px/1 Georgia, serif; }
 .session-hand-list, .street-breakdown { margin-bottom: 26px; }
-.session-hand-list > div:not(.section-label) { display: grid; grid-template-columns: 24px 1fr 34px; align-items: center; gap: 8px; padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,.045); }
+.session-hand-list > div:not(.section-label) { display: grid; grid-template-columns: 24px minmax(0, 1fr) 34px auto; align-items: center; gap: 8px; padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,.045); }
 .session-hand-list > div > span { color: #555b56; font: 8px/1 Georgia, serif; }
 .session-hand-list p { min-width: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
 .session-hand-list p b { color: #bbb7ae; font-size: 9px; font-weight: 500; }
 .session-hand-list p small { overflow: hidden; color: #686d68; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .session-hand-list > div > em { display: flex; flex-direction: column; align-items: flex-end; color: var(--green-bright); font: 500 13px/1 Georgia, serif; font-style: normal; }
 .session-hand-list > div > em small { margin-top: 3px; color: #5d625d; font: 7px/1 Arial, sans-serif; }
+.session-hand-replay { min-height: 30px; padding-inline: 9px; }
 .street-breakdown > div:not(.section-label) { display: grid; grid-template-columns: 46px 1fr 25px; align-items: center; gap: 9px; padding: 7px 0; color: #8c908a; font-size: 8px; }
 .street-breakdown i { height: 3px; overflow: hidden; border-radius: 3px; background: #292e2b; }
 .street-breakdown i em { height: 100%; display: block; background: linear-gradient(90deg, var(--green), var(--green-bright)); }
@@ -1433,6 +1466,10 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
   .action-button { height: 40px; font-size: 10px; }
   .coach-heading { padding-inline: 16px; }
   .log-content, .session-live { padding-inline: 16px; }
+  .strategy-review-replay { grid-template-columns: 1fr; }
+  .strategy-review-replay > button { width: 100%; }
+  .session-hand-list > .session-hand-result { grid-template-columns: 22px minmax(0, 1fr) 34px; }
+  .session-hand-replay { grid-column: 2 / 4; width: 100%; }
   .info-modal { padding: 34px 24px 24px; }
   .poker-rules-modal { padding: 34px 18px 22px; }
   .poker-rules-modal h2 { font-size: 25px; }

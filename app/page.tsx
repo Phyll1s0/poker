@@ -1820,11 +1820,11 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [replayStep, setReplayStep] = useState(0);
   const [replayPlaying, setReplayPlaying] = useState(false);
+  const [historyRunId, setHistoryRunId] = useState(createSoloHistoryRunId);
   const winSoundHand = useRef(0);
   const observedShowdownImageHand = useRef(0);
   const hintedDecisionKeys = useRef<Set<string>>(new Set());
   const soundOnRef = useRef(isPokerAudioEnabled());
-  const historyRunId = useRef(createSoloHistoryRunId());
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1916,7 +1916,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
 
   const recordSoloHandHistory = useCallback((finishedGame: Game) => {
     if (finishedGame.status !== "showdown" || !finishedGame.showChoiceMade) return;
-    const entry = buildSoloHandHistoryEntry(finishedGame, mode, historyRunId.current);
+    const entry = buildSoloHandHistoryEntry(finishedGame, mode, historyRunId);
     if (mode === "per_hand") {
       setHandHistory((items) => upsertPokerHandHistory(items, entry));
     } else {
@@ -1925,7 +1925,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       // an unlocked per-hand record.
       setSealedRunHistory((items) => upsertPokerHandHistory(items, entry));
     }
-  }, [mode]);
+  }, [historyRunId, mode]);
 
   useEffect(() => {
     if (game?.status === "showdown" && !dealing) {
@@ -2048,7 +2048,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     setRaiseTo(BIG_BLIND * 3);
     winSoundHand.current = 0;
     observedShowdownImageHand.current = 0;
-    historyRunId.current = createSoloHistoryRunId();
+    setHistoryRunId(createSoloHistoryRunId());
     setGame(freshGame(undefined, { shuffleStyles: true, presetKey: nextPreset }));
   }, []);
 
@@ -2207,6 +2207,10 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       ? mergePokerHandHistory(handHistory, sealedRunHistory)
       : handHistory
   ), [handHistory, sealedRunHistory, sessionEnded]);
+  const currentRunHistory = availableHandHistory.filter((entry) => entry.runId === historyRunId);
+  const currentReviewHistory = currentRunHistory.find((entry) => entry.hand === game?.handNo)
+    ?? currentRunHistory[0]
+    ?? null;
   const selectedHistory = useMemo(() => (
     availableHandHistory.find((entry) => entry.id === selectedHistoryId) ?? availableHandHistory[0] ?? null
   ), [availableHandHistory, selectedHistoryId]);
@@ -2474,13 +2478,13 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                     <button className="muck-cards" onClick={() => chooseHeroShow(false)}>盖牌</button>
                   </div>
                 ) : mode === "session" && sessionIsComplete ? (
-                  <button className="next-hand-button" onClick={() => setShowLog(true)}>查看{game.presetKey === "squid" ? "鱿鱼" : ""}整局复盘</button>
+                  <button className="next-hand-button" onClick={() => setShowLog(true)}>查看{game.presetKey === "squid" ? "鱿鱼" : ""}整局策略点评</button>
                 ) : mode === "endless" && sessionEnded ? (
-                  <button className="next-hand-button" onClick={() => setShowLog(true)}>查看无尽对局复盘</button>
+                  <button className="next-hand-button" onClick={() => setShowLog(true)}>查看无尽对局策略点评</button>
                 ) : mode === "endless" ? (
                   <div className="endless-hand-actions">
                     <button className="next-hand-button" onClick={startNextHand}>下一手 · 筹码延续 <kbd>N</kbd></button>
-                    <button className="finish-endless-button" onClick={finishEndlessRun}>结束无尽局并复盘</button>
+                    <button className="finish-endless-button" onClick={finishEndlessRun}>结束无尽局并生成点评</button>
                   </div>
                 ) : (
                   <button className="next-hand-button" onClick={startNextHand}>下一手 · 筹码延续 <kbd>N</kbd></button>
@@ -2561,8 +2565,8 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
             <button className={!showLog ? "active" : ""} onClick={() => setShowLog(false)}>{mode === "session" ? "整局进行中" : mode === "endless" ? "无尽对局中" : "实时教练"}</button>
             <button className={showLog ? "active" : ""} onClick={() => setShowLog(true)} aria-disabled={!reviewUnlocked}>
               {mode === "session"
-                ? game.presetKey === "squid" ? `鱿鱼复盘 · ${squidAwarded}/${game.squid.total}` : `整局复盘 · ${completedHands}/${SESSION_HANDS}`
-                : mode === "endless" ? `无尽复盘 · ${completedHands} 手` : `本手复盘${reviewUnlocked ? " · 已解锁" : ""}`}
+                ? game.presetKey === "squid" ? `鱿鱼策略点评 · ${squidAwarded}/${game.squid.total}` : `整局策略点评 · ${completedHands}/${SESSION_HANDS}`
+                : mode === "endless" ? `无尽策略点评 · ${completedHands} 手` : `本手策略点评${reviewUnlocked ? " · 已解锁" : ""}`}
             </button>
           </div>
 
@@ -2572,8 +2576,8 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                 <div className="lock-orbit">◇</div>
                 <span>SESSION REVIEW LOCKED</span>
                 <h3>{mode === "endless"
-                  ? "完整复盘留到你主动结束之后"
-                  : game.presetKey === "squid" ? "完整复盘留到 9 条鱿鱼发完之后" : "完整复盘留到第 20 手之后"}</h3>
+                  ? "完整策略点评留到你主动结束之后"
+                  : game.presetKey === "squid" ? "完整策略点评留到 9 条鱿鱼发完之后" : "完整策略点评留到第 20 手之后"}</h3>
                 <p>{mode === "endless"
                   ? "无尽模式默认关闭提示；需要时可在右上角开启，并只查看当前节点。长期评分、完整决策路径和电脑画像仍在结束后公开。"
                   : "整局模式默认关闭提示；卡住时可在右上角开启，并只查看当前节点。决策分数、完整路径和对手类型仍在整局结束后公开。"}</p>
@@ -2657,7 +2661,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                 <div className="section-label"><span>对手画像</span><small>牌后解锁</small></div>
                 <div className="locked-profile">
                   <span>◇</span>
-                  <div><b>本手保持未知</b><p>结束后进入“本手复盘”，再查看每位电脑的策略倾向。</p></div>
+                  <div><b>本手保持未知</b><p>结束后进入“本手策略点评”，再查看每位电脑的策略倾向。</p></div>
                 </div>
               </section>
             </div>
@@ -2669,10 +2673,10 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                 <h3>{showDecisionPending
                   ? "请先选择亮牌或盖牌"
                   : mode === "session" ? game.presetKey === "squid" ? `还剩 ${game.squid.remaining} 条鱿鱼` : `还需完成 ${Math.max(0, SESSION_HANDS - completedHands)} 手`
-                  : mode === "endless" ? "完成本手后可主动结束并生成复盘" : "本手尚未结束"}</h3>
+                  : mode === "endless" ? "完成本手后可主动结束并生成策略点评" : "本手尚未结束"}</h3>
                 <p>{showDecisionPending
                   ? "完成本手的展示决策后再生成报告，避免复盘信息影响你的选择。"
-                  : isReviewRun ? mode === "endless" ? "继续对局，或在一手完整结算后点击“结束无尽局并复盘”。牌桌可按需查看当前提示；完整路径、分数和对手类型仍在结束后公开。" : "整局结束后一次生成完整报告；牌桌可按需查看当前提示，但不会提前公开完整路径、分数和对手类型。"
+                  : isReviewRun ? mode === "endless" ? "继续对局，或在一手完整结算后点击“结束无尽局并生成点评”。牌桌可按需查看当前提示；完整路径、分数和对手类型仍在结束后公开。" : "整局结束后一次生成完整策略点评；牌桌可按需查看当前提示，但不会提前公开完整路径、分数和对手类型。"
                   : "牌局结束后会自动生成这手牌的决策点评。"}</p>
                 <button onClick={() => setShowLog(false)}>回到牌桌</button>
               </section>
@@ -2682,12 +2686,27 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
               <div className="review-summary unlocked">
                 <div>
                   <span>{mode === "session"
-                    ? game.presetKey === "squid" ? "鱿鱼整局报告已生成" : "20 手整局报告已生成"
-                    : mode === "endless" ? "无尽对局报告已生成" : "本手复盘已生成"}</span>
+                    ? game.presetKey === "squid" ? "鱿鱼整局策略点评已生成" : "20 手整局策略点评已生成"
+                    : mode === "endless" ? "无尽对局策略点评已生成" : "本手策略点评已生成"}</span>
                   <h3>{TABLE_PRESETS[game.presetKey].shortLabel} · {isReviewRun ? `${completedHands} 手 · ${runDecisionStats.count} 个决策节点` : `第 ${game.handNo} 手 · ${STREET_LABELS[game.street]}`}</h3>
                 </div>
                 <strong>{reportScore}<small>{reportReview.length ? reportHintCount ? `策略匹配度 · 提示 ${reportHintCount}` : "策略匹配度 · 独立" : "暂无决策"}</small></strong>
               </div>
+
+              <section className="strategy-review-replay" aria-label="牌桌回放入口">
+                <div>
+                  <span>VISUAL HAND REPLAY</span>
+                  <strong>策略点评看原因，牌桌回放看过程</strong>
+                  <p>在原牌桌上逐步查看每位玩家的行动、下注额、剩余筹码与完整赛后底牌。</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openHandHistory(currentReviewHistory?.id)}
+                  disabled={!historyAccessUnlocked || !currentReviewHistory}
+                >
+                  打开牌桌回放 <span aria-hidden="true">↗</span>
+                </button>
+              </section>
 
               {isReviewRun && (
                 <>
@@ -2707,13 +2726,25 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                   <SquidScoreboard game={game} report />
                   <div className="session-hand-list">
                     <div className="section-label"><span>{completedHands > sessionResults.length ? `最近 ${sessionResults.length} 手结果` : "逐手结果"}</span><small>累计统计保留全部样本 · 低于 1 BB 自动补至初始买入</small></div>
-                    {[...sessionResults].sort((a, b) => a.hand - b.hand).map((item) => (
-                      <div key={item.hand}>
-                        <span>{String(item.hand).padStart(2, "0")}</span>
-                        <p><b>{item.heroCards}</b><small>{item.result} · 桌面 {item.heroStack} / 投入 {item.heroCashInvested} / 净 {item.heroNet >= 0 ? "+" : ""}{item.heroNet}{item.assistedDecisions ? ` · 提示 ${item.assistedDecisions}` : " · 独立"}</small></p>
-                        <em>{item.score ?? "—"}<small>{item.decisions ? "分" : "无决策"}</small></em>
-                      </div>
-                    ))}
+                    {[...sessionResults].sort((a, b) => a.hand - b.hand).map((item) => {
+                      const historyEntry = currentRunHistory.find((entry) => entry.hand === item.hand);
+                      return (
+                        <div className="session-hand-result" key={item.hand}>
+                          <span>{String(item.hand).padStart(2, "0")}</span>
+                          <p><b>{item.heroCards}</b><small>{item.result} · 桌面 {item.heroStack} / 投入 {item.heroCashInvested} / 净 {item.heroNet >= 0 ? "+" : ""}{item.heroNet}{item.assistedDecisions ? ` · 提示 ${item.assistedDecisions}` : " · 独立"}</small></p>
+                          <em>{item.score ?? "—"}<small>{item.decisions ? "分" : "无决策"}</small></em>
+                          <button
+                            className="session-hand-replay"
+                            type="button"
+                            onClick={() => openHandHistory(historyEntry?.id)}
+                            disabled={!historyEntry}
+                            aria-label={`回放第 ${item.hand} 手牌桌`}
+                          >
+                            牌桌回放 <span aria-hidden="true">↗</span>
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                   <div className="street-breakdown">
                     <div className="section-label"><span>分街表现</span><small>启发式匹配度</small></div>
@@ -2745,7 +2776,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
               </div>
 
               <div className="opponent-review">
-                <div className="section-label"><span>对手策略画像</span><small>复盘时公开</small></div>
+                <div className="section-label"><span>对手策略画像</span><small>策略点评时公开</small></div>
                 {mode === "endless" && <p className="range-note">以下是每位电脑的基准风格；无尽对局中它们都依据你的累计画像渐进调整了进攻、入池、诈唬与直接对抗频率，但不会因此收敛成同一种打法。</p>}
                 <div className="profile-list revealed">
                   {game.players.slice(1).map((player) => (
@@ -2926,8 +2957,22 @@ export default function Home() {
   ));
 
   useEffect(() => {
+    let removeServiceWorkerListener = () => undefined;
     if ("serviceWorker" in navigator) {
-      void navigator.serviceWorker.register(`${APP_BASE_PATH}sw.js`, { scope: APP_BASE_PATH }).catch(() => undefined);
+      const serviceWorker = navigator.serviceWorker;
+      const hadController = Boolean(serviceWorker.controller);
+      let refreshing = false;
+      const reloadOnUpgrade = () => {
+        if (!hadController || refreshing) return;
+        refreshing = true;
+        window.location.reload();
+      };
+      serviceWorker.addEventListener("controllerchange", reloadOnUpgrade);
+      removeServiceWorkerListener = () => serviceWorker.removeEventListener("controllerchange", reloadOnUpgrade);
+      void serviceWorker.register(`${APP_BASE_PATH}sw.js`, {
+        scope: APP_BASE_PATH,
+        updateViaCache: "none",
+      }).then((registration) => registration.update()).catch(() => undefined);
     }
 
     const captureInstallPrompt = (event: Event) => {
@@ -2942,6 +2987,7 @@ export default function Home() {
     window.addEventListener("beforeinstallprompt", captureInstallPrompt);
     window.addEventListener("appinstalled", markInstalled);
     return () => {
+      removeServiceWorkerListener();
       window.removeEventListener("beforeinstallprompt", captureInstallPrompt);
       window.removeEventListener("appinstalled", markInstalled);
     };
