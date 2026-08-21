@@ -269,6 +269,13 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /data-suit-tone=\{red \? "red" : "black"\}/);
   assert.match(multiplayerClient, /WebkitTextFillColor: red \? "#c92f35" : "#171b19"/);
   assert.match(multiplayerClient, /const VISUAL_SEATS_BY_PLAYER_COUNT/);
+  assert.match(multiplayerClient, /multiplayerHoleDealTransition/);
+  assert.match(multiplayerClient, /multiplayerHoleCardDealDelayMs/);
+  assert.match(multiplayerClient, /const cardKeyPrefix = handId \?\? "waiting"/);
+  assert.match(multiplayerClient, /key=\{`\$\{cardKeyPrefix\}-\$\{card\.rank\}-\$\{card\.suit\}-\$\{index\}`\}/);
+  assert.match(multiplayerClient, /key=\{`\$\{cardKeyPrefix\}-hidden-\$\{index\}`\}/);
+  assert.match(multiplayerClient, /game\?\.street === "preflop" && holeDeal\?\.handId === game\.handId/);
+  assert.match(multiplayerClient, /multiplayerHoleDealDurationMs\(holeDeal\)/);
   assert.match(multiplayerClient, /multiplayerBoardDealTransition/);
   assert.match(multiplayerClient, /const BOARD_DEAL_STAGGER_MS = 300/);
   assert.match(multiplayerClient, /styles\.boardDealtCard/);
@@ -367,6 +374,9 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerCss, /@media \(max-width: 700px\)[\s\S]*?\.multiplayerPage \.seatSelf \.miniCard,[\s\S]*?width:\s*52px/);
   assert.match(multiplayerCss, /@keyframes multiplayerDealCommunityCard/);
   assert.match(multiplayerCss, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.multiplayerPage \.boardDealtCard/);
+  assert.match(multiplayerCss, /\.multiplayerPage \.holeDealtCard\s*\{[\s\S]*?animation:\s*multiplayerDealHoleCard 460ms/);
+  assert.match(multiplayerCss, /@keyframes multiplayerDealHoleCard/);
+  assert.match(multiplayerCss, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.multiplayerPage \.holeDealtCard\s*\{[\s\S]*?opacity:\s*1;[\s\S]*?transform:\s*none;[\s\S]*?animation:\s*none;/);
   assert.match(multiplayerCss, /\[data-suit-tone="red"\][\s\S]*?-webkit-text-fill-color:\s*#c92f35/);
   assert.match(multiplayerCss, /\[data-suit-tone="black"\][\s\S]*?-webkit-text-fill-color:\s*#171b19/);
   assert.match(multiplayerCss, /width: min\(800px, 78%, calc\(82dvh - 59px\)\)/);

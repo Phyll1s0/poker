@@ -11,6 +11,13 @@ import {
   type MultiplayerBoardFrame,
 } from "../../lib/multiplayer-board-animation";
 import {
+  multiplayerHoleCardDealDelayMs,
+  multiplayerHoleDealDurationMs,
+  multiplayerHoleDealTransition,
+  type MultiplayerHoleDeal,
+  type MultiplayerHoleFrame,
+} from "../../lib/multiplayer-hole-animation";
+import {
   multiplayerAudioTransition,
   type MultiplayerAudioFrame,
 } from "../../lib/multiplayer-audio-events";
@@ -386,10 +393,12 @@ function CardView({
   card,
   mini = false,
   dealDelayMs,
+  miniDealDelayMs,
 }: {
   card: Card;
   mini?: boolean;
   dealDelayMs?: number;
+  miniDealDelayMs?: number | null;
 }) {
   const red = card.suit === "♥" || card.suit === "♦";
   const toneClass = red ? styles.redCard : styles.blackCard;
@@ -401,8 +410,12 @@ function CardView({
     WebkitTextFillColor: red ? "#c92f35" : "#171b19",
   };
   if (mini) {
+    const dealClass = miniDealDelayMs == null ? "" : styles.holeDealtCard;
+    const miniStyle = miniDealDelayMs == null
+      ? toneStyle
+      : { ...toneStyle, animationDelay: `${miniDealDelayMs}ms` };
     return (
-      <span className={`${styles.miniCard} ${toneClass}`} data-suit-tone={red ? "red" : "black"} style={toneStyle}>
+      <span className={`${styles.miniCard} ${toneClass} ${dealClass}`} data-suit-tone={red ? "red" : "black"} style={miniStyle}>
         {card.rank}
         <span>{card.suit}</span>
       </span>
@@ -509,6 +522,8 @@ function PlayerSeat({
   selfAccountId,
   actorAccountId,
   visualSeat,
+  handId,
+  holeDeal,
   actionSecondsLeft,
   aiAssistEnabled,
   tableMessage,
@@ -517,12 +532,19 @@ function PlayerSeat({
   selfAccountId: string;
   actorAccountId: string | null;
   visualSeat: number;
+  handId: string | null;
+  holeDeal: MultiplayerHoleDeal | null;
   actionSecondsLeft: number | null;
   aiAssistEnabled: boolean;
   tableMessage?: MultiplayerChatMessage;
 }) {
   const cards = player.holeCards ?? [];
   const hiddenCount = cards.length ? 0 : player.holeCardCount;
+  const activeHoleDeal = holeDeal?.handId === handId ? holeDeal : null;
+  const cardDealDelay = (cardIndex: number) => activeHoleDeal
+    ? multiplayerHoleCardDealDelayMs(activeHoleDeal, player.seat, cardIndex)
+    : null;
+  const cardKeyPrefix = handId ?? "waiting";
   const className = [
     styles.seat,
     styles[`seat${Math.max(0, Math.min(5, visualSeat))}`],
@@ -544,8 +566,24 @@ function PlayerSeat({
         </div>
       )}
       <div className={styles.seatCards} aria-label={`${player.handle} 的手牌`}>
-        {cards.map((card, index) => <CardView key={`${card.rank}-${card.suit}-${index}`} card={card} mini />)}
-        {Array.from({ length: hiddenCount }, (_, index) => <span className={styles.miniBack} key={`hidden-${index}`} />)}
+        {cards.map((card, index) => (
+          <CardView
+            key={`${cardKeyPrefix}-${card.rank}-${card.suit}-${index}`}
+            card={card}
+            mini
+            miniDealDelayMs={cardDealDelay(index)}
+          />
+        ))}
+        {Array.from({ length: hiddenCount }, (_, index) => {
+          const dealDelay = cardDealDelay(index);
+          return (
+            <span
+              className={`${styles.miniBack} ${dealDelay == null ? "" : styles.holeDealtCard}`}
+              key={`${cardKeyPrefix}-hidden-${index}`}
+              style={dealDelay == null ? undefined : { animationDelay: `${dealDelay}ms` }}
+            />
+          );
+        })}
       </div>
       <div className={styles.playerPanel}>
         <span className={styles.avatar}>{Array.from(player.handle)[0]?.toUpperCase() ?? "P"}</span>
@@ -575,6 +613,7 @@ function TableSurface({
   game,
   actionSecondsLeft,
   boardDeal,
+  holeDeal,
   seatMessages,
   aiAssistEnabled,
 }: {
@@ -583,6 +622,7 @@ function TableSurface({
   game: PublicGame | null;
   actionSecondsLeft: number | null;
   boardDeal: MultiplayerBoardDeal | null;
+  holeDeal: MultiplayerHoleDeal | null;
   seatMessages: ReadonlyMap<number, MultiplayerChatMessage>;
   aiAssistEnabled: boolean;
 }) {
@@ -593,6 +633,9 @@ function TableSurface({
     return leftOffset - rightOffset;
   }), [players, selfSeat]);
   const visualSeats = VISUAL_SEATS_BY_PLAYER_COUNT[Math.min(6, Math.max(1, orderedPlayers.length))] ?? VISUAL_SEATS_BY_PLAYER_COUNT[6];
+  const activeHoleDeal = game?.street === "preflop" && holeDeal?.handId === game.handId
+    ? holeDeal
+    : null;
 
   return (
     <div className={`${styles.pokerTable} ${game ? "" : styles.waitingPokerTable}`}>
@@ -633,9 +676,11 @@ function TableSurface({
           selfAccountId={selfAccountId}
           actorAccountId={game?.actorAccountId ?? null}
           visualSeat={visualSeats[index] ?? index}
-            actionSecondsLeft={actionSecondsLeft}
-            aiAssistEnabled={aiAssistEnabled}
-            tableMessage={seatMessages.get(player.seat)}
+          handId={game?.handId ?? null}
+          holeDeal={activeHoleDeal}
+          actionSecondsLeft={actionSecondsLeft}
+          aiAssistEnabled={aiAssistEnabled}
+          tableMessage={seatMessages.get(player.seat)}
         />
       ))}
     </div>
@@ -1553,6 +1598,7 @@ export default function MultiplayerClient({
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null);
   const [boardDeal, setBoardDeal] = useState<MultiplayerBoardDeal | null>(null);
+  const [holeDeal, setHoleDeal] = useState<MultiplayerHoleDeal | null>(null);
   const [soundOn, setSoundOn] = useState(() => isPokerAudioEnabled());
   const [handle, setHandle] = useState("");
   const [roomName, setRoomName] = useState("朋友练习桌");
@@ -1588,6 +1634,7 @@ export default function MultiplayerClient({
   const roomViewGeneration = useRef(0);
   const viewedRoomId = useRef<string | null>(null);
   const lastBoardFrame = useRef<MultiplayerBoardFrame | null>(null);
+  const lastHoleFrame = useRef<MultiplayerHoleFrame | null>(null);
   const lastAudioFrame = useRef<MultiplayerAudioFrame | null>(null);
   const soundOnRef = useRef(isPokerAudioEnabled());
   const chatOpenRef = useRef(false);
@@ -1600,6 +1647,19 @@ export default function MultiplayerClient({
 
   const acceptSnapshot = useCallback((next: RoomSnapshot) => {
     viewerSeatRef.current = next.table.viewerSeat;
+    const nextHoleFrame: MultiplayerHoleFrame = {
+      roomId: next.room.id,
+      handId: next.game?.handId ?? null,
+      handNo: next.game?.handNo ?? null,
+      dealerSeat: next.game?.dealerSeat ?? null,
+      seats: next.game?.players
+        .filter((player) => player.holeCardCount === 2)
+        .map((player) => player.seat) ?? [],
+    };
+    const previousHoleFrame = lastHoleFrame.current;
+    const nextHoleDeal = multiplayerHoleDealTransition(previousHoleFrame, nextHoleFrame);
+    lastHoleFrame.current = nextHoleFrame;
+
     const nextFrame: MultiplayerBoardFrame | null = next.game
       ? {
           roomId: next.room.id,
@@ -1649,11 +1709,21 @@ export default function MultiplayerClient({
     ) {
       setBoardDeal(null);
     }
+    if (nextHoleDeal) {
+      setHoleDeal(nextHoleDeal);
+    } else if (
+      !previousHoleFrame
+      || previousHoleFrame.roomId !== nextHoleFrame.roomId
+      || nextHoleFrame.handId === null
+    ) {
+      setHoleDeal(null);
+    }
     setSnapshot(next);
   }, []);
 
   const clearActiveRoomSnapshot = useCallback(() => {
     lastBoardFrame.current = null;
+    lastHoleFrame.current = null;
     lastAudioFrame.current = null;
     chatRoomIdRef.current = null;
     chatCursorRef.current = null;
@@ -1662,6 +1732,7 @@ export default function MultiplayerClient({
     chatPinnedRef.current = true;
     viewerSeatRef.current = null;
     setBoardDeal(null);
+    setHoleDeal(null);
     setChatMessages([]);
     setChatOpen(false);
     setChatFocusTarget("message");
@@ -1676,6 +1747,18 @@ export default function MultiplayerClient({
     setLastAiAssistedDecisionId(null);
     setSnapshot(null);
   }, []);
+
+  useEffect(() => {
+    if (!holeDeal) return;
+    const roomId = holeDeal.roomId;
+    const handId = holeDeal.handId;
+    const timeout = window.setTimeout(() => {
+      setHoleDeal((current) => (
+        current?.roomId === roomId && current.handId === handId ? null : current
+      ));
+    }, multiplayerHoleDealDurationMs(holeDeal));
+    return () => window.clearTimeout(timeout);
+  }, [holeDeal]);
 
   const mergeRoomMessages = useCallback((roomId: string, incoming: MultiplayerChatMessage[]) => {
     if (viewedRoomId.current !== roomId || leavingRef.current) return;
@@ -2777,6 +2860,7 @@ export default function MultiplayerClient({
                   game={game}
                   actionSecondsLeft={actionSecondsLeft}
                   boardDeal={boardDeal?.roomId === snapshot.room.id ? boardDeal : null}
+                  holeDeal={holeDeal?.roomId === snapshot.room.id ? holeDeal : null}
                   seatMessages={seatChatMessages}
                   aiAssistEnabled={snapshot.table.aiAssistLimit > 0}
                 />
