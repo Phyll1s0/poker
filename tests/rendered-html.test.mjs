@@ -146,6 +146,8 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /function WinningHands/);
   assert.match(page, /赢家手牌/);
   assert.match(page, /bestHandWithCards\(cards\)/);
+  assert.match(page, /const displayedCards = bestFive\?\.cards \?\? player\.hole/);
+  assert.match(page, /displayedCards\.map\(\(card\) =>/);
   assert.match(page, /BEST FIVE · 最佳五张/);
   assert.match(page, /data-source=\{source\}/);
   assert.match(evaluator, /export function bestHandWithCards/);
@@ -231,6 +233,21 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerCss, /\.historyDialog\s*\{/);
   assert.match(multiplayerCss, /\.replayTableViewport\s*\{/);
   assert.match(multiplayerCss, /\.replayActionCurrent\s*\{/);
+  const multiplayerLiveSettlement = sourceBetween(
+    multiplayerClient,
+    '{phase !== "finished" && game && (',
+    '{rulesOpen && (',
+  );
+  assert.ok(
+    multiplayerLiveSettlement.indexOf('<WinningHands game={game} />')
+      > multiplayerLiveSettlement.indexOf('className={styles.handTransition}'),
+    "多人最佳五张应位于下一手等待与亮盖选择之后",
+  );
+  assert.ok(
+    multiplayerCss.lastIndexOf(".multiplayerPage .tableControlsTransition")
+      > multiplayerCss.lastIndexOf(".multiplayerPage .tableControls {"),
+    "多人结算单列布局必须覆盖后定义的常规三列牌桌控制区",
+  );
   assert.match(multiplayerClient, /粘贴邀请码/);
   assert.match(multiplayerClient, /复制邀请码/);
   assert.match(multiplayerClient, /FRIENDS CLUB/);
@@ -417,7 +434,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(selfPlay, /pokerCallClosesContestableLayers/);
   assert.match(selfPlay, /pokerContestablePotAtDecision/);
   assert.match(serviceWorker, /key\.startsWith\("rangecraft-"\)/);
-  assert.match(serviceWorker, /rangecraft-v5/);
+  assert.match(serviceWorker, /rangecraft-v6/);
   assert.match(serviceWorker, /request\.destination === "script" \|\| request\.destination === "style"/);
   assert.match(page, /updateViaCache: "none"/);
   assert.match(page, /controllerchange/);

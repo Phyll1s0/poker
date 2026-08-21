@@ -2757,7 +2757,6 @@ export default function MultiplayerClient({
             {phase !== "finished" && game && (
               <div className={`${styles.tableControls} ${canRaise ? styles.tableControlsWithRaise : ""} ${phase === "showdown" || phase === "between_hands" ? styles.tableControlsTransition : ""}`}>
                 {game.result && <div className={styles.resultBanner}>{game.result.summary}</div>}
-                <WinningHands game={game} />
                 {phase !== "showdown" && phase !== "between_hands" && (
                   <>
                     <div className={styles.controlSummary}>
@@ -2955,6 +2954,7 @@ export default function MultiplayerClient({
                     </div>
                   </div>
                 )}
+                {(phase === "showdown" || phase === "between_hands") && <WinningHands game={game} />}
               </div>
             )}
             </div>

@@ -5122,3 +5122,14 @@
     transition: none;
   }
 }
+
+/* Settlement is a single vertical story: result, shared wait/show choice, then
+   the winning five-card group as the final block at the bottom. Keep this
+   override after the later desktop/mobile table-control grids. */
+.multiplayerPage .tableControlsTransition {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 10px;
+  max-height: min(420px, calc(100% - 126px));
+  overflow-y: auto;
+}
