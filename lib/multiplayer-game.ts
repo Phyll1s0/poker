@@ -58,6 +58,7 @@ export type ClientPublicPlayer = {
   aiAssistsRemaining: number;
   isOwner: boolean;
   isDealer: boolean;
+  shown: boolean;
   holeCards?: ClientCard[];
   holeCardCount: number;
 };
@@ -383,6 +384,7 @@ function clientPlayers(table: OnlinePublicRoomState): ClientPublicPlayer[] {
       aiAssistsRemaining: seat.aiAssistsRemaining,
       isOwner: seat.seat === table.ownerSeat,
       isDealer: seat.seat === table.hand?.dealerSeat,
+      shown: seat.shown,
       ...(seat.holeCards ? { holeCards: seat.holeCards.map(clientCard) } : {}),
       holeCardCount: seat.holeCardCount,
     };
@@ -415,6 +417,7 @@ function clientGame(table: OnlinePublicRoomState, players: ClientPublicPlayer[])
             aiAssistsRemaining: 0,
             isOwner: false,
             isDealer: winner.seat === hand.dealerSeat,
+            shown: Boolean(winner.holeCards),
             ...(winner.holeCards ? { holeCards: winner.holeCards.map(clientCard) } : {}),
             holeCardCount: 2,
           }];

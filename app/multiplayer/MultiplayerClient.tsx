@@ -143,6 +143,7 @@ type PublicPlayer = {
   aiAssistsRemaining: number;
   isOwner: boolean;
   isDealer: boolean;
+  shown: boolean;
   holeCards?: Card[];
   holeCardCount: number;
 };
@@ -2273,9 +2274,10 @@ export default function MultiplayerClient({
     : Math.ceil(actionMillisecondsLeft / 1_000);
   const showDecisionDeadlineAt = snapshot?.table.hand?.showDecisionDeadlineAt ?? null;
   const nextHandAt = snapshot?.table.hand?.nextHandAt ?? null;
-  // The table now has one shared between-hands clock. The show deadline is
-  // retained only as a compatibility fallback for rooms created by an older
-  // server version; choosing show/muck never starts a second wait.
+  const pendingShowSeat = snapshot?.table.hand?.pendingShowSeat ?? null;
+  // The next-hand deadline remains the single overall pause. The shorter show
+  // deadline lives inside it so the final seconds are reserved for reading the
+  // revealed cards rather than deciding whether to reveal them.
   const handTransitionDeadlineAt = nextHandAt ?? showDecisionDeadlineAt;
   const nextHandMillisecondsLeft = handTransitionDeadlineAt === null
     ? null
@@ -2283,6 +2285,13 @@ export default function MultiplayerClient({
   const nextHandCountdown = nextHandMillisecondsLeft === null
     ? null
     : Math.ceil(nextHandMillisecondsLeft / 1_000);
+  const showDecisionMillisecondsLeft = showDecisionDeadlineAt === null
+    ? null
+    : Math.max(0, showDecisionDeadlineAt - clockNow);
+  const showDecisionCountdown = showDecisionMillisecondsLeft === null
+    ? null
+    : Math.ceil(showDecisionMillisecondsLeft / 1_000);
+  const hasShownCards = Boolean(game?.players.some((player) => player.shown));
   const selectedDepthBb = stackInBigBlinds(startingStack);
   const tableDepthBb = snapshot
     ? stackInBigBlinds(snapshot.table.startingStack, snapshot.table.bigBlind)
@@ -2399,11 +2408,17 @@ export default function MultiplayerClient({
 
   useEffect(() => {
     if (leaving || leavingRef.current || !game) return;
+    const expiredShowDecision = phase === "between_hands"
+      && pendingShowSeat !== null
+      && showDecisionDeadlineAt !== null
+      && showDecisionMillisecondsLeft === 0;
     const expiredNextHandWait = (phase === "showdown" || phase === "between_hands")
       && handTransitionDeadlineAt !== null
       && nextHandMillisecondsLeft === 0;
-    if (!expiredNextHandWait) return;
-    const timeoutKey = `next:${game.handId}:${handTransitionDeadlineAt}`;
+    if (!expiredShowDecision && !expiredNextHandWait) return;
+    const timeoutKind = expiredNextHandWait ? "next" : "show";
+    const timeoutDeadline = expiredNextHandWait ? handTransitionDeadlineAt : showDecisionDeadlineAt;
+    const timeoutKey = `${timeoutKind}:${game.handId}:${timeoutDeadline}`;
     if (timeoutSentFor.current === timeoutKey) return;
     timeoutSentFor.current = timeoutKey;
     void sendCommand({ type: "timeout", handId: game.handId }, { quiet: true }).then((succeeded) => {
@@ -2417,8 +2432,11 @@ export default function MultiplayerClient({
     handTransitionDeadlineAt,
     leaving,
     nextHandMillisecondsLeft,
+    pendingShowSeat,
     phase,
     sendCommand,
+    showDecisionDeadlineAt,
+    showDecisionMillisecondsLeft,
   ]);
 
   useEffect(() => {
@@ -2442,7 +2460,6 @@ export default function MultiplayerClient({
     return () => window.removeEventListener("keydown", handleTableShortcut);
   }, [busy, canRaise, game, isMyTurn, legal?.fold, passiveAction, raiseIsValid, raiseTo, sendCommand]);
 
-  const pendingShowSeat = snapshot?.table.hand?.pendingShowSeat ?? null;
   const pendingShowPlayer = pendingShowSeat === null
     ? null
     : game?.players.find((player) => player.seat === pendingShowSeat) ?? null;
@@ -2484,8 +2501,12 @@ export default function MultiplayerClient({
       return {
         eyebrow: "BETWEEN HANDS",
         title: mustChooseShow ? "请在倒计时内选择亮牌或盖牌" : "等待下一手",
-        summary: `亮牌选择和下一手共用同一个 ${nextHandCountdown ?? "—"}s 倒计时，不会额外拖长等待。`,
-        details: ["赢家未选择时会自动盖牌", "现金局筹码不足时会在下一手按房间规则补回"],
+        summary: pendingShowSeat !== null
+          ? `还剩 ${showDecisionCountdown ?? "—"}s 选择亮牌或盖牌；整手仍按 ${nextHandCountdown ?? "—"}s 后切换。`
+          : hasShownCards
+            ? `赢家手牌会持续显示到本手 ${nextHandCountdown ?? "—"}s 倒计时结束。`
+            : `本手结果还会保留 ${nextHandCountdown ?? "—"}s。`,
+        details: ["亮牌选择结束后会留出完整展示时间", "现金局筹码不足时会在下一手按房间规则补回"],
       };
     }
     if (isMyTurn && legal) {
@@ -3080,10 +3101,10 @@ export default function MultiplayerClient({
                             <span>SHOW OR MUCK · 本手赢家</span>
                             <strong>
                               {mustChooseShow
-                                ? `你可以在 ${nextHandCountdown ?? "—"} 秒内决定亮牌或盖牌`
-                                : `等待 ${pendingShowPlayer?.handle ?? "本手赢家"} 选择亮牌或盖牌 · ${nextHandCountdown ?? "—"}s`}
+                                ? `你可以在 ${showDecisionCountdown ?? "—"} 秒内决定亮牌或盖牌`
+                                : `等待 ${pendingShowPlayer?.handle ?? "本手赢家"} 选择亮牌或盖牌 · ${showDecisionCountdown ?? "—"}s`}
                             </strong>
-                            <small>{mustChooseShow ? "亮牌可以塑造桌上形象；全桌倒计时不会暂停，到点未选择会自动盖牌。" : "亮牌选择与全桌共用同一个下一手倒计时，不会额外等待。"}</small>
+                            <small>{mustChooseShow ? "到点未选择会自动盖牌；如果亮牌，手牌会继续展示到下一手倒计时结束。" : "选择时间包含在整手等待内，结束后仍会保留结果展示时间。"}</small>
                           </div>
                           {mustChooseShow ? (
                             <div className={styles.showDecisionActions}>
@@ -3116,18 +3137,20 @@ export default function MultiplayerClient({
                           </strong>
                           <small>{snapshot.table.finishRequested
                             ? pendingShowSeat !== null
-                              ? "赢家仍可在同一倒计时内亮牌或盖牌；不会增加额外等待"
+                              ? "赢家仍可在选择倒计时内亮牌或盖牌；之后会保留结果展示时间"
                               : "本手结果会保留到倒计时结束，随后向全桌展示整局总结"
                             : tournamentWinner
                             ? "牌局已经完成；最终手牌、赢家与筹码结算会保留在桌面上"
                             : pendingShowSeat !== null
-                              ? "赢家可在倒计时内亮牌或盖牌；到点自动盖牌并进入下一手"
-                              : "这是服务端统一倒计时；任一在线玩家都可在到点后触发发牌"}</small>
+                              ? "赢家可在前段倒计时内亮牌或盖牌；到点未选择只会自动盖牌"
+                              : hasShownCards
+                                ? "已亮出的手牌会保留到倒计时结束；全员准备也不会提前跳过"
+                                : "这是服务端统一倒计时；任一在线玩家都可在到点后触发发牌"}</small>
                         </span>
                       </div>
                       {phase === "between_hands" && !snapshot.table.finishRequested && !tournamentWinner && !selfPlayer?.ready && canRejoinNextHand && (
                         <button className={styles.primaryButton} type="button" disabled={busy} onClick={() => void sendCommand({ type: "ready", ready: true })}>
-                          立即准备
+                          {hasShownCards ? "准备下一手（展示结束后发牌）" : "立即准备"}
                         </button>
                       )}
                     </div>

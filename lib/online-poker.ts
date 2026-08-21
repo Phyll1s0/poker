@@ -20,8 +20,10 @@ export const ONLINE_RECENT_ACTION_LIMIT = 128;
 export const ONLINE_HAND_HISTORY_LIMIT = 30;
 /** Shared server-side pause before any seated player may advance the table. */
 export const ONLINE_NEXT_HAND_DELAY_MS = 20_000;
-/** @deprecated Show or muck now shares the single next-hand waiting window. */
-export const ONLINE_SHOW_DECISION_TIME_MS = ONLINE_NEXT_HAND_DELAY_MS;
+/** The final part of the shared pause is reserved for actually reading shown cards. */
+export const ONLINE_REVEALED_HAND_HOLD_MS = 8_000;
+/** Show or muck happens inside the shared pause without consuming its display tail. */
+export const ONLINE_SHOW_DECISION_TIME_MS = ONLINE_NEXT_HAND_DELAY_MS - ONLINE_REVEALED_HAND_HOLD_MS;
 
 export type OnlineCard = {
   rank: number;
@@ -2147,7 +2149,7 @@ function synchronizePhaseClocks(room: OnlineRoomState, now: number): void {
       return;
     }
     const hadNextHandClock = Object.prototype.hasOwnProperty.call(hand, "nextHandAt");
-    const legacyShowDeadline = typeof hand.showDecisionDeadlineAt === "number"
+    const storedShowDeadline = typeof hand.showDecisionDeadlineAt === "number"
       && Number.isFinite(hand.showDecisionDeadlineAt)
       ? hand.showDecisionDeadlineAt
       : null;
@@ -2155,12 +2157,21 @@ function synchronizePhaseClocks(room: OnlineRoomState, now: number): void {
       hand.nextHandAt = now;
     }
     if (typeof hand.nextHandAt !== "number" || !Number.isFinite(hand.nextHandAt)) {
-      hand.nextHandAt = legacyShowDeadline ?? now + ONLINE_NEXT_HAND_DELAY_MS;
+      hand.nextHandAt = storedShowDeadline ?? now + ONLINE_NEXT_HAND_DELAY_MS;
     }
-    // A room stored by the former two-stage clock may still carry an eight
-    // second reveal deadline. Never let migration extend the unified pause.
+    // Never let a stored legacy clock extend the shared twenty-second pause.
     hand.nextHandAt = Math.min(hand.nextHandAt, now + ONLINE_NEXT_HAND_DELAY_MS);
-    hand.showDecisionDeadlineAt = hand.pendingShowSeat === null ? null : hand.nextHandAt;
+    if (hand.pendingShowSeat === null) {
+      hand.showDecisionDeadlineAt = null;
+    } else {
+      const latestDecisionDeadline = Math.min(
+        hand.nextHandAt,
+        now + ONLINE_SHOW_DECISION_TIME_MS,
+      );
+      hand.showDecisionDeadlineAt = storedShowDeadline === null
+        ? latestDecisionDeadline
+        : Math.min(storedShowDeadline, latestDecisionDeadline);
+    }
     return;
   }
   hand.showDecisionDeadlineAt = null;
@@ -2181,9 +2192,9 @@ function showDecisionExpired(room: OnlineRoomState, now: number): boolean {
   return Boolean(
     room.phase === "between_hands"
     && room.hand?.pendingShowSeat !== null
-    && typeof room.hand?.nextHandAt === "number"
-    && Number.isFinite(room.hand.nextHandAt)
-    && now >= Number(room.hand.nextHandAt),
+    && typeof room.hand?.showDecisionDeadlineAt === "number"
+    && Number.isFinite(room.hand.showDecisionDeadlineAt)
+    && now >= Number(room.hand.showDecisionDeadlineAt),
   );
 }
 
@@ -2195,6 +2206,10 @@ function nextHandWindowOpen(room: OnlineRoomState, now: number): boolean {
     && Number.isFinite(room.hand.nextHandAt)
     && now >= Number(room.hand.nextHandAt),
   );
+}
+
+function hasPublicShownCards(hand: OnlineHandState | null): boolean {
+  return Boolean(hand?.result && hand.players.some((player) => player.shown));
 }
 
 function nextHandSeats(room: OnlineRoomState): OnlineSeatState[] {
@@ -2321,14 +2336,20 @@ export function applyOnlinePokerCommand(
     }
     member.ready = command.ready;
     const eligibleSeats = nextHandSeats(next);
+    const nextWindowIsOpen = nextHandWindowOpen(next, commandNow);
+    const allPlayersReady = eligibleSeats.every((seat) => seat.ready);
+    const shownCardsStillOnDisplay = hasPublicShownCards(next.hand) && !nextWindowIsOpen;
     if (
       next.phase === "between_hands"
       && eligibleSeats.length >= ONLINE_MIN_PLAYERS
       && !next.session.finishRequestedByAccountId
-      && (eligibleSeats.every((seat) => seat.ready) || (command.ready && nextHandWindowOpen(next, commandNow)))
+      && (
+        (allPlayersReady && !shownCardsStillOnDisplay)
+        || (command.ready && nextWindowIsOpen)
+      )
     ) {
-      // Readying early explicitly gives up an outstanding optional reveal;
-      // the old hand must never carry a private pending choice into a new deal.
+      // Readying early may give up an unanswered optional reveal, but cards
+      // already shown to the table stay visible through the result window.
       completeBetweenHandsWait(next);
       finalizePendingLeaves(next);
       beginHand(next, options);
@@ -2399,9 +2420,12 @@ export function applyOnlinePokerCommand(
       }, commandNow, true);
       if (timeoutError) return { ok: false, state: room, error: { ...timeoutError, revision: room.revision } };
     } else if (next.phase === "between_hands" && hand.result) {
-      if (!nextHandWindowOpen(next, commandNow)) {
+      const expiredShowChoice = showDecisionExpired(next, commandNow);
+      if (expiredShowChoice) muckPendingShowChoice(next);
+      if (!nextHandWindowOpen(next, commandNow) && !expiredShowChoice) {
         return fail(room, "TIME_NOT_EXPIRED", "下一手的统一等待时间尚未结束");
-      } else {
+      }
+      if (nextHandWindowOpen(next, commandNow)) {
         completeBetweenHandsWait(next);
         if (!next.session.finishRequestedByAccountId) {
           finalizePendingLeaves(next);

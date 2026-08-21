@@ -314,10 +314,12 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /className=\{styles\.raiseControl\}/);
   assert.match(multiplayerClient, /addEventListener\("keydown", handleTableShortcut\)/);
   assert.match(multiplayerClient, /SHOW OR MUCK · 本手赢家/);
-  assert.match(multiplayerClient, /亮牌选择与全桌共用同一个下一手倒计时/);
+  assert.match(multiplayerClient, /showDecisionCountdown/);
+  assert.match(multiplayerClient, /手牌会继续展示到下一手倒计时结束/);
   assert.match(multiplayerClient, /到点未选择会自动盖牌/);
   assert.match(multiplayerClient, /秒后生成整局结算/);
-  assert.match(multiplayerClient, /不会增加额外等待/);
+  assert.match(multiplayerClient, /已亮出的手牌会保留到倒计时结束；全员准备也不会提前跳过/);
+  assert.match(multiplayerClient, /准备下一手（展示结束后发牌）/);
   assert.match(multiplayerClient, /这是服务端统一倒计时/);
   assert.match(multiplayerClient, /styles\.nextHandWaitingPanel[\s\S]*?styles\.showDecisionInline[\s\S]*?styles\.autoNextHand/);
   assert.doesNotMatch(multiplayerClient, /styles\.showDecisionPanel|亮牌选择最长 8 秒/);
@@ -411,6 +413,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(edgeFunction, /function normalizeRoomSettings/);
   assert.match(edgeFunction, /const aiAssistLimit = payload\.aiAssistLimit \?\? 5/);
   assert.match(edgeFunction, /aiAssistsRemaining: seat\.aiAssistsRemaining/);
+  assert.match(edgeFunction, /shown: seat\.shown/);
   assert.match(edgeFunction, /result\?\.totalPot \?\? hand\.committedPot/);
   assert.match(edgeFunction, /raiseAllInOnly: table\.legalActions\.raise\?\.allInOnly \?\? false/);
   assert.match(edgeFunction, /result\.winnerDetails/);

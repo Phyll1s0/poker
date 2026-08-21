@@ -8,6 +8,8 @@ import {
   ONLINE_DEFAULT_AI_ASSIST_LIMIT,
   ONLINE_HAND_HISTORY_LIMIT,
   ONLINE_NEXT_HAND_DELAY_MS,
+  ONLINE_REVEALED_HAND_HOLD_MS,
+  ONLINE_SHOW_DECISION_TIME_MS,
   ONLINE_STARTING_STACK,
   applyOnlinePokerCommand,
   bestOnlineHand,
@@ -1324,6 +1326,11 @@ test("uncontested winner chooses show or muck before the next hand", () => {
   assert.equal(room.hand.result.totalPot, 10);
   assert.deepEqual(room.hand.result.returns, [{ seat: 1, amount: 5 }]);
   assert.equal(projectRoomState(room, actors[0].accountId).seats[1].holeCards, null);
+  const completedHandId = room.hand.id;
+  const nextHandAt = room.hand.nextHandAt;
+  const showDecisionDeadlineAt = room.hand.showDecisionDeadlineAt;
+
+  options.now = () => showDecisionDeadlineAt - 1;
 
   room = accepted(command(room, actors[1], {
     type: "show",
@@ -1332,9 +1339,19 @@ test("uncontested winner chooses show or muck before the next hand", () => {
   }, options));
   assert.equal(room.phase, "between_hands");
   assert.ok(projectRoomState(room, actors[0].accountId).seats[1].holeCards);
+  assert.ok(
+    nextHandAt - options.now() >= ONLINE_REVEALED_HAND_HOLD_MS,
+    "even the latest valid reveal keeps the complete display tail",
+  );
 
   room = accepted(command(room, actors[0], { type: "ready", ready: true }, options));
   room = accepted(command(room, actors[1], { type: "ready", ready: true }, options));
+  assert.equal(room.phase, "between_hands", "all-ready cannot skip cards already shown to the table");
+  assert.equal(room.hand.id, completedHandId);
+  assert.ok(room.seats.every((seat) => seat.ready));
+
+  options.now = () => nextHandAt;
+  room = accepted(command(room, actors[0], { type: "timeout", handId: completedHandId }, options));
   assert.equal(room.phase, "playing");
   assert.equal(room.hand.number, 2);
   assert.equal(room.hand.dealerSeat, 1);
@@ -1359,10 +1376,14 @@ test("uncontested show choice expires on the server and any member can auto-muck
 
   assert.equal(room.phase, "between_hands");
   assert.equal(room.hand.nextHandAt, now + ONLINE_NEXT_HAND_DELAY_MS);
-  assert.equal(room.hand.showDecisionDeadlineAt, room.hand.nextHandAt);
+  assert.equal(room.hand.showDecisionDeadlineAt, now + ONLINE_SHOW_DECISION_TIME_MS);
+  assert.equal(
+    room.hand.nextHandAt - room.hand.showDecisionDeadlineAt,
+    ONLINE_REVEALED_HAND_HOLD_MS,
+  );
   assert.equal(
     projectRoomState(room, actors[0].accountId).hand.showDecisionDeadlineAt,
-    room.hand.nextHandAt,
+    room.hand.showDecisionDeadlineAt,
   );
 
   now = room.hand.showDecisionDeadlineAt - 1;
@@ -1382,16 +1403,25 @@ test("uncontested show choice expires on the server and any member can auto-muck
   };
   const timedOut = applyOnlinePokerCommand(room, actors[0], timeoutPayload, options);
   room = accepted(timedOut);
-  assert.equal(room.phase, "playing", "the same timeout both auto-mucks and deals the next hand");
-  assert.equal(room.hand.number, 2);
+  assert.equal(room.phase, "between_hands", "the first timeout only auto-mucks the unanswered choice");
+  assert.equal(room.hand.number, 1);
   assert.equal(room.hand.pendingShowSeat, null);
   assert.equal(room.hand.showDecisionDeadlineAt, null);
-  assert.equal(room.hand.nextHandAt, null);
+  assert.equal(room.hand.nextHandAt, now + ONLINE_REVEALED_HAND_HOLD_MS);
 
   const duplicate = applyOnlinePokerCommand(room, actors[0], timeoutPayload, options);
   assert.equal(duplicate.ok, true);
   assert.equal(duplicate.duplicate, true);
   assert.equal(duplicate.state.revision, room.revision);
+
+  now = room.hand.nextHandAt - 1;
+  rejected(command(room, actors[0], { type: "timeout", handId: room.hand.id }, options), "TIME_NOT_EXPIRED");
+  now += 1;
+  room = accepted(command(room, actors[0], { type: "timeout", handId: room.hand.id }, options));
+  assert.equal(room.phase, "playing", "the second deadline starts the next hand");
+  assert.equal(room.hand.number, 2);
+  assert.equal(room.hand.showDecisionDeadlineAt, null);
+  assert.equal(room.hand.nextHandAt, null);
 });
 
 test("the shared next-hand deadline advances despite disconnected or unready seats", () => {
@@ -1554,9 +1584,16 @@ test("legacy reveal clocks migrate without extending or exceeding the shared twe
   assert.equal(room.phase, "between_hands");
   assert.equal(ONLINE_NEXT_HAND_DELAY_MS, 20_000);
   assert.equal(room.hand.nextHandAt, now + ONLINE_NEXT_HAND_DELAY_MS);
-  now = room.hand.nextHandAt - 1;
+  assert.equal(room.hand.showDecisionDeadlineAt, now + ONLINE_SHOW_DECISION_TIME_MS);
+  now = room.hand.showDecisionDeadlineAt - 1;
   const beforeDeadline = command(room, actors[0], { type: "timeout", handId: completedHandId }, options);
   rejected(beforeDeadline, "TIME_NOT_EXPIRED");
+  now += 1;
+  room = accepted(command(room, actors[0], { type: "timeout", handId: completedHandId }, options));
+  assert.equal(room.phase, "between_hands");
+  assert.equal(room.hand.pendingShowSeat, null);
+  now = room.hand.nextHandAt - 1;
+  rejected(command(room, actors[0], { type: "timeout", handId: completedHandId }, options), "TIME_NOT_EXPIRED");
   now += 1;
   room = accepted(command(room, actors[0], { type: "timeout", handId: completedHandId }, options));
   assert.equal(room.phase, "playing");
