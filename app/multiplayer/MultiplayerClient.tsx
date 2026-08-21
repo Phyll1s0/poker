@@ -25,6 +25,7 @@ import {
   setPokerAudioEnabled,
   unlockPokerAudio,
 } from "../../lib/poker-audio";
+import { orderFiveCardHandForDisplay } from "../../lib/poker-evaluator";
 import {
   MULTIPLAYER_CHAT_MAX_LENGTH,
   MULTIPLAYER_CHAT_REACTIONS,
@@ -1207,8 +1208,10 @@ function WinningHands({ game }: { game: PublicGame }) {
       <div className={styles.winningHandList}>
         {winners.map((player) => {
           const winningHand = game.result?.winningHands?.find((entry) => entry.accountId === player.accountId);
-          const cards = winningHand?.cards ?? player.holeCards ?? [];
           const isBestFive = Boolean(winningHand && winningHand.cards.length === 5);
+          const cards = isBestFive && winningHand
+            ? orderFiveCardHandForDisplay(winningHand.cards)
+            : winningHand?.cards ?? player.holeCards ?? [];
           return (
             <article className={styles.winningHand} key={player.accountId}>
               <div className={styles.winningHandPlayer}>

@@ -146,11 +146,12 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /function WinningHands/);
   assert.match(page, /赢家手牌/);
   assert.match(page, /bestHandWithCards\(cards\)/);
-  assert.match(page, /const displayedCards = bestFive\?\.cards \?\? player\.hole/);
+  assert.match(page, /orderFiveCardHandForDisplay\(bestFive\.cards\)/);
   assert.match(page, /displayedCards\.map\(\(card\) =>/);
   assert.match(page, /BEST FIVE · 最佳五张/);
   assert.match(page, /data-source=\{source\}/);
   assert.match(evaluator, /export function bestHandWithCards/);
+  assert.match(evaluator, /export function orderFiveCardHandForDisplay/);
   assert.match(globalsCss, /\.winning-card-source\[data-source="hole"\]/);
   assert.match(page, /function PrivatePeekOpportunity/);
   assert.match(page, /PRIVATE PEEK · 每手一次/);
@@ -222,6 +223,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /手牌未公开/);
   assert.match(multiplayerClient, /最佳五张/);
   assert.match(multiplayerClient, /winningHands\?\.find/);
+  assert.match(multiplayerClient, /orderFiveCardHandForDisplay\(winningHand\.cards\)/);
   assert.match(multiplayerClient, /function HandHistoryModal/);
   assert.match(multiplayerClient, /function ReplayTable/);
   assert.match(multiplayerClient, /snapshot\?\.table\.handHistory \?\? \[\]/);
@@ -434,7 +436,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(selfPlay, /pokerCallClosesContestableLayers/);
   assert.match(selfPlay, /pokerContestablePotAtDecision/);
   assert.match(serviceWorker, /key\.startsWith\("rangecraft-"\)/);
-  assert.match(serviceWorker, /rangecraft-v6/);
+  assert.match(serviceWorker, /rangecraft-v7/);
   assert.match(serviceWorker, /request\.destination === "script" \|\| request\.destination === "style"/);
   assert.match(page, /updateViaCache: "none"/);
   assert.match(page, /controllerchange/);

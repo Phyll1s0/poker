@@ -9,6 +9,7 @@ import {
   drawPotential,
   estimateEquity,
   makeDeck,
+  orderFiveCardHandForDisplay,
   preflopHandFeatures,
   preflopPercentile,
   preflopStrength,
@@ -86,6 +87,89 @@ test("bestHandWithCards preserves wheel cards and validates its input", () => {
     () => bestHandWithCards([c(14, 0), c(14, 0), c(4, 1), c(3, 2), c(2, 3)]),
     /重复牌/,
   );
+});
+
+test("orders winning five cards by poker meaning without changing their identity", () => {
+  const cases = [
+    {
+      cards: [c(3, "♣"), c(14, "♠"), c(6, "♥"), c(11, "♦"), c(9, "♣")],
+      ranks: [14, 11, 9, 6, 3],
+    },
+    {
+      cards: [c(9, "♦"), c(14, "♠"), c(9, "♣"), c(3, "♥"), c(11, "♦")],
+      ranks: [9, 9, 14, 11, 3],
+    },
+    {
+      cards: [c(4, "♠"), c(13, "♦"), c(14, "♣"), c(4, "♥"), c(13, "♣")],
+      ranks: [13, 13, 4, 4, 14],
+    },
+    {
+      cards: [c(14, "♠"), c(12, "♥"), c(12, "♦"), c(13, "♣"), c(12, "♠")],
+      ranks: [12, 12, 12, 14, 13],
+    },
+    {
+      cards: [c(14, "♣"), c(6, "♦"), c(6, "♠"), c(14, "♥"), c(6, "♥")],
+      ranks: [6, 6, 6, 14, 14],
+    },
+    {
+      cards: [c(9, "♥"), c(9, "♣"), c(14, "♦"), c(9, "♠"), c(9, "♦")],
+      ranks: [9, 9, 9, 9, 14],
+    },
+    {
+      cards: [c(8, "♠"), c(10, "♥"), c(6, "♣"), c(9, "♦"), c(7, "♠")],
+      ranks: [10, 9, 8, 7, 6],
+    },
+    {
+      cards: [c(14, "♠"), c(3, "♥"), c(5, "♦"), c(2, "♣"), c(4, "♠")],
+      ranks: [5, 4, 3, 2, 14],
+    },
+    {
+      cards: [c(3, "♥"), c(14, "♥"), c(8, "♥"), c(11, "♥"), c(5, "♥")],
+      ranks: [14, 11, 8, 5, 3],
+    },
+    {
+      cards: [c(7, "♠"), c(10, "♠"), c(8, "♠"), c(6, "♠"), c(9, "♠")],
+      ranks: [10, 9, 8, 7, 6],
+    },
+    {
+      cards: [c(14, "♦"), c(3, "♦"), c(5, "♦"), c(2, "♦"), c(4, "♦")],
+      ranks: [5, 4, 3, 2, 14],
+    },
+  ];
+
+  for (const { cards, ranks } of cases) {
+    const before = [...cards];
+    const ordered = orderFiveCardHandForDisplay(cards);
+    assert.deepEqual(ordered.map(({ rank }) => rank), ranks);
+    assert.deepEqual(cards, before, "不得修改输入数组");
+    assert.equal(scoreFive(ordered).score, scoreFive(cards).score);
+    for (const card of ordered) assert.ok(cards.includes(card), "必须返回原始牌对象");
+  }
+
+  const pairCards = cases[1].cards;
+  const stablePair = orderFiveCardHandForDisplay(pairCards);
+  assert.equal(stablePair[0], pairCards[0], "同点数牌应保持原输入顺序");
+  assert.equal(stablePair[1], pairCards[2], "同点数牌不按花色重新排序");
+
+  const multiplayerCards = [
+    { rank: "A", suit: "♣" },
+    { rank: "6", suit: "♦" },
+    { rank: "6", suit: "♠" },
+    { rank: "A", suit: "♥" },
+    { rank: "6", suit: "♥" },
+  ];
+  const orderedMultiplayerCards = orderFiveCardHandForDisplay(multiplayerCards);
+  assert.deepEqual(orderedMultiplayerCards.map(({ rank }) => rank), ["6", "6", "6", "A", "A"]);
+  assert.equal(orderedMultiplayerCards[0], multiplayerCards[1], "多人字符串牌也必须保留原对象");
+
+  const multiplayerStraight = ["10", "A", "Q", "J", "K"]
+    .map((rank, index) => ({ rank, suit: ["♠", "♥", "♦", "♣", "♠"][index] }));
+  assert.deepEqual(
+    orderFiveCardHandForDisplay(multiplayerStraight).map(({ rank }) => rank),
+    ["A", "K", "Q", "J", "10"],
+  );
+
+  assert.throws(() => orderFiveCardHandForDisplay(cases[0].cards.slice(0, 4)), /正好 5 张牌/);
 });
 
 test("preflop strength and percentile preserve useful ordering", () => {

@@ -16,6 +16,7 @@ import {
   blockerValue,
   drawPotential,
   estimateEquity,
+  orderFiveCardHandForDisplay,
   preflopHandFeatures,
   preflopPercentile,
   preflopStrength,
@@ -1497,7 +1498,7 @@ function WinningHands({ game }: { game: Game }) {
           const visibleToHero = player.isHuman || publiclyShown || privatelyPeeked;
           const cards = [...game.community, ...player.hole];
           const bestFive = visibleToHero && cards.length >= 5 ? bestHandWithCards(cards) : null;
-          const displayedCards = bestFive?.cards ?? player.hole;
+          const displayedCards = bestFive ? orderFiveCardHandForDisplay(bestFive.cards) : player.hole;
           const holeCardKeys = new Set(player.hole.map(cardKey));
           const handName = bestFive
             ? `${game.endedUncontested ? "未摊牌赢池 · " : ""}${bestFive.name}`

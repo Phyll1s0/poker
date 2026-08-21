@@ -1,4 +1,4 @@
-const CACHE_NAME = "rangecraft-v6";
+const CACHE_NAME = "rangecraft-v7";
 const APP_SCOPE = new URL("./", self.registration.scope);
 const appAsset = (path) => new URL(path, APP_SCOPE).href;
 const STATIC_ASSETS = [

@@ -5,6 +5,11 @@ export type PokerCard = {
   suit: PokerSuit;
 };
 
+export type PokerDisplayCard = {
+  rank: number | string;
+  suit: PokerSuit;
+};
+
 export type PokerHandCategory = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 export type PokerHandEvaluation = {
@@ -166,6 +171,46 @@ export function scoreFive(cards: readonly PokerCard[]): PokerHandEvaluation {
   if (cards.length !== 5) throw new RangeError("scoreFive 必须接收正好 5 张牌");
   assertUniqueCards(cards);
   return scoreFiveUnchecked(cards);
+}
+
+function pokerDisplayRankValue(rank: PokerDisplayCard["rank"]): number {
+  if (typeof rank === "number") return rank;
+  const normalized = rank.trim().toUpperCase();
+  const faceRanks: Record<string, number> = { A: 14, K: 13, Q: 12, J: 11, T: 10 };
+  return faceRanks[normalized] ?? Number(normalized);
+}
+
+/**
+ * Orders an exact five-card hand for human-readable presentation without
+ * changing its strength or source-card identity. Made hands lead, kickers
+ * follow, and straights run high to low (with the wheel shown as 5-4-3-2-A).
+ */
+export function orderFiveCardHandForDisplay<TCard extends PokerDisplayCard>(
+  cards: readonly TCard[],
+): readonly [TCard, TCard, TCard, TCard, TCard] {
+  const indexed = cards.map((card, index) => ({
+    card,
+    index,
+    rank: pokerDisplayRankValue(card.rank),
+  }));
+  const { category } = scoreFive(indexed.map(({ card, rank }) => ({ rank, suit: card.suit })));
+  const rankCounts = new Map<number, number>();
+  for (const { rank } of indexed) rankCounts.set(rank, (rankCounts.get(rank) ?? 0) + 1);
+
+  const wheel = (category === 4 || category === 8)
+    && [14, 5, 4, 3, 2].every((rank) => rankCounts.has(rank));
+  indexed.sort((left, right) => {
+    if (category === 4 || category === 8) {
+      const leftRank = wheel && left.rank === 14 ? 1 : left.rank;
+      const rightRank = wheel && right.rank === 14 ? 1 : right.rank;
+      return rightRank - leftRank || left.index - right.index;
+    }
+    return (rankCounts.get(right.rank) ?? 0) - (rankCounts.get(left.rank) ?? 0)
+      || right.rank - left.rank
+      || left.index - right.index;
+  });
+
+  return indexed.map(({ card }) => card) as [TCard, TCard, TCard, TCard, TCard];
 }
 
 /** Returns the best five-card Texas Hold'em hand from five to seven cards. */
