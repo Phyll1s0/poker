@@ -182,6 +182,10 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /深筹/);
   assert.match(multiplayerClient, /bigBlinds: 200/);
   assert.match(multiplayerClient, /role="radiogroup" aria-label="筹码深度"/);
+  assert.match(multiplayerClient, /const \[actionSeconds, setActionSeconds\] = useState\(20\)/);
+  assert.match(multiplayerClient, /\[5, 10, 15, 20, 30, 45, 60\]\.map\(\(value\) => <option/);
+  assert.match(multiplayerClient, /"createRoom", \{[\s\S]*?actionSeconds,[\s\S]*?timeBankSeconds,/);
+  assert.match(multiplayerClient, /每次 \{actionSeconds\}s/);
   assert.match(multiplayerClient, /className=\{styles\.primaryActions\}/);
   assert.match(multiplayerClient, /className=\{styles\.raiseControl\}/);
   assert.match(multiplayerClient, /addEventListener\("keydown", handleTableShortcut\)/);

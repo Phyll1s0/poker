@@ -5,7 +5,7 @@ export const ONLINE_BIG_BLIND = 10;
 export const ONLINE_STARTING_STACK = ONLINE_BIG_BLIND * 100;
 export const ONLINE_MIN_STARTING_STACK = ONLINE_BIG_BLIND * 20;
 export const ONLINE_MAX_STARTING_STACK = ONLINE_BIG_BLIND * 1_000;
-export const ONLINE_DEFAULT_ACTION_TIME_MS = 10_000;
+export const ONLINE_DEFAULT_ACTION_TIME_MS = 20_000;
 export const ONLINE_MIN_ACTION_TIME_MS = 5_000;
 export const ONLINE_MAX_ACTION_TIME_MS = 60_000;
 export const ONLINE_DEFAULT_TIME_BANK_MS = 100_000;
@@ -15,7 +15,7 @@ export const ONLINE_COMMAND_RECEIPT_LIMIT = 2_048;
 /** Enough public action history for clients that briefly miss several polls. */
 export const ONLINE_RECENT_ACTION_LIMIT = 128;
 /** Shared server-side pause before any seated player may advance the table. */
-export const ONLINE_NEXT_HAND_DELAY_MS = 4_000;
+export const ONLINE_NEXT_HAND_DELAY_MS = 20_000;
 /** @deprecated Show or muck now shares the single next-hand waiting window. */
 export const ONLINE_SHOW_DECISION_TIME_MS = ONLINE_NEXT_HAND_DELAY_MS;
 

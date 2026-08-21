@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   ONLINE_BIG_BLIND,
   ONLINE_COMMAND_RECEIPT_LIMIT,
+  ONLINE_DEFAULT_ACTION_TIME_MS,
   ONLINE_NEXT_HAND_DELAY_MS,
   ONLINE_STARTING_STACK,
   applyOnlinePokerCommand,
@@ -263,6 +264,23 @@ test("room settings control stacks, mode, action clock and per-player time banks
   assert.equal(publicState.actionTimeMs, 10_000);
   assert.equal(publicState.timeBankUnitMs, 10_000);
   assert.equal(publicState.seats[1].timeBankMs, 100_000);
+});
+
+test("new rooms default to twenty-second turns while stored room settings remain intact", () => {
+  assert.equal(ONLINE_DEFAULT_ACTION_TIME_MS, 20_000);
+  const defaultScenario = startRoom(2);
+  assert.equal(defaultScenario.room.actionTimeMs, 20_000);
+  assert.equal(defaultScenario.room.hand.actionStartedAt, 1_000_000);
+  assert.equal(defaultScenario.room.hand.actionDeadlineAt, 1_020_000);
+
+  let storedRoom = createOnlineRoom({ roomId: "stored-action-clock", owner: actors[0], maxPlayers: 2 });
+  storedRoom.actionTimeMs = 10_000;
+  storedRoom = joinPlayers(storedRoom, 2, defaultScenario.options);
+  storedRoom = accepted(command(storedRoom, actors[0], { type: "ready", ready: true }, defaultScenario.options));
+  storedRoom = accepted(command(storedRoom, actors[1], { type: "ready", ready: true }, defaultScenario.options));
+  storedRoom = accepted(command(storedRoom, actors[0], { type: "start" }, defaultScenario.options));
+  assert.equal(storedRoom.actionTimeMs, 10_000, "normalization preserves an existing room's valid setting");
+  assert.equal(storedRoom.hand.actionDeadlineAt, 1_010_000);
 });
 
 test("time cards extend only the current turn and timeout is server-authoritative", () => {
@@ -1095,7 +1113,7 @@ test("legacy completed states without phase clocks normalize without stalling", 
   assert.equal(room.hand.number, 2);
 });
 
-test("a legacy two-stage reveal clock is capped to one shared four-second wait", () => {
+test("legacy reveal clocks migrate without extending or exceeding the shared twenty-second wait", () => {
   let now = 7_500_000;
   const options = {
     randomIndex: (maxExclusive) => maxExclusive - 1,
@@ -1113,13 +1131,22 @@ test("a legacy two-stage reveal clock is capped to one shared four-second wait",
   room = accepted(act(room, actors[0], "fold", options));
   const completedHandId = room.hand.id;
 
-  room.phase = "showdown";
-  room.hand.showDecisionDeadlineAt = now + 8_000;
-  room.hand.nextHandAt = null;
-  delete room.hand.betweenHandsWaitCompleted;
+  const migrateLegacyClock = (deadline) => {
+    const legacyRoom = structuredClone(room);
+    legacyRoom.phase = "showdown";
+    legacyRoom.hand.showDecisionDeadlineAt = deadline;
+    legacyRoom.hand.nextHandAt = null;
+    delete legacyRoom.hand.betweenHandsWaitCompleted;
+    return accepted(command(legacyRoom, actors[0], { type: "ready", ready: true }, options));
+  };
 
-  room = accepted(command(room, actors[0], { type: "ready", ready: true }, options));
+  const shorterClock = migrateLegacyClock(now + 8_000);
+  assert.equal(shorterClock.phase, "between_hands");
+  assert.equal(shorterClock.hand.nextHandAt, now + 8_000, "migration never extends a saved in-flight deadline");
+
+  room = migrateLegacyClock(now + 30_000);
   assert.equal(room.phase, "between_hands");
+  assert.equal(ONLINE_NEXT_HAND_DELAY_MS, 20_000);
   assert.equal(room.hand.nextHandAt, now + ONLINE_NEXT_HAND_DELAY_MS);
   now = room.hand.nextHandAt - 1;
   const beforeDeadline = command(room, actors[0], { type: "timeout", handId: completedHandId }, options);

@@ -897,7 +897,7 @@ export default function MultiplayerClient({
   const [maxPlayers, setMaxPlayers] = useState(6);
   const [tableMode, setTableMode] = useState<"cash" | "tournament">("cash");
   const [startingStack, setStartingStack] = useState(1_000);
-  const [actionSeconds, setActionSeconds] = useState(10);
+  const [actionSeconds, setActionSeconds] = useState(20);
   const [timeBankSeconds, setTimeBankSeconds] = useState(100);
   const [joinCode, setJoinCode] = useState("");
   const [raiseDraft, setRaiseDraft] = useState<{ turnKey: string; value: number } | null>(null);
