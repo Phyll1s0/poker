@@ -14,6 +14,14 @@ async function render(pathname = "/") {
   );
 }
 
+function sourceBetween(source, startMarker, endMarker) {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start);
+  assert.notEqual(start, -1, `缺少 ${startMarker}`);
+  assert.notEqual(end, -1, `缺少 ${endMarker}`);
+  return source.slice(start, end);
+}
+
 test("server-renders the anonymous multiplayer sign-in page", async () => {
   const response = await render("/multiplayer");
   assert.equal(response.status, 200);
@@ -40,12 +48,16 @@ test("server-renders the RangeCraft landing page before mounting a poker table",
   assert.match(html, /开始之前，先知道这里能练什么/);
   assert.match(html, /完整 GTO 的边界/);
   assert.match(html, /安装成应用/);
+  const landingHeader = html.match(/<header class="landing-nav"[\s\S]*?<\/header>/)?.[0] ?? "";
+  assert.match(landingHeader, /aria-label="把 RangeCraft 安装到桌面"/);
+  assert.match(landingHeader, /安装应用/);
+  assert.match(landingHeader, /aria-label="查看德州扑克规则"/);
   assert.doesNotMatch(html, /正在洗牌/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
 
 test("keeps the multiplayer and strategy boundaries with product metadata", async () => {
-  const [page, globalsCss, multiplayerClient, multiplayerCss, staticMultiplayer, edgeFunction, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, history, packageJson, multiplayerAudio, pokerAudio] = await Promise.all([
+  const [page, globalsCss, multiplayerClient, multiplayerCss, staticMultiplayer, edgeFunction, layout, transport, strategy, policy, sizing, evaluator, selfPlay, serviceWorker, pagesIndex, history, packageJson, multiplayerAudio, pokerAudio, rulesModal] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/multiplayer/MultiplayerClient.tsx", import.meta.url), "utf8"),
@@ -65,7 +77,11 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../lib/multiplayer-audio-events.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/poker-audio.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/PokerRulesModal.tsx", import.meta.url), "utf8"),
   ]);
+
+  const landingSource = sourceBetween(page, "function LandingHome", "function SoloTrainer");
+  const soloSource = sourceBetween(page, "function SoloTrainer", "function InstallAppModal");
 
   assert.match(page, /function settleShowdown/);
   assert.match(page, /function chooseAiAction/);
@@ -73,6 +89,11 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /LANDING_GUIDE_ITEMS/);
   assert.match(page, /id="about-range-craft"/);
   assert.match(page, /训练模式、策略边界、规则覆盖和安装方式都放在主页/);
+  assert.match(landingSource, /className="install-app-button"/);
+  assert.match(landingSource, /aria-label="把 RangeCraft 安装到桌面"/);
+  assert.match(landingSource, /aria-label="查看德州扑克规则"/);
+  assert.match(landingSource, /onInstallApp/);
+  assert.match(landingSource, /onOpenRules/);
   assert.ok(
     page.indexOf("完整 GTO 的边界") < page.indexOf("function SoloTrainer"),
     "产品说明应位于最外层主页，而不是牌桌规则弹窗",
@@ -121,12 +142,15 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /pokerPrivatePeekCandidateIds\(game\.players, game\.shownPlayerIds\)/);
   assert.match(page, /PrivatePeekOpportunity game=\{game\} onPeek=\{choosePrivatePeek\}/);
   assert.match(page, /查看德州扑克规则/);
-  assert.match(page, /TEXAS HOLD.*EM RULEBOOK/);
-  assert.match(page, /从七张牌里组成最强的五张牌/);
-  assert.match(page, /主池、边池与退回/);
-  assert.match(page, /花色不分大小/);
-  assert.match(page, /不足额全下不一定会/);
-  assert.match(page, /不是标准德州扑克规则/);
+  assert.doesNotMatch(soloSource, /className="install-app-button"|aria-label="把 RangeCraft 安装到桌面"|installHelpOpen|beforeinstallprompt/);
+  assert.match(soloSource, /<PokerRulesModal onClose=\{\(\) => setRulesOpen\(false\)\}/);
+  assert.match(rulesModal, /TEXAS HOLD.*EM RULEBOOK/);
+  assert.match(rulesModal, /从七张牌里组成最强的五张牌/);
+  assert.match(rulesModal, /主池、边池与退回/);
+  assert.match(rulesModal, /花色不分大小/);
+  assert.match(rulesModal, /不足额全下不一定会/);
+  assert.match(rulesModal, /不是标准德州扑克规则/);
+  assert.match(rulesModal, /多人 2–6 人，支持现金练习与单桌淘汰/);
   assert.doesNotMatch(page, /ABOUT THE LAB|关于 GTO 边界/);
   assert.match(globalsCss, /\.landing-about-grid/);
   assert.match(globalsCss, /\.landing-nav-actions > a:not\(\.landing-account-link\)/);
@@ -173,6 +197,10 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /setPokerAudioEnabled\(next\)/);
   assert.match(multiplayerClient, /styles\.navSoundToggle/);
   assert.match(multiplayerClient, /aria-label=\{soundOn \? "关闭牌桌音效" : "开启牌桌音效"\}/);
+  assert.match(multiplayerClient, /const \[rulesOpen, setRulesOpen\] = useState\(false\)/);
+  assert.match(multiplayerClient, /className=\{styles\.navHelpButton\}/);
+  assert.match(multiplayerClient, /aria-label="查看德州扑克规则"/);
+  assert.match(multiplayerClient, /<PokerRulesModal onClose=\{\(\) => setRulesOpen\(false\)\} closeLabel="看懂了，回到多人牌桌"/);
   assert.match(multiplayerClient, /2: \[0, 3\]/);
   assert.match(multiplayerClient, /3: \[0, 2, 4\]/);
   assert.match(multiplayerClient, /浅筹/);
@@ -239,6 +267,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerCss, /\.winningBestFive\s*\{/);
   assert.match(multiplayerCss, /\.multiplayerPage \.winningHandCards \.card\s*\{/);
   assert.match(multiplayerCss, /\.multiplayerPage \.seatSelf \.miniCard,[\s\S]*?width:\s*48px/);
+  assert.match(multiplayerCss, /\.navHelpButton\s*\{[\s\S]*?width:\s*32px/);
   assert.match(multiplayerCss, /@media \(max-width: 700px\)[\s\S]*?\.multiplayerPage \.seatSelf \.miniCard,[\s\S]*?width:\s*52px/);
   assert.match(multiplayerCss, /@keyframes multiplayerDealCommunityCard/);
   assert.match(multiplayerCss, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.multiplayerPage \.boardDealtCard/);

@@ -2108,6 +2108,27 @@
   color: var(--mp-gold);
 }
 
+.navHelpButton {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 50%;
+  color: #8f938e;
+  background: rgba(255, 255, 255, 0.022);
+  cursor: pointer;
+  font: 600 12px/1 Georgia, serif;
+}
+
+.navHelpButton:hover,
+.navHelpButton:focus-visible {
+  border-color: rgba(216, 183, 116, 0.36);
+  color: #e2d7bd;
+  outline: none;
+}
+
 .createWideField {
   grid-column: 1 / -1;
 }

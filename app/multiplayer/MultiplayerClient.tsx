@@ -29,6 +29,7 @@ import {
   type MultiplayerChatMessage,
   type MultiplayerChatSnapshot,
 } from "../../lib/multiplayer-chat";
+import { PokerRulesModal } from "../PokerRulesModal";
 import styles from "./multiplayer.module.css";
 
 type Account = {
@@ -907,6 +908,7 @@ export default function MultiplayerClient({
   const [chatSending, setChatSending] = useState(false);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [rulesOpen, setRulesOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1686,6 +1688,13 @@ export default function MultiplayerClient({
           >
             <span>{soundOn ? "♪" : "—"}</span><b>音效</b><small>{soundOn ? "ON" : "OFF"}</small>
           </button>
+          <button
+            className={styles.navHelpButton}
+            type="button"
+            aria-label="查看德州扑克规则"
+            title="德州扑克规则"
+            onClick={() => setRulesOpen(true)}
+          >?</button>
           <span>牌桌身份</span>
           <strong>{account?.handle ?? displayName}</strong>
           <a className={styles.signOut} href={signOutHref} onClick={onSignOut}>{signOutLabel}</a>
@@ -2143,6 +2152,9 @@ export default function MultiplayerClient({
           </section>
         )}
       </main>
+      {rulesOpen && (
+        <PokerRulesModal onClose={() => setRulesOpen(false)} closeLabel="看懂了，回到多人牌桌" />
+      )}
     </div>
   );
 }
