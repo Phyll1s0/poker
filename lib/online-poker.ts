@@ -14,6 +14,8 @@ export const ONLINE_MAX_TIME_BANK_MS = 600_000;
 export const ONLINE_COMMAND_RECEIPT_LIMIT = 2_048;
 /** Enough public action history for clients that briefly miss several polls. */
 export const ONLINE_RECENT_ACTION_LIMIT = 128;
+/** A room keeps only the latest completed hands for visual replay. */
+export const ONLINE_HAND_HISTORY_LIMIT = 30;
 /** Shared server-side pause before any seated player may advance the table. */
 export const ONLINE_NEXT_HAND_DELAY_MS = 20_000;
 /** @deprecated Show or muck now shares the single next-hand waiting window. */
@@ -106,6 +108,18 @@ export type OnlineHandActionEvent = {
   seat: number;
   street: OnlineStreet;
   action: OnlineActionKind;
+  /** Chips actually moved from the actor's stack for this decision. */
+  amount: number | null;
+  /** Actor's total commitment on this street immediately after the decision. */
+  toAmount: number | null;
+  /** Explicit raise target; null for folds, checks, calls and legacy events. */
+  raiseTo: number | null;
+  /** Total committed pot immediately after the decision. */
+  potAfter: number | null;
+  /** Actor's remaining stack immediately after the decision. */
+  stackAfter: number | null;
+  /** Board that was visible when the decision was made. */
+  community: OnlineCard[];
   timedOut: boolean;
   source: OnlineActionSource;
   occurredAt: number;
@@ -114,6 +128,7 @@ export type OnlineHandActionEvent = {
 export type OnlineHandState = {
   id: string;
   number: number;
+  startedAt: number;
   street: OnlineStreet;
   dealerSeat: number;
   smallBlindSeat: number;
@@ -134,8 +149,10 @@ export type OnlineHandState = {
   raiseCount: number;
   /** Monotonic within one hand; lets clients consume action sounds exactly once. */
   actionSeq: number;
-  /** Public-safe bounded journal. It deliberately contains no cards or account IDs. */
+  /** Public-safe bounded journal. It deliberately contains no private cards or account IDs. */
   recentActions: OnlineHandActionEvent[];
+  /** Complete server-side journal used to seal a replay at settlement. */
+  actionHistory: OnlineHandActionEvent[];
   result: OnlineHandResult | null;
   pendingShowSeat: number | null;
   actionStartedAt: number | null;
@@ -144,6 +161,35 @@ export type OnlineHandState = {
   nextHandAt: number | null;
   /** Distinguishes a consumed terminal wait from a newly settled hand awaiting its first clock sync. */
   betweenHandsWaitCompleted: boolean;
+};
+
+export type OnlineHandHistoryPlayer = {
+  seat: number;
+  accountId: string;
+  displayName: string;
+  hole: [OnlineCard, OnlineCard];
+  stackAtHandStart: number;
+  stackAfterBlinds: number;
+  stackAfterHand: number;
+  contributed: number;
+  folded: boolean;
+  shown: boolean;
+};
+
+export type OnlineHandHistoryEntry = {
+  id: string;
+  number: number;
+  startedAt: number;
+  completedAt: number;
+  dealerSeat: number;
+  smallBlindSeat: number;
+  bigBlindSeat: number;
+  smallBlind: number;
+  bigBlind: number;
+  community: OnlineCard[];
+  players: OnlineHandHistoryPlayer[];
+  actions: OnlineHandActionEvent[];
+  result: OnlineHandResult;
 };
 
 export type OnlineCommandReceipt = {
@@ -211,6 +257,8 @@ export type OnlineRoomState = {
   initialTimeBankMs: number;
   seats: OnlineSeatState[];
   hand: OnlineHandState | null;
+  /** Server-private sealed replay snapshots, oldest first. */
+  handHistory: OnlineHandHistoryEntry[];
   lastDealerSeat: number | null;
   session: OnlineSessionState;
   processedCommands: OnlineCommandReceipt[];
@@ -347,6 +395,35 @@ export type OnlinePublicHand = {
   nextHandAt: number | null;
 };
 
+export type OnlinePublicHandHistoryPlayer = {
+  seat: number;
+  displayName: string;
+  stackAtHandStart: number;
+  stackAfterBlinds: number;
+  stackAfterHand: number;
+  contributed: number;
+  folded: boolean;
+  shown: boolean;
+  holeCardCount: number;
+  holeCards: [OnlineCard, OnlineCard] | null;
+};
+
+export type OnlinePublicHandHistoryEntry = {
+  id: string;
+  number: number;
+  startedAt: number;
+  completedAt: number;
+  dealerSeat: number;
+  smallBlindSeat: number;
+  bigBlindSeat: number;
+  smallBlind: number;
+  bigBlind: number;
+  community: OnlineCard[];
+  players: OnlinePublicHandHistoryPlayer[];
+  actions: OnlineHandActionEvent[];
+  result: OnlineHandResult;
+};
+
 export type OnlineSessionSampleSize = "insufficient" | "developing" | "meaningful";
 
 export type OnlinePublicSessionPlayerReport = {
@@ -410,6 +487,7 @@ export type OnlinePublicRoomState = {
   viewerSeat: number | null;
   seats: OnlinePublicSeat[];
   hand: OnlinePublicHand | null;
+  handHistory: OnlinePublicHandHistoryEntry[];
   legalActions: OnlineLegalActions | null;
   finishRequested: boolean;
   sessionReport: OnlinePublicSessionReport | null;
@@ -511,6 +589,39 @@ function cloneCard(card: OnlineCard): OnlineCard {
   return { rank: card.rank, suit: card.suit };
 }
 
+function cloneHandResult(result: OnlineHandResult): OnlineHandResult {
+  return {
+    ...result,
+    winnerSeats: [...result.winnerSeats],
+    mainPotWinnerSeats: [...result.mainPotWinnerSeats],
+    payouts: result.payouts.map((payout) => ({ ...payout })),
+    returns: result.returns.map((entry) => ({ ...entry })),
+    handNames: result.handNames.map((entry) => ({ ...entry })),
+  };
+}
+
+function cloneHandActionEvent(event: OnlineHandActionEvent): OnlineHandActionEvent {
+  return {
+    ...event,
+    community: Array.isArray(event.community) ? event.community.map(cloneCard) : [],
+  };
+}
+
+function cloneHandHistoryEntry(entry: OnlineHandHistoryEntry): OnlineHandHistoryEntry {
+  return {
+    ...entry,
+    community: Array.isArray(entry.community) ? entry.community.map(cloneCard) : [],
+    players: (Array.isArray(entry.players) ? entry.players : [])
+      .filter((player) => player && Array.isArray(player.hole) && player.hole.length === 2)
+      .map((player) => ({
+        ...player,
+        hole: [cloneCard(player.hole[0]), cloneCard(player.hole[1])],
+      })),
+    actions: (Array.isArray(entry.actions) ? entry.actions : []).map(cloneHandActionEvent),
+    result: cloneHandResult(entry.result),
+  };
+}
+
 function emptyOnlineSession(): OnlineSessionState {
   return {
     startedAt: null,
@@ -579,6 +690,53 @@ function nonNegativeInteger(value: unknown, fallback = 0): number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : fallback;
 }
 
+function nullableNonNegativeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function communityCountForStreet(street: OnlineStreet): number {
+  if (street === "preflop") return 0;
+  if (street === "flop") return 3;
+  if (street === "turn") return 4;
+  return 5;
+}
+
+function normalizeActionEvent(
+  event: OnlineHandActionEvent,
+  fallbackCommunity: readonly OnlineCard[],
+): OnlineHandActionEvent | null {
+  if (
+    !Number.isInteger(event?.seq)
+    || event.seq <= 0
+    || !Number.isInteger(event?.seat)
+    || !["preflop", "flop", "turn", "river"].includes(event.street)
+    || !["fold", "check", "call", "raise"].includes(event.action)
+    || !Number.isFinite(event.occurredAt)
+  ) return null;
+  const expectedCommunityCount = communityCountForStreet(event.street);
+  const community = Array.isArray(event.community) && event.community.length >= expectedCommunityCount
+    ? event.community.slice(0, expectedCommunityCount).map(cloneCard)
+    : fallbackCommunity.slice(0, expectedCommunityCount).map(cloneCard);
+  const toAmount = nullableNonNegativeInteger(event.toAmount);
+  return {
+    seq: Math.floor(event.seq),
+    seat: Math.floor(event.seat),
+    street: event.street,
+    action: event.action,
+    amount: nullableNonNegativeInteger(event.amount),
+    toAmount,
+    raiseTo: event.action === "raise"
+      ? (nullableNonNegativeInteger(event.raiseTo) ?? toAmount)
+      : null,
+    potAfter: nullableNonNegativeInteger(event.potAfter),
+    stackAfter: nullableNonNegativeInteger(event.stackAfter),
+    community,
+    timedOut: event.timedOut === true || event.source === "timeout",
+    source: event.source === "timeout" || event.source === "leave" ? event.source : "player",
+    occurredAt: Math.max(0, Math.floor(event.occurredAt)),
+  };
+}
+
 function finiteTimestamp(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
 }
@@ -598,19 +756,12 @@ function cloneRoom(room: OnlineRoomState): OnlineRoomState {
           })),
           fullRaiseHistory: (room.hand.fullRaiseHistory ?? []).map((record) => ({ ...record })),
           pendingReturns: (room.hand.pendingReturns ?? []).map((entry) => ({ ...entry })),
-          recentActions: (room.hand.recentActions ?? []).map((event) => ({ ...event })),
-          result: room.hand.result
-            ? {
-                ...room.hand.result,
-                winnerSeats: [...room.hand.result.winnerSeats],
-                mainPotWinnerSeats: [...room.hand.result.mainPotWinnerSeats],
-                payouts: room.hand.result.payouts.map((payout) => ({ ...payout })),
-                returns: room.hand.result.returns.map((entry) => ({ ...entry })),
-                handNames: room.hand.result.handNames.map((entry) => ({ ...entry })),
-              }
-            : null,
+          recentActions: (room.hand.recentActions ?? []).map(cloneHandActionEvent),
+          actionHistory: (room.hand.actionHistory ?? room.hand.recentActions ?? []).map(cloneHandActionEvent),
+          result: room.hand.result ? cloneHandResult(room.hand.result) : null,
         }
       : null,
+    handHistory: (room.handHistory ?? []).map(cloneHandHistoryEntry),
     session: room.session
       ? {
           ...room.session,
@@ -718,6 +869,51 @@ function normalizeStoredRoom(room: OnlineRoomState): void {
     return normalized;
   });
   room.seats.forEach((seat) => ensureSessionPlayer(room, seat));
+  room.handHistory = Array.isArray(room.handHistory)
+    ? room.handHistory
+      .filter((entry) => (
+        entry
+        && typeof entry.id === "string"
+        && entry.id.trim()
+        && Number.isInteger(entry.number)
+        && Array.isArray(entry.community)
+        && Array.isArray(entry.players)
+        && Array.isArray(entry.actions)
+        && entry.result
+      ))
+      .map((entry): OnlineHandHistoryEntry => ({
+        ...cloneHandHistoryEntry(entry),
+        startedAt: finiteTimestamp(entry.startedAt) ?? 0,
+        completedAt: finiteTimestamp(entry.completedAt) ?? finiteTimestamp(entry.startedAt) ?? 0,
+        smallBlind: nonNegativeInteger(entry.smallBlind, room.smallBlind),
+        bigBlind: nonNegativeInteger(entry.bigBlind, room.bigBlind),
+        players: entry.players
+          .filter((player) => (
+            Number.isInteger(player?.seat)
+            && typeof player.accountId === "string"
+            && player.accountId.trim()
+            && typeof player.displayName === "string"
+            && Array.isArray(player.hole)
+            && player.hole.length === 2
+          ))
+          .map((player) => ({
+            ...player,
+            hole: [cloneCard(player.hole[0]), cloneCard(player.hole[1])],
+            stackAtHandStart: nonNegativeInteger(player.stackAtHandStart),
+            stackAfterBlinds: nonNegativeInteger(player.stackAfterBlinds),
+            stackAfterHand: nonNegativeInteger(player.stackAfterHand),
+            contributed: nonNegativeInteger(player.contributed),
+            folded: player.folded === true,
+            shown: player.shown === true,
+          })),
+        actions: entry.actions
+          .map((event) => normalizeActionEvent(event, entry.community))
+          .filter((event): event is OnlineHandActionEvent => event !== null)
+          .sort((left, right) => left.seq - right.seq),
+      }))
+      .filter((entry, index, entries) => entries.findIndex((candidate) => candidate.id === entry.id) === index)
+      .slice(-ONLINE_HAND_HISTORY_LIMIT)
+    : [];
   room.hand?.players.forEach((player) => {
     if (typeof player.displayName !== "string" || !player.displayName.trim()) {
       player.displayName = room.seats.find((seat) => seat.seat === player.seat)?.displayName ?? `座位 ${player.seat + 1}`;
@@ -751,6 +947,10 @@ function normalizeStoredRoom(room: OnlineRoomState): void {
     });
   }
   if (room.hand) {
+    room.hand.startedAt = finiteTimestamp(room.hand.startedAt)
+      ?? finiteTimestamp(room.hand.actionStartedAt)
+      ?? finiteTimestamp(room.session.startedAt)
+      ?? 0;
     room.hand.fullRaiseHistory = Array.isArray(room.hand.fullRaiseHistory)
       ? room.hand.fullRaiseHistory.filter((record) => (
           Number.isInteger(record?.seat)
@@ -768,26 +968,22 @@ function normalizeStoredRoom(room: OnlineRoomState): void {
         ))
       : [];
     room.hand.recentActions = Array.isArray(room.hand.recentActions)
-      ? room.hand.recentActions.filter((event) => (
-          Number.isInteger(event?.seq)
-          && event.seq > 0
-          && Number.isInteger(event?.seat)
-          && ["preflop", "flop", "turn", "river"].includes(event.street)
-          && ["fold", "check", "call", "raise"].includes(event.action)
-          && Number.isFinite(event.occurredAt)
-        )).map((event): OnlineHandActionEvent => ({
-          seq: Math.floor(event.seq),
-          seat: Math.floor(event.seat),
-          street: event.street,
-          action: event.action,
-          timedOut: event.timedOut === true || event.source === "timeout",
-          source: event.source === "timeout" || event.source === "leave" ? event.source : "player",
-          occurredAt: Math.max(0, Math.floor(event.occurredAt)),
-        })).sort((left, right) => left.seq - right.seq).slice(-ONLINE_RECENT_ACTION_LIMIT)
+      ? room.hand.recentActions
+        .map((event) => normalizeActionEvent(event, room.hand?.community ?? []))
+        .filter((event): event is OnlineHandActionEvent => event !== null)
+        .sort((left, right) => left.seq - right.seq)
+        .slice(-ONLINE_RECENT_ACTION_LIMIT)
       : [];
+    room.hand.actionHistory = Array.isArray(room.hand.actionHistory)
+      ? room.hand.actionHistory
+        .map((event) => normalizeActionEvent(event, room.hand?.community ?? []))
+        .filter((event): event is OnlineHandActionEvent => event !== null)
+        .sort((left, right) => left.seq - right.seq)
+      : room.hand.recentActions.map(cloneHandActionEvent);
     room.hand.actionSeq = Math.max(
       nonNegativeInteger(room.hand.actionSeq),
       room.hand.recentActions.at(-1)?.seq ?? 0,
+      room.hand.actionHistory.at(-1)?.seq ?? 0,
     );
     // Missing keys identify states stored before server-owned phase clocks were
     // introduced. synchronizePhaseClocks expires those legacy waits on first
@@ -808,6 +1004,9 @@ function normalizeStoredRoom(room: OnlineRoomState): void {
     // Pre-unified-clock rooms used a separate showdown phase for the optional
     // reveal. Keep their pending choice, but fold it into the normal hand pause.
     if (room.phase === "showdown" && room.hand.result) room.phase = "between_hands";
+    // Rooms stored before replay snapshots existed can still recover the one
+    // completed hand retained on the table without touching session counters.
+    if (room.hand.result) sealHandHistoryEntry(room, room.hand);
   }
 }
 
@@ -903,6 +1102,7 @@ export function createOnlineRoom(options: {
       pendingLeave: false,
     }],
     hand: null,
+    handHistory: [],
     lastDealerSeat: null,
     session: emptyOnlineSession(),
     processedCommands: [],
@@ -974,25 +1174,33 @@ function markPlayersSawFlop(room: OnlineRoomState, hand: OnlineHandState): void 
 }
 
 function appendHandAction(
+  room: OnlineRoomState,
   hand: OnlineHandState,
-  seat: number,
+  player: OnlineHandPlayerState,
   action: OnlineActionKind,
   source: OnlineActionSource,
   occurredAt: number,
+  amount: number,
 ): void {
   hand.actionSeq = nonNegativeInteger(hand.actionSeq) + 1;
-  hand.recentActions = [
-    ...(hand.recentActions ?? []),
-    {
-      seq: hand.actionSeq,
-      seat,
-      street: hand.street,
-      action,
-      timedOut: source === "timeout",
-      source,
-      occurredAt: Math.max(0, Math.floor(occurredAt)),
-    },
-  ].slice(-ONLINE_RECENT_ACTION_LIMIT);
+  const seat = seatByNumber(room, player.seat);
+  const event: OnlineHandActionEvent = {
+    seq: hand.actionSeq,
+    seat: player.seat,
+    street: hand.street,
+    action,
+    amount,
+    toAmount: player.bet,
+    raiseTo: action === "raise" ? player.bet : null,
+    potAfter: committedPot(hand),
+    stackAfter: seat?.stack ?? 0,
+    community: hand.community.map(cloneCard),
+    timedOut: source === "timeout",
+    source,
+    occurredAt: Math.max(0, Math.floor(occurredAt)),
+  };
+  hand.actionHistory = [...(hand.actionHistory ?? []), cloneHandActionEvent(event)];
+  hand.recentActions = [...(hand.recentActions ?? []), event].slice(-ONLINE_RECENT_ACTION_LIMIT);
 }
 
 function recordAcceptedAction(
@@ -1003,8 +1211,9 @@ function recordAcceptedAction(
   highestBetBefore: number,
   timedOut: boolean,
   occurredAt: number,
+  amount: number,
 ): void {
-  appendHandAction(hand, player.seat, action, timedOut ? "timeout" : "player", occurredAt);
+  appendHandAction(room, hand, player, action, timedOut ? "timeout" : "player", occurredAt, amount);
   const stats = sessionStatsForHandPlayer(room, player);
   if (!stats) return;
   stats.decisions += 1;
@@ -1037,8 +1246,59 @@ function recordAcceptedAction(
   markPlayerAllIn(room, player);
 }
 
+function sealHandHistoryEntry(room: OnlineRoomState, hand: OnlineHandState): void {
+  if (!hand.result || room.handHistory.some((entry) => entry.id === hand.id)) return;
+  const completedAt = hand.actionHistory.at(-1)?.occurredAt ?? hand.startedAt;
+  const entry: OnlineHandHistoryEntry = {
+    id: hand.id,
+    number: hand.number,
+    startedAt: hand.startedAt,
+    completedAt,
+    dealerSeat: hand.dealerSeat,
+    smallBlindSeat: hand.smallBlindSeat,
+    bigBlindSeat: hand.bigBlindSeat,
+    smallBlind: room.smallBlind,
+    bigBlind: room.bigBlind,
+    community: hand.community.map(cloneCard),
+    players: hand.players.map((player) => {
+      const blindPosted = player.seat === hand.smallBlindSeat
+        ? Math.min(room.smallBlind, player.stackAtHandStart)
+        : player.seat === hand.bigBlindSeat
+          ? Math.min(room.bigBlind, player.stackAtHandStart)
+          : 0;
+      const sessionPlayer = room.session.players.find((stats) => stats.accountId === player.accountId);
+      return {
+        seat: player.seat,
+        accountId: player.accountId,
+        displayName: player.displayName,
+        hole: [cloneCard(player.hole[0]), cloneCard(player.hole[1])],
+        stackAtHandStart: player.stackAtHandStart,
+        stackAfterBlinds: player.stackAtHandStart - blindPosted,
+        stackAfterHand: seatByNumber(room, player.seat)?.stack ?? sessionPlayer?.finalStack ?? 0,
+        contributed: player.contributed,
+        folded: player.folded,
+        shown: player.shown,
+      };
+    }),
+    actions: hand.actionHistory.map(cloneHandActionEvent),
+    result: cloneHandResult(hand.result),
+  };
+  room.handHistory = [...room.handHistory, entry].slice(-ONLINE_HAND_HISTORY_LIMIT);
+}
+
+function synchronizeHandHistoryShown(room: OnlineRoomState, hand: OnlineHandState): void {
+  const entry = room.handHistory.find((candidate) => candidate.id === hand.id);
+  if (!entry) return;
+  entry.players.forEach((historyPlayer) => {
+    const handPlayer = playerBySeat(hand, historyPlayer.seat);
+    if (handPlayer) historyPlayer.shown = handPlayer.shown;
+  });
+}
+
 function recordCompletedHand(room: OnlineRoomState, hand: OnlineHandState): void {
-  if (!hand.result || room.session.lastCompletedHandId === hand.id) return;
+  if (!hand.result) return;
+  sealHandHistoryEntry(room, hand);
+  if (room.session.lastCompletedHandId === hand.id) return;
   const payoutBySeat = new Map(hand.result.payouts.map((entry) => [entry.seat, entry.amount]));
   hand.players.forEach((player) => {
     const stats = sessionStatsForHandPlayer(room, player);
@@ -1166,6 +1426,7 @@ function beginHand(room: OnlineRoomState, options: OnlineEngineOptions): void {
   room.hand = {
     id: (options.makeHandId ?? defaultHandId)(),
     number: (room.hand?.number ?? 0) + 1,
+    startedAt: handStartedAt,
     street: "preflop",
     dealerSeat,
     smallBlindSeat,
@@ -1183,6 +1444,7 @@ function beginHand(room: OnlineRoomState, options: OnlineEngineOptions): void {
     raiseCount: 0,
     actionSeq: 0,
     recentActions: [],
+    actionHistory: [],
     result: null,
     pendingShowSeat: null,
     actionStartedAt,
@@ -1586,6 +1848,7 @@ function applyAction(
   const betToMatch = betToMatchForActor(room, hand, seat.seat);
   const toCall = Math.max(0, betToMatch - player.bet);
   const highestBetBefore = hand.highestBet;
+  const stackBefore = seat.stack;
 
   if (command.action === "fold") {
     markPlayerFolded(hand, player, betToMatch);
@@ -1656,7 +1919,16 @@ function applyAction(
     });
   }
 
-  recordAcceptedAction(room, hand, player, command.action, highestBetBefore, timedOut, occurredAt);
+  recordAcceptedAction(
+    room,
+    hand,
+    player,
+    command.action,
+    highestBetBefore,
+    timedOut,
+    occurredAt,
+    Math.max(0, stackBefore - seat.stack),
+  );
   finishAction(room, hand, seat.seat);
   return null;
 }
@@ -1669,8 +1941,8 @@ function forceFoldDepartingPlayer(room: OnlineRoomState, seat: OnlineSeatState, 
 
   const wasCurrentSeat = hand.currentSeat === seat.seat;
   markPlayerFolded(hand, player, betToMatchForActor(room, hand, seat.seat));
-  appendHandAction(hand, player.seat, "fold", "leave", occurredAt);
   normalizeBettingAfterFold(room, hand);
+  appendHandAction(room, hand, player, "fold", "leave", occurredAt, 0);
   if (closeHandOrStreetIfReady(room, hand)) return;
 
   // An out-of-turn departure must not skip the player whose decision was
@@ -1686,6 +1958,7 @@ function muckPendingShowChoice(room: OnlineRoomState): void {
   if (!hand || hand.pendingShowSeat === null) return;
   const player = playerBySeat(hand, hand.pendingShowSeat);
   if (player) player.shown = false;
+  synchronizeHandHistoryShown(room, hand);
   hand.pendingShowSeat = null;
   hand.showDecisionDeadlineAt = null;
 }
@@ -1746,6 +2019,7 @@ function resolveFinishRequest(room: OnlineRoomState, now: number): void {
 function restartOnlineSession(room: OnlineRoomState): void {
   room.phase = "lobby";
   room.hand = null;
+  room.handHistory = [];
   room.lastDealerSeat = null;
   room.session = emptyOnlineSession();
   room.seats.forEach((seat) => {
@@ -2096,6 +2370,7 @@ export function applyOnlinePokerCommand(
     const player = playerBySeat(hand, member.seat);
     if (!player) return fail(room, "SHOW_NOT_ALLOWED", "找不到本手玩家");
     player.shown = command.show;
+    synchronizeHandHistoryShown(next, hand);
     if (command.show) {
       const stats = sessionStatsForHandPlayer(next, player);
       if (stats) stats.voluntaryShows += 1;
@@ -2289,6 +2564,36 @@ function projectSessionReport(room: OnlineRoomState): OnlinePublicSessionReport 
   };
 }
 
+function projectHandActionEvent(event: OnlineHandActionEvent): OnlineHandActionEvent {
+  return {
+    seq: event.seq,
+    seat: event.seat,
+    street: event.street,
+    action: event.action,
+    amount: nullableNonNegativeInteger(event.amount),
+    toAmount: nullableNonNegativeInteger(event.toAmount),
+    raiseTo: nullableNonNegativeInteger(event.raiseTo),
+    potAfter: nullableNonNegativeInteger(event.potAfter),
+    stackAfter: nullableNonNegativeInteger(event.stackAfter),
+    community: Array.isArray(event.community) ? event.community.map(cloneCard) : [],
+    timedOut: event.timedOut === true,
+    source: event.source === "timeout" || event.source === "leave" ? event.source : "player",
+    occurredAt: event.occurredAt,
+  };
+}
+
+function projectHandResult(result: OnlineHandResult): OnlineHandResult {
+  return {
+    kind: result.kind,
+    totalPot: result.totalPot,
+    winnerSeats: [...result.winnerSeats],
+    mainPotWinnerSeats: [...result.mainPotWinnerSeats],
+    payouts: result.payouts.map(({ seat, amount }) => ({ seat, amount })),
+    returns: result.returns.map(({ seat, amount }) => ({ seat, amount })),
+    handNames: result.handNames.map(({ seat, name }) => ({ seat, name })),
+  };
+}
+
 export function projectRoomState(room: OnlineRoomState, viewerAccountId: string | null): OnlinePublicRoomState {
   const tableMode: OnlineTableMode = room.tableMode === "cash" ? "cash" : "tournament";
   const actionTimeMs = Number.isInteger(room.actionTimeMs) ? room.actionTimeMs : ONLINE_DEFAULT_ACTION_TIME_MS;
@@ -2297,6 +2602,10 @@ export function projectRoomState(room: OnlineRoomState, viewerAccountId: string 
     ? null
     : room.seats.find((seat) => seat.accountId === viewerAccountId)?.seat ?? null;
   const hand = room.hand;
+  const viewerIsSessionParticipant = viewerAccountId !== null
+    && Array.isArray(room.session?.players)
+    && room.session.players.some((player) => player.accountId === viewerAccountId);
+  const mayUnlockFinishedHistory = room.phase === "finished" && viewerIsSessionParticipant;
   const publicSeats = room.seats.map((seat): OnlinePublicSeat => {
     const player = hand ? playerBySeat(hand, seat.seat) : undefined;
     const maySeeHole = Boolean(player && (seat.accountId === viewerAccountId || player.shown));
@@ -2350,23 +2659,10 @@ export function projectRoomState(room: OnlineRoomState, viewerAccountId: string 
           lastAggressorSeat: hand.lastAggressorSeat,
           raiseCount: hand.raiseCount,
           actionSeq: nonNegativeInteger(hand.actionSeq),
-          recentActions: (hand.recentActions ?? []).map((event) => ({
-            seq: event.seq,
-            seat: event.seat,
-            street: event.street,
-            action: event.action,
-            timedOut: event.timedOut,
-            source: event.source,
-            occurredAt: event.occurredAt,
-          })),
+          recentActions: (hand.recentActions ?? []).map(projectHandActionEvent),
           result: hand.result
             ? {
-                ...hand.result,
-                winnerSeats: [...hand.result.winnerSeats],
-                mainPotWinnerSeats: [...hand.result.mainPotWinnerSeats],
-                payouts: hand.result.payouts.map((payout) => ({ ...payout })),
-                returns: hand.result.returns.map((entry) => ({ ...entry })),
-                handNames: hand.result.handNames.map((entry) => ({ ...entry })),
+                ...projectHandResult(hand.result),
                 winnerDetails: [...new Set([
                   ...hand.result.winnerSeats,
                   ...hand.result.returns.map((entry) => entry.seat),
@@ -2393,6 +2689,39 @@ export function projectRoomState(room: OnlineRoomState, viewerAccountId: string 
           nextHandAt: typeof hand.nextHandAt === "number" ? hand.nextHandAt : null,
         }
       : null,
+    handHistory: (room.handHistory ?? []).map((entry): OnlinePublicHandHistoryEntry => ({
+      id: entry.id,
+      number: entry.number,
+      startedAt: entry.startedAt,
+      completedAt: entry.completedAt,
+      dealerSeat: entry.dealerSeat,
+      smallBlindSeat: entry.smallBlindSeat,
+      bigBlindSeat: entry.bigBlindSeat,
+      smallBlind: entry.smallBlind,
+      bigBlind: entry.bigBlind,
+      community: entry.community.map(cloneCard),
+      players: entry.players.map((player): OnlinePublicHandHistoryPlayer => {
+        const maySeeHole = mayUnlockFinishedHistory
+          || player.accountId === viewerAccountId
+          || player.shown;
+        return {
+          seat: player.seat,
+          displayName: player.displayName,
+          stackAtHandStart: player.stackAtHandStart,
+          stackAfterBlinds: player.stackAfterBlinds,
+          stackAfterHand: player.stackAfterHand,
+          contributed: player.contributed,
+          folded: player.folded,
+          shown: player.shown,
+          holeCardCount: 2,
+          holeCards: maySeeHole
+            ? [cloneCard(player.hole[0]), cloneCard(player.hole[1])]
+            : null,
+        };
+      }),
+      actions: entry.actions.map(projectHandActionEvent),
+      result: projectHandResult(entry.result),
+    })),
     legalActions: viewerAccountId === null ? null : legalOnlineActions(room, viewerAccountId),
     finishRequested: room.phase !== "finished" && Boolean(room.session?.finishRequestedByAccountId),
     sessionReport: projectSessionReport(room),

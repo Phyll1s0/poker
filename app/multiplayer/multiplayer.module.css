@@ -3759,3 +3759,928 @@
     top: -112px;
   }
 }
+
+/* Server-authored hand history. The replay deliberately shares the live
+   table's rail, felt, card and player-panel primitives. */
+.historyButton {
+  min-height: 29px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(216, 183, 116, 0.28);
+  border-radius: 5px;
+  color: #d7c89f;
+  background: rgba(216, 183, 116, 0.065);
+  cursor: pointer;
+  font: 600 8px/1 Arial, sans-serif;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.historyButton:hover,
+.historyButton:focus-visible {
+  border-color: rgba(216, 183, 116, 0.52);
+  color: #f1e5c6;
+  outline: none;
+}
+
+.historyButton:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.historyOverlay {
+  padding: 14px;
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(5, 7, 6, 0.84);
+  backdrop-filter: blur(12px);
+}
+
+.historyDialog {
+  width: min(1180px, 100%);
+  height: min(790px, calc(100svh - 28px));
+  min-height: 560px;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border: 1px solid rgba(216, 183, 116, 0.2);
+  border-radius: 11px;
+  color: #d8d6ce;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+    #111513;
+  background-size: 28px 28px, 28px 28px, auto;
+  box-shadow: 0 36px 110px rgba(0, 0, 0, 0.66);
+}
+
+.historyHeader {
+  min-height: 68px;
+  padding: 13px 16px 13px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.075);
+  background: rgba(18, 22, 20, 0.96);
+}
+
+.historyHeader > div:first-child,
+.historySidebarHeading,
+.replayActionHeading {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.historyHeader span,
+.historySidebarHeading span,
+.replayActionHeading span,
+.replayHeading > div > span {
+  color: #8e8062;
+  font-size: 7px;
+  letter-spacing: 0.14em;
+}
+
+.historyHeader h2 {
+  margin: 0;
+  color: #e4dfd3;
+  font: 500 17px/1.1 Georgia, "Songti SC", serif;
+}
+
+.historyHeaderMeta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.historyHeaderMeta > span {
+  padding: 6px 9px;
+  border: 1px solid rgba(99, 196, 156, 0.18);
+  border-radius: 999px;
+  color: #90bba8;
+  background: rgba(99, 196, 156, 0.045);
+  font: 600 8px/1 ui-monospace, monospace;
+  letter-spacing: 0;
+}
+
+.historyHeaderMeta button {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 50%;
+  color: #969b95;
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+  font: 300 20px/1 Arial, sans-serif;
+}
+
+.historyHeaderMeta button:hover,
+.historyHeaderMeta button:focus-visible {
+  border-color: rgba(216, 183, 116, 0.38);
+  color: #eee3c8;
+  outline: none;
+}
+
+.historyBody {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 214px minmax(0, 1fr);
+}
+
+.historySidebar {
+  min-width: 0;
+  min-height: 0;
+  padding: 15px 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  border-right: 1px solid rgba(255, 255, 255, 0.075);
+  background: rgba(7, 10, 8, 0.35);
+}
+
+.historySidebarHeading {
+  padding: 0 5px;
+}
+
+.historySidebarHeading strong,
+.replayActionHeading strong {
+  color: #d1cec5;
+  font: 500 11px/1.1 Georgia, "Songti SC", serif;
+}
+
+.historyHandList {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  scrollbar-color: rgba(216, 183, 116, 0.28) transparent;
+  scrollbar-width: thin;
+}
+
+.historyHandList button {
+  width: 100%;
+  min-height: 58px;
+  padding: 9px 10px;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 6px;
+  color: #aaa89f;
+  background: rgba(255, 255, 255, 0.015);
+  cursor: pointer;
+  text-align: left;
+}
+
+.historyHandList button > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.historyHandList b {
+  color: #d9d5ca;
+  font: 600 10px/1 Georgia, "Songti SC", serif;
+}
+
+.historyHandList time {
+  color: #626862;
+  font: 7px/1 ui-monospace, monospace;
+}
+
+.historyHandList small {
+  overflow: hidden;
+  color: #777c76;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.historyHandList button:hover {
+  border-color: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.historyHandList .historyHandActive {
+  border-color: rgba(216, 183, 116, 0.42);
+  background: linear-gradient(135deg, rgba(216, 183, 116, 0.11), rgba(216, 183, 116, 0.025));
+  box-shadow: inset 2px 0 0 var(--mp-gold);
+}
+
+.historyHandActive small {
+  color: #aa9c78;
+}
+
+.replayWorkspace {
+  min-width: 0;
+  min-height: 0;
+  padding: 14px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 11px;
+}
+
+.replayHeading {
+  min-width: 0;
+  min-height: 46px;
+  padding: 8px 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.replayHeading > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.replayHeading strong {
+  overflow: hidden;
+  color: #ded9cc;
+  font: 500 11px/1.3 Georgia, "Songti SC", serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.replayHeading > small {
+  flex: 0 0 auto;
+  color: #656b65;
+  font: 8px/1 ui-monospace, monospace;
+}
+
+.replayContent {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 218px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 8px;
+  background: rgba(6, 9, 7, 0.27);
+}
+
+.replayTableColumn {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.replayTableViewport {
+  min-width: 0;
+  min-height: 430px;
+  padding: 82px 80px 74px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(31, 105, 79, 0.12), transparent 55%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.012), rgba(0, 0, 0, 0.08));
+}
+
+.replayTable {
+  width: min(610px, calc(100% - 54px));
+  min-width: 360px;
+  aspect-ratio: 1.72 / 1;
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.replayTable .tableRail {
+  inset: -12px;
+}
+
+.multiplayerPage .replayTable .boardArea {
+  top: 45%;
+  gap: 10px;
+}
+
+.multiplayerPage .replayTable .cards {
+  gap: 5px;
+}
+
+.multiplayerPage .replayTable .card,
+.multiplayerPage .replayTable .cardSlot {
+  width: clamp(34px, 3.45vw, 48px);
+}
+
+.multiplayerPage .replayTable .card {
+  font-size: clamp(16px, 1.7vw, 22px);
+}
+
+.multiplayerPage .replayTable .cardSuit {
+  font-size: clamp(17px, 1.8vw, 24px);
+}
+
+.replayTable .tableSignature {
+  bottom: 15%;
+  font-size: 7px;
+}
+
+.replaySeat {
+  min-width: 132px;
+  position: absolute;
+  z-index: 8;
+}
+
+.replaySeat0 {
+  left: 50%;
+  bottom: -55px;
+  transform: translateX(-50%);
+}
+
+.replaySeat1 {
+  left: -64px;
+  bottom: 11%;
+}
+
+.replaySeat2 {
+  left: -47px;
+  top: -42px;
+}
+
+.replaySeat3 {
+  left: 50%;
+  top: -53px;
+  transform: translateX(-50%);
+}
+
+.replaySeat4 {
+  right: -47px;
+  top: -42px;
+}
+
+.replaySeat5 {
+  right: -64px;
+  bottom: 11%;
+}
+
+.replaySeat .playerPanel {
+  grid-template-columns: 27px minmax(56px, 1fr) auto;
+  gap: 6px;
+  padding: 6px 7px;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+}
+
+.replaySeat .avatar {
+  width: 27px;
+  height: 27px;
+  font-size: 8px;
+}
+
+.replaySeat .seatIdentity {
+  gap: 3px;
+}
+
+.replaySeat .seatIdentity strong {
+  max-width: 74px;
+  font-size: 9px;
+}
+
+.replaySeat .seatIdentity > span,
+.replaySeat .seatStack {
+  font-size: 7px;
+}
+
+.replayBlindChip {
+  padding: 2px 3px;
+  border-radius: 2px;
+  color: #92b9a7;
+  background: rgba(99, 196, 156, 0.1);
+  font: 7px/1 Arial, sans-serif;
+  white-space: nowrap;
+}
+
+.replaySeatCards {
+  min-height: 39px;
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  top: -43px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.replaySeat2 .replaySeatCards,
+.replaySeat3 .replaySeatCards,
+.replaySeat4 .replaySeatCards {
+  top: 43px;
+}
+
+.multiplayerPage .replaySeat .miniCard,
+.multiplayerPage .replaySeat .miniBack {
+  width: 28px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.multiplayerPage .replaySeat .miniCard span {
+  font-size: 13px;
+}
+
+.replaySeatCards > b {
+  padding: 3px 4px;
+  border-radius: 3px;
+  color: #797e78;
+  background: rgba(12, 15, 14, 0.88);
+  font-size: 6px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.replayDealerButton {
+  width: 20px;
+  height: 20px;
+  position: absolute;
+  z-index: 11;
+  right: -8px;
+  top: -9px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #ded7c3;
+  border-radius: 50%;
+  color: #242824;
+  background: #d9c994;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4);
+  font: 800 8px/1 Arial, sans-serif;
+}
+
+.replayContribution {
+  padding: 3px 5px;
+  position: absolute;
+  z-index: 10;
+  right: 2px;
+  bottom: -18px;
+  border-radius: 8px;
+  color: #787e78;
+  background: rgba(10, 13, 12, 0.84);
+  font: 7px/1 ui-monospace, monospace;
+  white-space: nowrap;
+}
+
+.replayActionBubble {
+  padding: 5px 8px;
+  position: absolute;
+  z-index: 12;
+  left: 50%;
+  top: calc(100% + 7px);
+  transform: translateX(-50%);
+  border: 1px solid rgba(216, 183, 116, 0.36);
+  border-radius: 10px;
+  color: #ead9aa;
+  background: rgba(26, 24, 18, 0.96);
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.35);
+  font: 600 8px/1 Georgia, "Songti SC", serif;
+  white-space: nowrap;
+}
+
+.replaySeat2 .replayActionBubble,
+.replaySeat3 .replayActionBubble,
+.replaySeat4 .replayActionBubble {
+  top: auto;
+  bottom: calc(100% + 7px);
+}
+
+.replaySeatActive .playerPanel {
+  border-color: rgba(216, 183, 116, 0.72);
+  box-shadow: 0 0 0 2px rgba(216, 183, 116, 0.1), 0 9px 26px rgba(0, 0, 0, 0.45);
+}
+
+.replaySeatWinner .playerPanel {
+  border-color: rgba(99, 196, 156, 0.65);
+  background: rgba(21, 37, 29, 0.98);
+  box-shadow: 0 0 0 2px rgba(99, 196, 156, 0.09), 0 9px 26px rgba(0, 0, 0, 0.45);
+}
+
+.replaySeatFolded:not(.replaySeatActive) .playerPanel,
+.replaySeatFolded:not(.replaySeatActive) .replaySeatCards {
+  opacity: 0.5;
+}
+
+.replayTransport {
+  min-height: 58px;
+  padding: 9px 11px;
+  display: grid;
+  grid-template-columns: auto auto auto minmax(120px, 1fr);
+  align-items: center;
+  gap: 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.075);
+  background: rgba(17, 21, 19, 0.92);
+}
+
+.replayTransport > button {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  color: #a4a8a2;
+  background: rgba(255, 255, 255, 0.025);
+  cursor: pointer;
+  font: 600 8px/1 Arial, sans-serif;
+  white-space: nowrap;
+}
+
+.replayTransport > button:hover:not(:disabled),
+.replayTransport > button:focus-visible {
+  border-color: rgba(216, 183, 116, 0.38);
+  color: #eee2c4;
+  outline: none;
+}
+
+.replayTransport > button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.replayTransport .replayPlayButton {
+  min-width: 72px;
+  border-color: rgba(216, 183, 116, 0.35);
+  color: #dfcd9e;
+  background: rgba(216, 183, 116, 0.07);
+}
+
+.replayScrubber {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.replayScrubber span {
+  min-width: 32px;
+  color: #777c77;
+  font: 7px/1 ui-monospace, monospace;
+  text-align: right;
+}
+
+.replayScrubber input {
+  width: 100%;
+  accent-color: #bca66e;
+}
+
+.replayActionPanel {
+  min-width: 0;
+  min-height: 0;
+  padding: 12px 9px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  border-left: 1px solid rgba(255, 255, 255, 0.075);
+  background: rgba(15, 18, 17, 0.84);
+}
+
+.replayActionHeading {
+  padding: 0 3px;
+}
+
+.replayActionList {
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+  scrollbar-color: rgba(216, 183, 116, 0.28) transparent;
+  scrollbar-width: thin;
+}
+
+.replayActionList li + li {
+  margin-top: 5px;
+}
+
+.replayActionList button {
+  width: 100%;
+  min-height: 52px;
+  padding: 7px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 5px;
+  color: #868b85;
+  background: rgba(255, 255, 255, 0.012);
+  cursor: pointer;
+  text-align: left;
+}
+
+.replayActionList button > span {
+  color: #656a65;
+  font-size: 6px;
+  letter-spacing: 0.06em;
+}
+
+.replayActionList button > strong {
+  overflow: hidden;
+  color: #bdbbb2;
+  font-size: 8px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.replayActionList button > small {
+  color: #707570;
+  font: 7px/1 ui-monospace, monospace;
+}
+
+.replayActionList button:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.replayActionList .replayActionCurrent {
+  border-color: rgba(216, 183, 116, 0.4);
+  background: rgba(216, 183, 116, 0.07);
+  box-shadow: inset 2px 0 0 var(--mp-gold);
+}
+
+.replayActionCurrent > strong {
+  color: #e4d6b1 !important;
+}
+
+.historyEmpty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  color: #717771;
+  text-align: center;
+}
+
+.historyEmpty strong {
+  color: #cfcbc0;
+  font: 500 16px/1 Georgia, "Songti SC", serif;
+}
+
+.historyEmpty span {
+  font-size: 9px;
+}
+
+@media (max-width: 1060px) {
+  .historyOverlay {
+    padding: 10px;
+  }
+
+  .historyDialog {
+    height: calc(100svh - 20px);
+  }
+
+  .historyBody {
+    grid-template-columns: 180px minmax(0, 1fr);
+  }
+
+  .replayContent {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) 144px;
+  }
+
+  .replayTableViewport {
+    min-height: 390px;
+    padding: 74px 72px 68px;
+  }
+
+  .replayActionPanel {
+    border-top: 1px solid rgba(255, 255, 255, 0.075);
+    border-left: 0;
+  }
+
+  .replayActionHeading {
+    display: none;
+  }
+
+  .replayActionList {
+    display: flex;
+    gap: 5px;
+  }
+
+  .replayActionList li,
+  .replayActionList li + li {
+    min-width: 174px;
+    margin: 0;
+    flex: 0 0 174px;
+  }
+}
+
+@media (max-width: 760px) {
+  .historyOverlay {
+    padding: 0;
+  }
+
+  .historyDialog {
+    width: 100%;
+    height: 100svh;
+    min-height: 0;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .historyHeader {
+    min-height: 60px;
+    padding: 10px 12px;
+  }
+
+  .historyHeader h2 {
+    font-size: 14px;
+  }
+
+  .historyHeaderMeta {
+    gap: 7px;
+  }
+
+  .historyBody {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 102px minmax(0, 1fr);
+  }
+
+  .historySidebar {
+    padding: 8px;
+    display: block;
+    border-right: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.075);
+  }
+
+  .historySidebarHeading {
+    display: none;
+  }
+
+  .historyHandList {
+    height: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-direction: row;
+  }
+
+  .historyHandList button {
+    width: 158px;
+    min-height: 0;
+    flex-basis: 158px;
+  }
+
+  .replayWorkspace {
+    padding: 8px;
+    gap: 7px;
+  }
+
+  .replayHeading {
+    min-height: 42px;
+  }
+
+  .replayHeading > small {
+    display: none;
+  }
+
+  .replayContent {
+    grid-template-rows: minmax(0, 1fr) 116px;
+  }
+
+  .replayTableViewport {
+    min-height: 310px;
+    padding: 68px 53px 64px;
+  }
+
+  .replayTable {
+    width: min(450px, calc(100% - 52px));
+    min-width: 280px;
+  }
+
+  .replaySeat {
+    scale: 0.78;
+  }
+
+  .replaySeat1 {
+    left: -52px;
+  }
+
+  .replaySeat2 {
+    left: -38px;
+  }
+
+  .replaySeat4 {
+    right: -38px;
+  }
+
+  .replaySeat5 {
+    right: -52px;
+  }
+
+  .replayTransport {
+    min-height: 54px;
+    padding: 7px 8px;
+    grid-template-columns: auto auto auto minmax(84px, 1fr);
+  }
+
+  .replayTransport > button {
+    padding-inline: 7px;
+  }
+}
+
+@media (max-width: 520px) {
+  .historyHeader > div:first-child > span,
+  .historyHeaderMeta > span {
+    display: none;
+  }
+
+  .historyBody {
+    grid-template-rows: 86px minmax(0, 1fr);
+  }
+
+  .historyHandList button {
+    width: 144px;
+    flex-basis: 144px;
+  }
+
+  .replayHeading strong {
+    font-size: 9px;
+  }
+
+  .replayTableViewport {
+    min-height: 280px;
+    padding: 58px 34px 58px;
+  }
+
+  .replayTable {
+    width: calc(100% - 46px);
+    min-width: 240px;
+  }
+
+  .replaySeat {
+    min-width: 122px;
+    scale: 0.66;
+  }
+
+  .replaySeat0 {
+    bottom: -47px;
+  }
+
+  .replaySeat1 {
+    left: -45px;
+  }
+
+  .replaySeat2 {
+    left: -34px;
+    top: -37px;
+  }
+
+  .replaySeat3 {
+    top: -47px;
+  }
+
+  .replaySeat4 {
+    right: -34px;
+    top: -37px;
+  }
+
+  .replaySeat5 {
+    right: -45px;
+  }
+
+  .multiplayerPage .replayTable .card,
+  .multiplayerPage .replayTable .cardSlot {
+    width: 29px;
+  }
+
+  .multiplayerPage .replayTable .card {
+    font-size: 14px;
+  }
+
+  .multiplayerPage .replayTable .cardSuit {
+    font-size: 16px;
+  }
+
+  .replayTransport {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .replayTransport > button {
+    min-width: 0;
+    padding-inline: 4px;
+  }
+
+  .replayScrubber {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .replaySeat .playerPanel {
+    transition: none;
+  }
+}

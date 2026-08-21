@@ -108,6 +108,7 @@ type Player = {
   monogram: string;
   style: string;
   styleKey: keyof typeof AI_PROFILES | "human";
+  handStartStack: number;
   stack: number;
   hole: Card[];
   folded: boolean;
@@ -631,6 +632,7 @@ function freshGame(
     ...template,
     ...(id > 0 ? stylePool[id - 1] : {}),
     id,
+    handStartStack: stacks[id],
     stack: stacks[id],
     hole: [],
     folded: false,
@@ -1280,6 +1282,7 @@ function buildSoloHandHistoryEntry(game: Game, mode: GameMode, runId: string): P
       name: player.name,
       monogram: player.monogram,
       hole: player.hole.map((card) => ({ ...card })),
+      startingStack: player.handStartStack,
       folded: player.folded,
       contributed: player.contributed,
       stack: player.stack,
@@ -1351,6 +1354,81 @@ function PlayerSeat({ player, game, index, thinking, revealReady }: { player: Pl
       {player.folded && <div className="fold-label">已弃牌</div>}
       {privatelyPeeked && <div className="private-peek-label">偷看 · 仅你可见</div>}
     </div>
+  );
+}
+
+function HandHistoryReplayTable({
+  entry,
+  replay,
+}: {
+  entry: PokerHandHistoryEntry;
+  replay: ReturnType<typeof pokerReplayEventsAtStep>;
+}) {
+  const actionText = replay.table.action?.text ?? replay.current.text;
+  return (
+    <section className="hand-history-table-replay" aria-label={`第 ${entry.hand} 手牌桌回放`}>
+      <div className="hand-history-table-stage">
+        <div className="hand-history-poker-table">
+          <div className="hand-history-table-rail" />
+          <div className="hand-history-table-felt">
+            <div className="felt-grain" />
+            <div className="hand-history-table-pot">
+              <span>{replay.table.settled ? "本手总池" : "当前底池"}</span>
+              <strong><i />{replay.table.settled ? entry.totalPot : replay.table.pot}</strong>
+              {replay.table.settled && <em>已结算</em>}
+            </div>
+            <div className="hand-history-table-board" aria-label={`公共牌 ${replay.table.boardCount} 张`}>
+              {[0, 1, 2, 3, 4].map((index) => (
+                <PlayingCard
+                  key={`${entry.id}-replay-board-${index}`}
+                  card={index < replay.table.boardCount ? entry.board[index] : undefined}
+                  ghost={index >= replay.table.boardCount}
+                />
+              ))}
+            </div>
+            <div className="hand-history-table-signature">RANGECRAFT <span>◆</span> HAND REPLAY</div>
+          </div>
+
+          {entry.players.map((player, index) => {
+            const state = replay.table.players.find((candidate) => candidate.playerId === player.id);
+            const role = historySeatRole(player.id, entry.dealer, entry.players.length);
+            const isCurrent = replay.table.currentPlayerId === player.id;
+            const folded = state?.folded ?? false;
+            const winner = state?.isWinner ?? false;
+            return (
+              <article
+                className={`hand-history-table-seat history-seat-${index} ${player.isHuman ? "is-hero" : ""} ${isCurrent ? "is-current" : ""} ${folded ? "is-folded" : ""} ${winner ? "is-winner" : ""}`}
+                key={player.id}
+                aria-label={`${player.name}${role ? `，${role}` : ""}，筹码 ${state?.stack ?? player.stack}${folded ? "，已弃牌" : ""}${winner ? "，赢家" : ""}`}
+              >
+                <div className="hand-history-table-hole" aria-label={`${player.name} 的完整底牌`}>
+                  {(player.hole.length ? player.hole : [undefined, undefined]).map((card, cardIndex) => (
+                    <PlayingCard key={card ? cardKey(card) : `${player.id}-back-${cardIndex}`} card={card} />
+                  ))}
+                </div>
+                <div className="hand-history-table-player-panel">
+                  <div className="avatar">{player.monogram}</div>
+                  <div className="hand-history-table-player-copy">
+                    <div><strong>{player.name}</strong>{role && <span>{role}</span>}</div>
+                    <small>{player.isHuman ? "HERO" : `SEAT ${index + 1}`}</small>
+                  </div>
+                  <div className="hand-history-table-stack"><i />{state?.stack ?? player.stack}</div>
+                </div>
+                {(state?.streetBet ?? 0) > 0 && <div className="hand-history-table-bet"><i />{state?.streetBet}</div>}
+                {isCurrent && replay.table.action && <div className="hand-history-seat-action">{replay.table.action.label}</div>}
+                {folded && <div className="hand-history-table-folded">已弃牌</div>}
+                {winner && <div className="hand-history-table-winner">赢家</div>}
+              </article>
+            );
+          })}
+        </div>
+      </div>
+      <div className={`hand-history-action-banner ${replay.current.kind}`}>
+        <span>{STREET_LABELS[replay.current.street]} · {replay.current.kind === "deal" ? "发牌" : replay.current.kind === "result" ? "结算" : "行动"}</span>
+        <strong>{actionText}</strong>
+        <small>第 {replay.currentStep + 1}/{replay.events.length} 步 · {replay.table.settled ? `本手争夺 ${entry.totalPot} · 桌上底池 0` : `底池 ${replay.table.pot}`}</small>
+      </div>
+    </section>
   );
 }
 
@@ -2669,52 +2747,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                   <div className="hand-history-pot"><span>争夺底池</span><strong>{selectedHistory.totalPot}</strong></div>
                 </header>
 
-                <section className="hand-history-board" aria-label="回放公共牌">
-                  <div className="hand-history-board-copy">
-                    <span>{STREET_LABELS[replayState.current.street]}</span>
-                    <strong>公共牌 {replayState.boardCount}/5</strong>
-                    <em>第 {replayState.currentStep + 1}/{replayState.events.length} 步</em>
-                  </div>
-                  <div className="hand-history-board-cards">
-                    {[0, 1, 2, 3, 4].map((index) => (
-                      <PlayingCard
-                        key={`${selectedHistory.id}-board-${index}`}
-                        card={index < replayState.boardCount ? selectedHistory.board[index] : undefined}
-                        ghost={index >= replayState.boardCount}
-                      />
-                    ))}
-                  </div>
-                </section>
-
-                <section className="hand-history-players" aria-label="本手所有玩家底牌">
-                  {selectedHistory.players.map((player) => {
-                    const payout = selectedHistory.payouts.find((entry) => entry.playerId === player.id)?.amount ?? 0;
-                    const returned = selectedHistory.returns.find((entry) => entry.playerId === player.id)?.amount ?? 0;
-                    const winner = selectedHistory.winnerIds.includes(player.id);
-                    const mainPotWinner = selectedHistory.mainPotWinnerIds.includes(player.id);
-                    const role = historySeatRole(player.id, selectedHistory.dealer, selectedHistory.players.length);
-                    const completeCards = [...player.hole, ...selectedHistory.board];
-                    const finalHand = completeCards.length >= 5 ? bestHand(completeCards).name : "翻牌前手牌";
-                    return (
-                      <article className={`hand-history-player ${winner ? "is-winner" : ""} ${player.folded ? "is-folded" : ""}`} key={player.id}>
-                        <div className="hand-history-player-copy">
-                          <span>{player.isHuman ? "HERO" : `SEAT ${player.id + 1}`}{role ? ` · ${role}` : ""}</span>
-                          <strong>{player.name}</strong>
-                          <em>{winner ? mainPotWinner ? "主池赢家" : "边池赢家" : player.folded ? "已弃牌" : "摊牌未胜"} · {finalHand}</em>
-                        </div>
-                        <div className="hand-history-hole" aria-label={`${player.name} 的完整底牌`}>
-                          {player.hole.map((card) => <PlayingCard key={cardKey(card)} card={card} />)}
-                        </div>
-                        <div className="hand-history-player-stats">
-                          <span>投入 {player.contributed}</span>
-                          {payout > 0 && <span>赢得 {payout}</span>}
-                          {returned > 0 && <span>退回 {returned}</span>}
-                          <span>终局筹码 {player.stack}</span>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </section>
+                <HandHistoryReplayTable entry={selectedHistory} replay={replayState} />
 
                 <section className="hand-history-replay" aria-label="牌局逐步回放">
                   <div className="hand-history-controls">

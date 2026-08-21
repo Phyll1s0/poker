@@ -17,6 +17,8 @@ export type PokerHistoryPlayer = {
   name: string;
   monogram: string;
   hole: PokerHistoryCard[];
+  /** Exact stack before this hand posted blinds. Added in v1 records defensively. */
+  startingStack?: number;
   folded: boolean;
   contributed: number;
   stack: number;
@@ -64,6 +66,36 @@ export type PokerReplayEvent = {
   boardCount: number;
   text: string;
   playerId?: number;
+  actionIndex?: number;
+};
+
+export type PokerReplayPlayerState = {
+  playerId: number;
+  stack: number;
+  streetBet: number;
+  contributed: number;
+  folded: boolean;
+  isWinner: boolean;
+};
+
+export type PokerReplayActionState = {
+  playerId: number;
+  kind: PokerHistoryActionKind;
+  amount: number;
+  raiseTo: number | null;
+  isAllIn: boolean;
+  label: string;
+  text: string;
+};
+
+export type PokerReplayTableState = {
+  street: PokerHistoryStreet;
+  boardCount: number;
+  pot: number;
+  settled: boolean;
+  currentPlayerId: number | null;
+  action: PokerReplayActionState | null;
+  players: PokerReplayPlayerState[];
 };
 
 const SUITS = new Set<PokerHistorySuit>(["♠", "♥", "♦", "♣"]);
@@ -110,6 +142,7 @@ function isPlayer(value: unknown): value is PokerHistoryPlayer {
     && Array.isArray(player.hole)
     && player.hole.length === 2
     && player.hole.every(isCard)
+    && (player.startingStack === undefined || (finiteNumber(player.startingStack) && player.startingStack >= 0))
     && typeof player.folded === "boolean"
     && finiteNumber(player.contributed)
     && finiteNumber(player.stack)
@@ -253,6 +286,7 @@ export function buildPokerReplayEvents(entry: PokerHandHistoryEntry): PokerRepla
         boardCount,
         text: action.description,
         playerId: action.playerId,
+        actionIndex: index,
       });
     });
   }
@@ -272,6 +306,136 @@ export function clampPokerReplayStep(step: number, eventCount: number) {
   return Math.max(0, Math.min(eventCount - 1, Math.trunc(Number.isFinite(step) ? step : 0)));
 }
 
+function pokerReplayStartingStack(entry: PokerHandHistoryEntry, player: PokerHistoryPlayer) {
+  if (finiteNumber(player.startingStack) && player.startingStack >= 0) return player.startingStack;
+  const payout = entry.payouts.find((item) => item.playerId === player.id)?.amount ?? 0;
+  const returned = entry.returns.find((item) => item.playerId === player.id)?.amount ?? 0;
+  return Math.max(0, player.stack + player.contributed - payout - returned);
+}
+
+function pokerReplayActionLabel(action: PokerHistoryAction, raiseTo: number | null) {
+  if (action.kind === "fold") return "弃牌";
+  if (action.kind === "check") return "过牌";
+  if (action.kind === "call") return `${action.isAllIn ? "全下跟注" : "跟注"} ${action.amount}`;
+  if (action.street !== "preflop" && action.toCall === 0) {
+    return `${action.isAllIn ? "全下" : "下注"} ${raiseTo ?? action.amount}`;
+  }
+  return `${action.isAllIn ? "全下到" : "加注到"} ${raiseTo ?? action.amount}`;
+}
+
+/**
+ * Rebuilds the visible table for a completed solo hand at one replay event.
+ * Chips posted as blinds, every street bet, folds, stacks and the pot are
+ * replayed from the authoritative action journal instead of inferred from the
+ * prose log.
+ */
+export function buildPokerReplayTableState(
+  entry: PokerHandHistoryEntry,
+  events: readonly PokerReplayEvent[],
+  currentStep: number,
+): PokerReplayTableState {
+  const playerCount = entry.players.length;
+  const smallBlindId = playerCount > 1 ? (entry.dealer + 1) % playerCount : -1;
+  const bigBlindId = playerCount > 1 ? (entry.dealer + 2) % playerCount : smallBlindId;
+  const players = entry.players.map<PokerReplayPlayerState>((player) => ({
+    playerId: player.id,
+    stack: pokerReplayStartingStack(entry, player),
+    streetBet: 0,
+    contributed: 0,
+    folded: false,
+    isWinner: false,
+  }));
+
+  const postBlind = (playerId: number, amount: number) => {
+    const player = players.find((candidate) => candidate.playerId === playerId);
+    if (!player) return;
+    const paid = Math.min(amount, player.stack);
+    player.stack -= paid;
+    player.streetBet += paid;
+    player.contributed += paid;
+  };
+  postBlind(smallBlindId, 5);
+  if (bigBlindId !== smallBlindId) postBlind(bigBlindId, 10);
+
+  let street: PokerHistoryStreet = "preflop";
+  let boardCount = 0;
+  let pot = players.reduce((sum, player) => sum + player.streetBet, 0);
+  let settled = false;
+  let currentPlayerId: number | null = null;
+  let currentAction: PokerReplayActionState | null = null;
+  const lastVisible = Math.min(events.length - 1, Math.max(0, currentStep));
+
+  for (let eventIndex = 0; eventIndex <= lastVisible; eventIndex += 1) {
+    const event = events[eventIndex];
+    street = event.street;
+    boardCount = event.boardCount;
+    currentPlayerId = null;
+    currentAction = null;
+
+    if (event.kind === "deal") {
+      if (event.street !== "preflop") {
+        players.forEach((player) => { player.streetBet = 0; });
+      }
+      continue;
+    }
+
+    if (event.kind === "result") {
+      settled = true;
+      // Result snapshots use post-settlement stacks, so the chips have already
+      // left the middle. Keeping totalPot here would visually count the same
+      // chips once in the winners' stacks and again in the pot.
+      pot = 0;
+      players.forEach((player) => {
+        const finalPlayer = entry.players.find((candidate) => candidate.id === player.playerId);
+        player.stack = finalPlayer?.stack ?? player.stack;
+        player.streetBet = 0;
+        player.contributed = finalPlayer?.contributed ?? player.contributed;
+        player.folded = finalPlayer?.folded ?? player.folded;
+        player.isWinner = entry.winnerIds.includes(player.playerId);
+      });
+      continue;
+    }
+
+    const action = event.actionIndex === undefined ? undefined : entry.actions[event.actionIndex];
+    if (!action) continue;
+    const player = players.find((candidate) => candidate.playerId === action.playerId);
+    if (!player) continue;
+    // stackBefore is captured by the engine immediately before this action and
+    // corrects any old or imported record whose blind metadata is incomplete.
+    player.stack = action.stackBefore;
+    const streetBetBefore = player.streetBet;
+    if (action.kind === "fold") player.folded = true;
+    if (action.kind === "call" || action.kind === "raise") {
+      player.stack = Math.max(0, player.stack - action.amount);
+      player.streetBet += action.amount;
+      player.contributed += action.amount;
+    }
+    const raiseTo = action.kind === "raise" ? streetBetBefore + action.amount : null;
+    const label = pokerReplayActionLabel(action, raiseTo);
+    currentPlayerId = player.playerId;
+    currentAction = {
+      playerId: player.playerId,
+      kind: action.kind,
+      amount: action.amount,
+      raiseTo,
+      isAllIn: action.isAllIn,
+      label,
+      text: `${entry.players.find((candidate) => candidate.id === player.playerId)?.name ?? `座位 ${player.playerId + 1}`} ${label}`,
+    };
+    pot = Math.max(0, action.potBefore + action.amount);
+  }
+
+  return {
+    street,
+    boardCount,
+    pot,
+    settled,
+    currentPlayerId,
+    action: currentAction,
+    players,
+  };
+}
+
 export function pokerReplayEventsAtStep(entry: PokerHandHistoryEntry, step: number) {
   const events = buildPokerReplayEvents(entry);
   const currentStep = clampPokerReplayStep(step, events.length);
@@ -281,5 +445,6 @@ export function pokerReplayEventsAtStep(entry: PokerHandHistoryEntry, step: numb
     current: events[currentStep],
     visible: events.slice(0, currentStep + 1),
     boardCount: events[currentStep]?.boardCount ?? 0,
+    table: buildPokerReplayTableState(entry, events, currentStep),
   };
 }

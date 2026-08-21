@@ -5,6 +5,7 @@ import {
   ONLINE_BIG_BLIND,
   ONLINE_COMMAND_RECEIPT_LIMIT,
   ONLINE_DEFAULT_ACTION_TIME_MS,
+  ONLINE_HAND_HISTORY_LIMIT,
   ONLINE_NEXT_HAND_DELAY_MS,
   ONLINE_STARTING_STACK,
   applyOnlinePokerCommand,
@@ -171,6 +172,12 @@ test("a current non-all-in player leaves by folding and is removed after the han
     seat: 0,
     street: "preflop",
     action: "fold",
+    amount: 0,
+    toAmount: 5,
+    raiseTo: null,
+    potAfter: 15,
+    stackAfter: 995,
+    community: [],
     timedOut: false,
     source: "leave",
     occurredAt: 1_000_000,
@@ -320,6 +327,12 @@ test("time cards extend only the current turn and timeout is server-authoritativ
     seat: 0,
     street: "preflop",
     action: "fold",
+    amount: 0,
+    toAmount: 5,
+    raiseTo: null,
+    potAfter: 15,
+    stackAfter: 995,
+    community: [],
     timedOut: true,
     source: "timeout",
     occurredAt: now,
@@ -390,12 +403,18 @@ test("public action journal preserves every accepted action without exposing acc
   assert.equal(publicHand.recentActions.length, 2);
   assert.deepEqual(Object.keys(publicHand.recentActions[0]).sort(), [
     "action",
+    "amount",
+    "community",
     "occurredAt",
+    "potAfter",
+    "raiseTo",
     "seat",
     "seq",
     "source",
+    "stackAfter",
     "street",
     "timedOut",
+    "toAmount",
   ]);
   assert.doesNotMatch(JSON.stringify(publicHand.recentActions), /user-[0-9]/);
   assert.doesNotMatch(JSON.stringify(publicHand.recentActions), /hole|deck|accountId/);
@@ -427,6 +446,177 @@ test("action receipts stay idempotent and legacy hands acquire a sound cursor", 
   assert.deepEqual(normalized.hand.recentActions.map(({ seq, action }) => ({ seq, action })), [
     { seq: 1, action: "call" },
   ]);
+});
+
+test("legacy v12 action journals normalize missing replay fields before the next command", () => {
+  const scenario = startRoom(2);
+  let room = accepted(act(scenario.room, actors[0], "call", scenario.options));
+  const legacyEvent = room.hand.recentActions[0];
+  delete legacyEvent.amount;
+  delete legacyEvent.toAmount;
+  delete legacyEvent.raiseTo;
+  delete legacyEvent.potAfter;
+  delete legacyEvent.stackAfter;
+  delete legacyEvent.community;
+  delete room.hand.actionHistory;
+  delete room.hand.startedAt;
+  delete room.handHistory;
+
+  room = accepted(act(room, actors[1], "check", scenario.options));
+  assert.equal(room.hand.actionHistory.length, 2);
+  assert.deepEqual(room.hand.actionHistory[0], {
+    seq: 1,
+    seat: 0,
+    street: "preflop",
+    action: "call",
+    amount: null,
+    toAmount: null,
+    raiseTo: null,
+    potAfter: null,
+    stackAfter: null,
+    community: [],
+    timedOut: false,
+    source: "player",
+    occurredAt: 1_000_000,
+  });
+  assert.equal(room.hand.actionHistory[1].amount, 0);
+  assert.equal(room.handHistory.length, 0);
+  assert.equal(room.hand.startedAt, 1_000_000);
+});
+
+test("completed hand history seals an exact, deeply cloned visual replay", () => {
+  const { room: started, options } = startRoom(2);
+  let room = accepted(act(started, actors[0], "raise", options, 30));
+  room = accepted(act(room, actors[1], "call", options));
+  room = accepted(act(room, actors[1], "check", options));
+  room = accepted(act(room, actors[0], "raise", options, 20));
+  room = accepted(act(room, actors[1], "fold", options));
+
+  assert.equal(room.handHistory.length, 1);
+  const history = room.handHistory[0];
+  assert.equal(history.id, room.hand.id);
+  assert.equal(history.number, 1);
+  assert.equal(history.smallBlind, 5);
+  assert.equal(history.bigBlind, 10);
+  assert.equal(history.community.length, 3);
+  assert.deepEqual(history.actions.map((event) => ({
+    action: event.action,
+    amount: event.amount,
+    toAmount: event.toAmount,
+    raiseTo: event.raiseTo,
+    potAfter: event.potAfter,
+    stackAfter: event.stackAfter,
+    board: event.community.length,
+  })), [
+    { action: "raise", amount: 25, toAmount: 30, raiseTo: 30, potAfter: 40, stackAfter: 970, board: 0 },
+    { action: "call", amount: 20, toAmount: 30, raiseTo: null, potAfter: 60, stackAfter: 970, board: 0 },
+    { action: "check", amount: 0, toAmount: 0, raiseTo: null, potAfter: 60, stackAfter: 970, board: 3 },
+    { action: "raise", amount: 20, toAmount: 20, raiseTo: 20, potAfter: 80, stackAfter: 950, board: 3 },
+    { action: "fold", amount: 0, toAmount: 0, raiseTo: null, potAfter: 80, stackAfter: 970, board: 3 },
+  ]);
+  assert.deepEqual(history.players.map((player) => ({
+    seat: player.seat,
+    start: player.stackAtHandStart,
+    afterBlinds: player.stackAfterBlinds,
+    final: player.stackAfterHand,
+    contributed: player.contributed,
+  })), [
+    { seat: 0, start: 1_000, afterBlinds: 995, final: 1_030, contributed: 50 },
+    { seat: 1, start: 1_000, afterBlinds: 990, final: 970, contributed: 30 },
+  ]);
+  assert.equal(history.result.totalPot, 60);
+  assert.deepEqual(history.result.returns, [{ seat: 0, amount: 20 }]);
+  assert.deepEqual(history.result.winnerSeats, [0]);
+
+  const cloned = setOnlinePlayerConnection(room, actors[0].accountId, false, 1_100_000);
+  assert.notEqual(cloned.handHistory, room.handHistory);
+  assert.notEqual(cloned.handHistory[0], room.handHistory[0]);
+  assert.notEqual(cloned.handHistory[0].players[0].hole, room.handHistory[0].players[0].hole);
+  assert.notEqual(cloned.handHistory[0].actions[2].community, room.handHistory[0].actions[2].community);
+  assert.notEqual(cloned.handHistory[0].result.payouts, room.handHistory[0].result.payouts);
+});
+
+test("completed hand history is idempotent and capped to the latest thirty hands", () => {
+  const scenario = startRoom(2, { roomOptions: { tableMode: "cash" } });
+  let room = scenario.room;
+  const firstFoldPayload = {
+    type: "act",
+    handId: room.hand.id,
+    action: "fold",
+    commandId: "history-idempotent-fold",
+    expectedRevision: room.revision,
+  };
+  const firstFold = applyOnlinePokerCommand(room, actors[room.hand.currentSeat], firstFoldPayload, scenario.options);
+  room = accepted(firstFold);
+  const duplicateFold = applyOnlinePokerCommand(room, actors[0], firstFoldPayload, scenario.options);
+  assert.equal(duplicateFold.ok, true);
+  assert.equal(duplicateFold.duplicate, true);
+  assert.equal(duplicateFold.state.handHistory.length, 1);
+
+  for (let completed = 1; completed < ONLINE_HAND_HISTORY_LIMIT + 1; completed += 1) {
+    const completedHandId = room.hand.id;
+    const deadline = room.hand.nextHandAt;
+    scenario.options.now = () => deadline;
+    room = accepted(command(room, actors[0], { type: "timeout", handId: completedHandId }, scenario.options));
+    assert.equal(room.phase, "playing");
+    const actor = actors[room.hand.currentSeat];
+    room = accepted(act(room, actor, "fold", scenario.options));
+    assert.ok(room.handHistory.length <= ONLINE_HAND_HISTORY_LIMIT);
+  }
+
+  assert.equal(room.handHistory.length, ONLINE_HAND_HISTORY_LIMIT);
+  assert.equal(room.handHistory[0].number, 2);
+  assert.equal(room.handHistory.at(-1).number, ONLINE_HAND_HISTORY_LIMIT + 1);
+  assert.equal(new Set(room.handHistory.map((entry) => entry.id)).size, ONLINE_HAND_HISTORY_LIMIT);
+});
+
+test("hand history projection protects hidden cards and unlocks full review only for finished participants", () => {
+  const { room: started, options } = startRoom(2, { roomOptions: { tableMode: "cash" } });
+  const privateHoles = new Map(started.hand.players.map((player) => [player.seat, player.hole]));
+  let room = accepted(act(started, actors[0], "fold", options));
+
+  const ownerBefore = projectRoomState(room, actors[0].accountId).handHistory[0];
+  const winnerBefore = projectRoomState(room, actors[1].accountId).handHistory[0];
+  const spectatorBefore = projectRoomState(room, null).handHistory[0];
+  assert.deepEqual(ownerBefore.players[0].holeCards, privateHoles.get(0));
+  assert.equal(ownerBefore.players[1].holeCards, null);
+  assert.equal(winnerBefore.players[0].holeCards, null);
+  assert.deepEqual(winnerBefore.players[1].holeCards, privateHoles.get(1));
+  assert.ok(spectatorBefore.players.every((player) => player.holeCards === null));
+
+  room = accepted(command(room, actors[1], {
+    type: "show",
+    handId: room.hand.id,
+    show: true,
+  }, options));
+  assert.equal(room.handHistory[0].players.find((player) => player.seat === 1).shown, true);
+  assert.deepEqual(
+    projectRoomState(room, null).handHistory[0].players.find((player) => player.seat === 1).holeCards,
+    privateHoles.get(1),
+    "a voluntary show is synchronized into the sealed history",
+  );
+
+  room = accepted(command(room, actors[0], { type: "finish" }, options));
+  const nextHandAt = room.hand.nextHandAt;
+  options.now = () => nextHandAt;
+  room = accepted(command(room, actors[0], { type: "timeout", handId: room.hand.id }, options));
+  assert.equal(room.phase, "finished");
+
+  room.handHistory[0].actions[0].accountId = actors[0].accountId;
+  room.handHistory[0].actions[0].deck = ["private-action-value"];
+  room.handHistory[0].result.accountId = actors[1].accountId;
+  room.handHistory[0].result.deck = ["private-result-value"];
+  for (const actor of actors.slice(0, 2)) {
+    const participantHistory = projectRoomState(room, actor.accountId).handHistory[0];
+    assert.ok(participantHistory.players.every((player) => player.holeCards?.length === 2));
+  }
+  for (const viewer of [null, actors[2].accountId]) {
+    const visitorHistory = projectRoomState(room, viewer).handHistory[0];
+    assert.equal(visitorHistory.players.find((player) => player.seat === 0).holeCards, null);
+    assert.ok(visitorHistory.players.find((player) => player.seat === 1).holeCards);
+    const serialized = JSON.stringify(visitorHistory);
+    assert.doesNotMatch(serialized, /user-[0-9]|private-action-value|private-result-value|"deck"|"accountId"/);
+  }
 });
 
 test("commands use optimistic revision checks and idempotent command IDs", () => {

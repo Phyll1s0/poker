@@ -54,6 +54,66 @@ type Card = {
   suit: "♠" | "♥" | "♦" | "♣";
 };
 
+type HandHistoryCard = {
+  rank: number;
+  suit: string | number;
+};
+
+type HandHistoryAction = {
+  seq: number;
+  seat: number;
+  street: "preflop" | "flop" | "turn" | "river";
+  action: "fold" | "check" | "call" | "raise";
+  amount: number | null;
+  toAmount: number | null;
+  raiseTo: number | null;
+  potAfter: number | null;
+  stackAfter: number | null;
+  community: HandHistoryCard[];
+  timedOut: boolean;
+  source: "player" | "timeout" | "leave";
+  occurredAt: number;
+};
+
+type HandHistoryPlayer = {
+  seat: number;
+  displayName: string;
+  stackAtHandStart: number;
+  stackAfterBlinds: number;
+  stackAfterHand: number;
+  contributed: number;
+  folded: boolean;
+  shown: boolean;
+  holeCardCount: number;
+  holeCards: [HandHistoryCard, HandHistoryCard] | null;
+};
+
+type HandHistoryResult = {
+  kind: "uncontested" | "showdown";
+  totalPot: number;
+  winnerSeats: number[];
+  mainPotWinnerSeats: number[];
+  payouts: { seat: number; amount: number }[];
+  returns: { seat: number; amount: number }[];
+  handNames: { seat: number; name: string }[];
+};
+
+type HandHistoryEntry = {
+  id: string;
+  number: number;
+  startedAt: number;
+  completedAt: number;
+  dealerSeat: number;
+  smallBlindSeat: number;
+  bigBlindSeat: number;
+  smallBlind: number;
+  bigBlind: number;
+  community: HandHistoryCard[];
+  players: HandHistoryPlayer[];
+  actions: HandHistoryAction[];
+  result: HandHistoryResult;
+};
+
 type PublicPlayer = {
   accountId: string;
   handle: string;
@@ -175,6 +235,7 @@ type RoomSnapshot = {
     timeBankUnitMs: number;
     finishRequested: boolean;
     sessionReport: SessionReport | null;
+    handHistory: HandHistoryEntry[];
     hand: {
       pendingShowSeat: number | null;
       actionDeadlineAt: number | null;
@@ -523,6 +584,432 @@ function TableSurface({
           tableMessage={seatMessages.get(player.seat)}
         />
       ))}
+    </div>
+  );
+}
+
+const HISTORY_SUITS = ["♠", "♥", "♦", "♣"] as const;
+
+function replayCard(card: HandHistoryCard): Card | null {
+  const suit = typeof card.suit === "number" ? HISTORY_SUITS[card.suit] : card.suit;
+  if (!suit || !HISTORY_SUITS.includes(suit as Card["suit"])) return null;
+  const ranks: Record<number, string> = { 14: "A", 13: "K", 12: "Q", 11: "J" };
+  return {
+    rank: ranks[card.rank] ?? String(card.rank),
+    suit: suit as Card["suit"],
+  };
+}
+
+function replayActionLabel(action: HandHistoryAction) {
+  let label = "";
+  if (action.action === "fold") label = "弃牌";
+  if (action.action === "check") label = "过牌";
+  if (action.action === "call") label = `跟注 ${action.amount ?? "—"}`;
+  if (action.action === "raise") label = `加注到 ${action.raiseTo ?? action.toAmount ?? "—"}`;
+  if (action.source === "leave") return `${label} · 离桌自动`;
+  if (action.timedOut || action.source === "timeout") return `${label} · 超时`;
+  return label;
+}
+
+function replayResultSummary(entry: HandHistoryEntry) {
+  const nameBySeat = new Map(entry.players.map((player) => [player.seat, player.displayName]));
+  const payouts = entry.result.payouts.map((payout) => {
+    const handName = entry.result.handNames.find((hand) => hand.seat === payout.seat)?.name;
+    return `${nameBySeat.get(payout.seat) ?? `座位 ${payout.seat + 1}`}${handName ? `（${handName}）` : ""} 赢得 ${payout.amount}`;
+  });
+  const returns = entry.result.returns.map((item) => `${nameBySeat.get(item.seat) ?? `座位 ${item.seat + 1}`} 收回未跟注 ${item.amount}`);
+  return [...payouts, ...returns].join("；") || `本手底池 ${entry.result.totalPot} 已结算`;
+}
+
+function replayWinnerLabel(entry: HandHistoryEntry) {
+  const winnerNames = entry.result.winnerSeats
+    .map((seat) => entry.players.find((player) => player.seat === seat)?.displayName)
+    .filter((name): name is string => Boolean(name));
+  return winnerNames.length ? `${winnerNames.join(" / ")} 赢得 ${entry.result.totalPot}` : `底池 ${entry.result.totalPot}`;
+}
+
+function ReplaySeat({
+  player,
+  visualSeat,
+  stack,
+  entry,
+  folded,
+  winner,
+  currentAction,
+  complete,
+}: {
+  player: HandHistoryPlayer;
+  visualSeat: number;
+  stack: number;
+  entry: HandHistoryEntry;
+  folded: boolean;
+  winner: boolean;
+  currentAction: HandHistoryAction | null;
+  complete: boolean;
+}) {
+  const cards = (player.holeCards ?? [])
+    .map(replayCard)
+    .filter((card): card is Card => card !== null);
+  const hiddenCount = player.holeCards ? 0 : player.holeCardCount;
+  const seatClassName = [
+    styles.replaySeat,
+    styles[`replaySeat${Math.max(0, Math.min(5, visualSeat))}`],
+    currentAction ? styles.replaySeatActive : "",
+    folded ? styles.replaySeatFolded : "",
+    winner ? styles.replaySeatWinner : "",
+  ].filter(Boolean).join(" ");
+  const blindLabel = player.seat === entry.smallBlindSeat
+    ? `SB ${entry.smallBlind}`
+    : player.seat === entry.bigBlindSeat
+      ? `BB ${entry.bigBlind}`
+      : null;
+  const statusLabel = complete
+    ? winner
+      ? "本手赢家"
+      : folded
+        ? "已弃牌"
+        : player.shown && player.holeCards
+          ? "已亮牌"
+          : player.holeCards
+            ? "底牌仅对你可见"
+            : "已盖牌"
+    : folded
+      ? "已弃牌"
+      : `起手 ${player.stackAtHandStart}`;
+
+  return (
+    <div className={seatClassName} data-replay-seat={player.seat}>
+      <div className={styles.replaySeatCards} aria-label={`${player.displayName} 的历史手牌`}>
+        {cards.map((card, index) => <CardView key={`${card.rank}-${card.suit}-${index}`} card={card} mini />)}
+        {Array.from({ length: hiddenCount }, (_, index) => <span className={styles.miniBack} key={`history-hidden-${index}`} />)}
+        {!player.holeCards && complete && <b>已盖牌</b>}
+      </div>
+      <div className={styles.playerPanel}>
+        <span className={styles.avatar}>{Array.from(player.displayName)[0]?.toUpperCase() ?? "P"}</span>
+        <div className={styles.seatIdentity}>
+          <div>
+            <strong>{player.displayName}</strong>
+            {blindLabel && <span className={styles.replayBlindChip}>{blindLabel}</span>}
+          </div>
+          <span>{statusLabel}</span>
+        </div>
+        <div className={styles.seatStack}><i />{stack}</div>
+      </div>
+      {player.seat === entry.dealerSeat && <span className={styles.replayDealerButton} title="庄家按钮">D</span>}
+      {complete && <span className={styles.replayContribution}>投入 {player.contributed}</span>}
+      {currentAction && <span className={styles.replayActionBubble}>{replayActionLabel(currentAction)}</span>}
+    </div>
+  );
+}
+
+function ReplayTable({
+  entry,
+  step,
+  viewerSeat,
+}: {
+  entry: HandHistoryEntry;
+  step: number;
+  viewerSeat: number | null;
+}) {
+  const maxStep = entry.actions.length + 1;
+  const visibleStep = Math.max(0, Math.min(step, maxStep));
+  const complete = visibleStep === maxStep;
+  const visibleActions = entry.actions.slice(0, Math.min(visibleStep, entry.actions.length));
+  const currentAction = complete ? null : visibleActions.at(-1) ?? null;
+  const boardSource = complete ? entry.community : currentAction?.community ?? [];
+  const board = boardSource.map(replayCard).filter((card): card is Card => card !== null);
+  const initialPot = entry.players.reduce(
+    (total, player) => total + Math.max(0, player.stackAtHandStart - player.stackAfterBlinds),
+    0,
+  );
+  const latestPot = [...visibleActions].reverse().find((action) => action.potAfter !== null)?.potAfter;
+  const pot = complete ? entry.result.totalPot : latestPot ?? initialPot;
+  const stackBySeat = new Map(entry.players.map((player) => [player.seat, player.stackAfterBlinds]));
+  for (const action of visibleActions) {
+    if (action.stackAfter !== null) stackBySeat.set(action.seat, action.stackAfter);
+  }
+  if (complete) {
+    for (const player of entry.players) stackBySeat.set(player.seat, player.stackAfterHand);
+  }
+  const foldedSeats = new Set(
+    visibleActions.filter((action) => action.action === "fold").map((action) => action.seat),
+  );
+  if (complete) {
+    for (const player of entry.players) {
+      if (player.folded) foldedSeats.add(player.seat);
+    }
+  }
+  const anchorSeat = viewerSeat !== null && entry.players.some((player) => player.seat === viewerSeat)
+    ? viewerSeat
+    : entry.players[0]?.seat ?? 0;
+  const orderedPlayers = [...entry.players].sort((left, right) => {
+    const leftOffset = (left.seat - anchorSeat + 6) % 6;
+    const rightOffset = (right.seat - anchorSeat + 6) % 6;
+    return leftOffset - rightOffset;
+  });
+  const visualSeats = VISUAL_SEATS_BY_PLAYER_COUNT[Math.min(6, Math.max(1, orderedPlayers.length))] ?? VISUAL_SEATS_BY_PLAYER_COUNT[6];
+
+  return (
+    <div className={styles.replayTable} aria-label={`第 ${entry.number} 手牌桌回放`}>
+      <div className={styles.tableRail} />
+      <div className={styles.tableFelt}>
+        <div className={styles.feltGrain} />
+        <div className={styles.boardArea}>
+          <div className={styles.potLabel}>
+            <span>{complete ? "本手总池" : "底池"}</span>
+            <strong><i />{pot}</strong>
+          </div>
+          <div className={styles.cards} aria-label="回放公共牌">
+            {board.map((card, index) => <CardView key={`${card.rank}-${card.suit}-${index}`} card={card} />)}
+            {Array.from({ length: Math.max(0, 5 - board.length) }, (_, index) => <span className={styles.cardSlot} key={`history-slot-${index}`} />)}
+          </div>
+        </div>
+        <div className={styles.tableSignature}>RANGECRAFT <span>◆</span> HAND REPLAY</div>
+      </div>
+      {orderedPlayers.map((player, index) => (
+        <ReplaySeat
+          key={`${entry.id}-${player.seat}`}
+          player={player}
+          visualSeat={visualSeats[index] ?? index}
+          stack={stackBySeat.get(player.seat) ?? player.stackAfterBlinds}
+          entry={entry}
+          folded={foldedSeats.has(player.seat)}
+          winner={complete && entry.result.winnerSeats.includes(player.seat)}
+          currentAction={currentAction?.seat === player.seat ? currentAction : null}
+          complete={complete}
+        />
+      ))}
+    </div>
+  );
+}
+
+function HandHistoryModal({
+  entries,
+  viewerSeat,
+  onClose,
+}: {
+  entries: HandHistoryEntry[];
+  viewerSeat: number | null;
+  onClose: () => void;
+}) {
+  const recentHands = useMemo(
+    () => [...entries]
+      .sort((left, right) => right.completedAt - left.completedAt || right.number - left.number)
+      .slice(0, 30),
+    [entries],
+  );
+  const [selectedId, setSelectedId] = useState(() => recentHands[0]?.id ?? "");
+  const [step, setStep] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const selected = recentHands.find((entry) => entry.id === selectedId) ?? recentHands[0] ?? null;
+  const actionCount = selected?.actions.length ?? 0;
+  const maxStep = actionCount + 1;
+  const visibleStep = Math.max(0, Math.min(step, maxStep));
+  const currentAction = selected && visibleStep > 0 && visibleStep <= actionCount
+    ? selected.actions[visibleStep - 1]
+    : null;
+  const currentPlayer = currentAction
+    ? selected?.players.find((player) => player.seat === currentAction.seat) ?? null
+    : null;
+  const complete = Boolean(selected && visibleStep === maxStep);
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.isComposing) return;
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!playing || !selected || visibleStep >= maxStep) return;
+    const timer = window.setTimeout(() => {
+      const nextStep = Math.min(maxStep, visibleStep + 1);
+      setStep(nextStep);
+      if (nextStep >= maxStep) setPlaying(false);
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [maxStep, playing, selected, visibleStep]);
+
+  const selectHand = (entry: HandHistoryEntry) => {
+    setSelectedId(entry.id);
+    setStep(0);
+    setPlaying(false);
+  };
+
+  return (
+    <div
+      className={styles.historyOverlay}
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section className={styles.historyDialog} role="dialog" aria-modal="true" aria-labelledby="hand-history-title">
+        <header className={styles.historyHeader}>
+          <div>
+            <span>TABLE ARCHIVE · LAST 30 HANDS</span>
+            <h2 id="hand-history-title">多人牌谱 · 牌桌回放</h2>
+          </div>
+          <div className={styles.historyHeaderMeta}>
+            <span>{recentHands.length}/30 手</span>
+            <button type="button" onClick={onClose} aria-label="关闭牌谱回放">×</button>
+          </div>
+        </header>
+
+        {selected ? (
+          <div className={styles.historyBody}>
+            <aside className={styles.historySidebar} aria-label="最近牌谱">
+              <div className={styles.historySidebarHeading}>
+                <span>RECENT HANDS</span>
+                <strong>最近 {recentHands.length} 手</strong>
+              </div>
+              <div className={styles.historyHandList}>
+                {recentHands.map((entry) => (
+                  <button
+                    className={entry.id === selected.id ? styles.historyHandActive : ""}
+                    type="button"
+                    key={entry.id}
+                    onClick={() => selectHand(entry)}
+                    aria-pressed={entry.id === selected.id}
+                  >
+                    <span><b>第 {entry.number} 手</b><time>{new Date(entry.completedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</time></span>
+                    <small>{replayWinnerLabel(entry)}</small>
+                  </button>
+                ))}
+              </div>
+            </aside>
+
+            <div className={styles.replayWorkspace}>
+              <div className={styles.replayHeading}>
+                <div>
+                  <span>HAND {selected.number} · {selected.result.kind === "showdown" ? "摊牌" : "无人跟注"}</span>
+                  <strong>
+                    {complete
+                      ? replayResultSummary(selected)
+                      : currentAction
+                        ? `${currentPlayer?.displayName ?? `座位 ${currentAction.seat + 1}`} · ${replayActionLabel(currentAction)}`
+                        : `盲注 ${selected.smallBlind}/${selected.bigBlind} 已入池`}
+                  </strong>
+                </div>
+                <small>{new Date(selected.completedAt).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</small>
+              </div>
+
+              <div className={styles.replayContent}>
+                <div className={styles.replayTableColumn}>
+                  <div className={styles.replayTableViewport}>
+                    <ReplayTable entry={selected} step={visibleStep} viewerSeat={viewerSeat} />
+                  </div>
+                  <div className={styles.replayTransport}>
+                    <button
+                      type="button"
+                      onClick={() => { setPlaying(false); setStep(Math.max(0, visibleStep - 1)); }}
+                      disabled={visibleStep === 0}
+                    >
+                      ← 上一步
+                    </button>
+                    <button
+                      className={styles.replayPlayButton}
+                      type="button"
+                      onClick={() => {
+                        if (playing) {
+                          setPlaying(false);
+                          return;
+                        }
+                        if (visibleStep >= maxStep) setStep(0);
+                        setPlaying(true);
+                      }}
+                      aria-label={playing ? "暂停牌谱回放" : "播放牌谱回放"}
+                    >
+                      {playing ? "Ⅱ 暂停" : "▶ 播放"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setPlaying(false); setStep(Math.min(maxStep, visibleStep + 1)); }}
+                      disabled={visibleStep >= maxStep}
+                    >
+                      下一步 →
+                    </button>
+                    <label className={styles.replayScrubber}>
+                      <span>{visibleStep}/{maxStep}</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={maxStep}
+                        step={1}
+                        value={visibleStep}
+                        onChange={(event) => { setPlaying(false); setStep(Number(event.target.value)); }}
+                        aria-label="回放步骤"
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <aside className={styles.replayActionPanel} aria-label="本手行动记录">
+                  <div className={styles.replayActionHeading}>
+                    <span>ACTION TIMELINE</span>
+                    <strong>行动记录</strong>
+                  </div>
+                  <ol className={styles.replayActionList}>
+                    <li>
+                      <button
+                        className={visibleStep === 0 ? styles.replayActionCurrent : ""}
+                        type="button"
+                        onClick={() => { setPlaying(false); setStep(0); }}
+                        aria-current={visibleStep === 0 ? "step" : undefined}
+                      >
+                        <span>起手</span><strong>盲注入池</strong><small>{selected.smallBlind}/{selected.bigBlind}</small>
+                      </button>
+                    </li>
+                    {selected.actions.map((action, index) => {
+                      const player = selected.players.find((candidate) => candidate.seat === action.seat);
+                      const actionStep = index + 1;
+                      return (
+                        <li key={`${selected.id}-${action.seq}-${index}`}>
+                          <button
+                            className={visibleStep === actionStep ? styles.replayActionCurrent : ""}
+                            type="button"
+                            onClick={() => { setPlaying(false); setStep(actionStep); }}
+                            aria-current={visibleStep === actionStep ? "step" : undefined}
+                          >
+                            <span>{STREET_LABELS[action.street]} · #{action.seq}</span>
+                            <strong>{player?.displayName ?? `座位 ${action.seat + 1}`} · {replayActionLabel(action)}</strong>
+                            <small>{action.potAfter === null ? "底池 —" : `底池 ${action.potAfter}`} · 余码 {action.stackAfter ?? "—"}</small>
+                          </button>
+                        </li>
+                      );
+                    })}
+                    <li>
+                      <button
+                        className={complete ? styles.replayActionCurrent : ""}
+                        type="button"
+                        onClick={() => { setPlaying(false); setStep(maxStep); }}
+                        aria-current={complete ? "step" : undefined}
+                      >
+                        <span>结算</span>
+                        <strong>{replayWinnerLabel(selected)}</strong>
+                        <small>{selected.result.kind === "showdown" ? "摊牌完成" : "无人跟注"} · 总池 {selected.result.totalPot}</small>
+                      </button>
+                    </li>
+                  </ol>
+                </aside>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className={styles.historyEmpty}>
+            <strong>还没有可回放的牌谱</strong>
+            <span>完成第一手后，服务端会在这里保留最近 30 手。</span>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -909,6 +1396,7 @@ export default function MultiplayerClient({
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [chatError, setChatError] = useState<string | null>(null);
   const [rulesOpen, setRulesOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -999,6 +1487,7 @@ export default function MultiplayerClient({
     setChatSending(false);
     setUnreadChatCount(0);
     setChatError(null);
+    setHistoryOpen(false);
     setSnapshot(null);
   }, []);
 
@@ -1087,6 +1576,7 @@ export default function MultiplayerClient({
       setChatSending(false);
       setUnreadChatCount(0);
       setChatError(null);
+      setHistoryOpen(false);
     } else if (viewedRoomId.current !== roomId) {
       return;
     }
@@ -1456,6 +1946,7 @@ export default function MultiplayerClient({
 
   const selfPlayer = useMemo(() => snapshot?.players.find((player) => player.accountId === snapshot.selfAccountId) ?? null, [snapshot]);
   const game = snapshot?.game ?? null;
+  const handHistory = snapshot?.table.handHistory ?? [];
   const legal = game?.legalActions ?? null;
   const isOwner = snapshot?.room.ownerAccountId === snapshot?.selfAccountId;
   const isMyTurn = Boolean(game && game.actorAccountId === snapshot?.selfAccountId && legal);
@@ -1871,6 +2362,16 @@ export default function MultiplayerClient({
                   <strong>{snapshot.room.name}</strong>
                 </div>
                 <div className={styles.roomMeta}>
+                  <button
+                    className={styles.historyButton}
+                    type="button"
+                    onClick={() => setHistoryOpen(true)}
+                    disabled={handHistory.length === 0}
+                    aria-haspopup="dialog"
+                    title={handHistory.length ? "打开最近 30 手牌桌回放" : "完成第一手后即可查看牌谱"}
+                  >
+                    牌谱 {handHistory.length}/30
+                  </button>
                   <span className={styles.statusPill}>{tableModeLabel(snapshot.table.tableMode)} · {tableDepthBb} BB</span>
                   <span className={styles.statusPill}>盲注 {snapshot.table.smallBlind}/{snapshot.table.bigBlind}</span>
                   <span className={styles.statusPill}>读秒 {snapshot.table.actionTimeMs / 1_000}/{snapshot.table.initialTimeBankMs / 1_000}s</span>
@@ -2154,6 +2655,13 @@ export default function MultiplayerClient({
       </main>
       {rulesOpen && (
         <PokerRulesModal onClose={() => setRulesOpen(false)} closeLabel="看懂了，回到多人牌桌" />
+      )}
+      {historyOpen && snapshot && (
+        <HandHistoryModal
+          entries={handHistory}
+          viewerSeat={snapshot.table.viewerSeat}
+          onClose={() => setHistoryOpen(false)}
+        />
       )}
     </div>
   );
