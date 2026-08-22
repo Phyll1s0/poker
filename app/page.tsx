@@ -34,6 +34,7 @@ import {
   sixMaxPreflopPosition,
   sixMaxPreflopPositionFactor,
   type PokerPolicyInput,
+  type PokerPreflopScenario,
   type PokerPolicyProfile,
 } from "../lib/poker-policy";
 import { createPublicOpponentRanges, type PublicBettingAction } from "../lib/poker-range";
@@ -220,7 +221,10 @@ const RANKS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 const SMALL_BLIND = 5;
 const BIG_BLIND = 10;
 const SESSION_HANDS = 20;
-const COACH_PROFILE: PokerPolicyProfile = { ...AI_PROFILES.gto };
+// Coaching answers stay on the neutral chart anchor. AI personalities may
+// deviate from it, but should not leak "ghost" frequencies into a charted pure
+// fold/raise decision shown as the training reference.
+const COACH_PROFILE: PokerPolicyProfile = { aggression: 0.7, looseness: 0.27, bluff: 0.12 };
 
 const TABLE_PRESETS: Record<TablePresetKey, {
   label: string;
@@ -270,6 +274,16 @@ const PREFLOP_SCENARIO_LABELS = {
 
 function preflopRaiseActionLabel(raiseCount: number) {
   return raiseCount <= 0 ? "开池" : `${raiseCount + 2}-bet`;
+}
+
+function preflopPassiveActionLabel(scenario: PokerPreflopScenario) {
+  if (scenario === "open") return "Limp（跛入）";
+  if (scenario === "isolate") return "跟随跛入";
+  return "跟注";
+}
+
+function preflopAggressiveActionLabel(scenario: PokerPreflopScenario, raiseCount: number) {
+  return scenario === "isolate" ? "隔离加注" : preflopRaiseActionLabel(raiseCount);
 }
 
 function makeDeck(): Card[] {
@@ -348,7 +362,10 @@ function currentEquity(game: Game, player: Player, iterations = 80, heroImage?: 
     toCall,
     game.players,
   );
-  if (decisionPot.finalPot > 0 && decisionPot.layers.length > 0) {
+  // Before the flop, players behind may still enter despite having contributed
+  // nothing yet. Pot-layer equity would silently exclude them and make an RFI
+  // hand look much stronger than its all-live-opponents showdown equity.
+  if (game.street !== "preflop" && decisionPot.finalPot > 0 && decisionPot.layers.length > 0) {
     const rangeByPlayer = new Map(opponents.map((opponent) => [opponent.playerId, opponent.weight]));
     const layerIterations = Math.max(48, Math.floor(iterations / decisionPot.layers.length));
     const expectedPayout = decisionPot.layers.reduce((sum, layer, index) => {
@@ -1108,10 +1125,19 @@ function getAdvice(game: Game, player: Player, equity: number) {
       ? ` · 面对 ${(game.highestBet / BIG_BLIND).toFixed(1)} BB`
       : "";
     const rangePercent = Math.round(policyPlan.preflopTargetRange * 100);
-    const enterPercent = Math.round(policyPlan.preflopEnterFrequency * 100);
-    note = `${handClass} · ${positionNode} · ${PREFLOP_SCENARIO_LABELS[policyPlan.preflopScenario]}${facingSize}：先按位置、前序行动、加注尺度和有效筹码构建约 ${rangePercent}% 的继续范围；这手牌当前进入范围的混合频率约 ${enterPercent}%。`;
-    if (action === "raise") note += ` 主路线为主动加注，尺寸按当前 ${preflopRaiseActionLabel(game.raiseCount)} 节点计算。`;
-    else if (action === "call") note += ` 主路线为跟注，保留强牌和部分可实现权益的牌，避免把继续范围全部暴露为加注。`;
+    const enterFrequencyLabel = formatPokerFrequency(policyPlan.preflopEnterFrequency);
+    note = `${handClass} · ${positionNode} · ${PREFLOP_SCENARIO_LABELS[policyPlan.preflopScenario]}${facingSize}：先按位置、前序行动、加注尺度和有效筹码构建约 ${rangePercent}% 的继续范围；这手牌当前进入范围的混合频率为 ${enterFrequencyLabel}。`;
+    if (policyPlan.preflopScenario === "open") {
+      note += ` 这是未开池（RFI）节点：当前底池 ${committedPot(game)} 只包含小盲 ${SMALL_BLIND} 与大盲 ${BIG_BLIND}；“Limp（跛入）”表示你主动补齐大盲，不是跟随前方玩家。`;
+    } else if (policyPlan.preflopScenario === "isolate") {
+      note += ` 前方已有 ${policyInput.preflopLimpers} 位玩家跛入；跟随跛入与隔离加注是两条不同线路。当前频率由六人桌首入池基准结合跛入人数外推，不冒充商业求解器的独立 vs-limp 解。`;
+    }
+    if (action === "raise") note += ` 主路线为主动加注，尺寸按当前 ${preflopAggressiveActionLabel(policyPlan.preflopScenario, game.raiseCount)} 节点计算。`;
+    else if (action === "call") note += policyPlan.preflopScenario === "open"
+      ? ` 主路线为主动跛入；这不是面对别人下注后的跟注。`
+      : policyPlan.preflopScenario === "isolate"
+        ? ` 主路线为跟随跛入，保留可低成本实现权益的组合。`
+        : ` 主路线为跟注，保留强牌和部分可实现权益的牌，避免把继续范围全部暴露为加注。`;
     else if (action === "check") note += ` 当前拥有免费过牌权，弱牌无需为了“主动”而制造不必要底池。`;
     else note += ` 当前牌型位于该位置与行动序列的范围外，弃牌来自翻前范围，而不是把翻后胜率公式硬套进来。混合策略既包含混频节点，也允许明显劣势组合采用纯线路；这里使用的是近似基准表，不冒充求解器精确解。`;
     if (game.raiseCount >= 2) {
@@ -1189,9 +1215,12 @@ function getAdvice(game: Game, player: Player, equity: number) {
     note += ` 多人底池中仍有更深对手，加注的有效上限按 ${policyInput.maxContestableBb.toFixed(1)} BB 计算。`;
   }
   const raiseActionLabel = game.street === "preflop"
-    ? preflopRaiseActionLabel(game.raiseCount)
+    ? preflopAggressiveActionLabel(policyPlan.preflopScenario, game.raiseCount)
     : "加注";
-  const labels: Record<ActionKind, string> = { fold: "弃牌", check: "过牌", call: "跟注", raise: raiseActionLabel };
+  const callActionLabel = game.street === "preflop"
+    ? preflopPassiveActionLabel(policyPlan.preflopScenario)
+    : "跟注";
+  const labels: Record<ActionKind, string> = { fold: "弃牌", check: "过牌", call: callActionLabel, raise: raiseActionLabel };
   const mix = formatPokerFrequencyMix(
     (Object.entries(frequencies) as [ActionKind, number][])
       .map(([kind, frequency]) => ({ label: labels[kind], frequency })),
@@ -1199,16 +1228,22 @@ function getAdvice(game: Game, player: Player, equity: number) {
   const sizingRoutes = frequencies.raise >= 0.005 && !player.raiseLocked
     ? policyPlan.sizingRoutes
     : [];
+  const formatAdviceSizingRoute = (route: (typeof sizingRoutes)[number]) => {
+    const formatted = formatPokerSizingRoute(sizingContext, route);
+    return game.street === "preflop" && policyPlan.preflopScenario === "isolate"
+      ? formatted.replace(/^开池至/, "隔离加注至")
+      : formatted;
+  };
   const sizingMix = formatPokerFrequencyMix(sizingRoutes.map((route) => ({
-    label: formatPokerSizingRoute(sizingContext, route),
+    label: formatAdviceSizingRoute(route),
     frequency: route.frequency,
   })));
   const preferredSizingRoute = preferredPokerSizingRoute(sizingRoutes);
   const recommendedRaiseTo = preferredSizingRoute?.target ?? null;
   const recommendedBetFraction = preferredSizingRoute?.fraction ?? null;
   const recommendedLabel = action === "raise" && preferredSizingRoute
-    ? formatPokerSizingRoute(sizingContext, preferredSizingRoute)
-    : action === "raise" ? raiseActionLabel : ACTION_LABELS[action];
+    ? formatAdviceSizingRoute(preferredSizingRoute)
+    : labels[action];
   return {
     action,
     note,
@@ -1227,7 +1262,9 @@ function getAdvice(game: Game, player: Player, equity: number) {
       ? "本地近似 · 六人桌 169 手牌基准表"
       : "本地近似 · 行动加权范围启发式模型",
     preflopPosition: policyPlan.preflopPosition,
+    preflopScenarioKey: policyPlan.preflopScenario,
     preflopScenario: PREFLOP_SCENARIO_LABELS[policyPlan.preflopScenario],
+    preflopLimpers: policyInput.preflopLimpers,
     preflopTargetRange: policyPlan.preflopTargetRange,
     preflopEnterFrequency: policyPlan.preflopEnterFrequency,
     frequencies,
@@ -1417,7 +1454,8 @@ function PlayerSeat({ player, game, index, thinking, revealReady }: { player: Pl
   const privatelyPeeked = game.peekedPlayerIds.includes(player.id);
   const reveal = game.status === "showdown" && revealReady && (game.shownPlayerIds.includes(player.id) || privatelyPeeked);
   const isCurrent = game.current === index;
-  const role = index === game.dealer ? "D" : index === (game.dealer + 1) % 6 ? "SB" : index === (game.dealer + 2) % 6 ? "BB" : "";
+  const position = sixMaxPreflopPosition(index, game.dealer);
+  const role = position === "BTN" ? "D" : position;
   return (
     <div className={`player-seat seat-${index} ${isCurrent ? "is-current" : ""} ${player.folded ? "is-folded" : ""} ${privatelyPeeked ? "is-private-peek" : ""}`}>
       <div className={`seat-cards ${reveal || player.isHuman ? "is-revealed" : ""}`} aria-label={privatelyPeeked ? `你私下偷看的 ${player.name} 手牌` : reveal ? `${player.name} 的手牌` : `${player.name} 的手牌未公开`}>
@@ -2031,6 +2069,12 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   }, [game, human, isHumanTurn]);
 
   const advice = useMemo(() => (game && human && isHumanTurn ? getAdvice(game, human, equity) : null), [game, human, isHumanTurn, equity]);
+  const passiveActionLabel = game?.street === "preflop" && advice
+    ? preflopPassiveActionLabel(advice.preflopScenarioKey)
+    : "跟注";
+  const aggressiveActionLabel = game?.street === "preflop" && advice
+    ? preflopAggressiveActionLabel(advice.preflopScenarioKey, game.raiseCount)
+    : "加注";
   const hintDecisionKey = game && human && isHumanTurn
     ? `${game.handNo}:${game.street}:${game.actionHistory.length}:${game.highestBet}:${human.bet}`
     : null;
@@ -2183,13 +2227,20 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       ? actionScore
       : Math.round(actionScore * (0.65 + 0.35 * sizeScore / 100));
     const actionLabel = actualRaiseTo === null
-      ? ACTION_LABELS[kind]
-      : formatPokerSizingRoute(sizingContext, {
-          target: actualRaiseTo,
-          fraction: actualBetFraction ?? 0,
-          frequency: 1,
-          allIn: actualRaiseTo === sizingContext.playerBet + sizingContext.playerStack,
-        });
+      ? game.street === "preflop" && kind === "call"
+        ? preflopPassiveActionLabel(advice.preflopScenarioKey)
+        : ACTION_LABELS[kind]
+      : (() => {
+          const formatted = formatPokerSizingRoute(sizingContext, {
+            target: actualRaiseTo,
+            fraction: actualBetFraction ?? 0,
+            frequency: 1,
+            allIn: actualRaiseTo === sizingContext.playerBet + sizingContext.playerStack,
+          });
+          return game.street === "preflop" && advice.preflopScenarioKey === "isolate"
+            ? formatted.replace(/^开池至/, "隔离加注至")
+            : formatted;
+        })();
     const hintUsedForDecision = Boolean(
       hintDecisionKey && hintedDecisionKeys.current.has(hintDecisionKey),
     );
@@ -2573,7 +2624,12 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                   {toCall === 0 ? (
                     <button className="action-button neutral" onClick={() => handleAction("check")} disabled={!isHumanTurn}>过牌 <kbd>C</kbd></button>
                   ) : (
-                    <button className="action-button neutral" onClick={() => handleAction("call")} disabled={!isHumanTurn}>跟注 {toCall} <kbd>C</kbd></button>
+                    <button
+                      className="action-button neutral"
+                      onClick={() => handleAction("call")}
+                      disabled={!isHumanTurn}
+                      aria-label={`${passiveActionLabel}，再投入 ${toCall}`}
+                    >{passiveActionLabel} {toCall} <kbd>C</kbd></button>
                   )}
                   <button
                     className="action-button raise"
@@ -2582,7 +2638,8 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                     title={human.raiseLocked
                       ? "不足额全下未重新开放加注权"
                       : !opponentCanRespond ? "所有对手都已全下，不能继续加注" : undefined}
-                  >加注至 {raiseTo} <kbd>R</kbd></button>
+                    aria-label={`${aggressiveActionLabel}至 ${raiseTo}`}
+                  >{aggressiveActionLabel}至 {raiseTo} <kbd>R</kbd></button>
                 </div>
                 <div className="raise-control">
                   <div className="range-row">
@@ -2612,6 +2669,8 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                     <button disabled={raiseDisabled} onClick={() => setRaiseTo(maxTarget)}>全下</button>
                   </div>
                   {toCall > 0 && game.street !== "preflop" && <small className="sizing-basis-note">快捷百分比按跟注后的底池计算</small>}
+                  {game.street === "preflop" && advice?.preflopScenarioKey === "open" && <small className="sizing-basis-note">无人入池：跛入是你主动补齐大盲；开池才是主动加注</small>}
+                  {game.street === "preflop" && advice?.preflopScenarioKey === "isolate" && <small className="sizing-basis-note">前方已有 {advice.preflopLimpers} 人跛入：可跟随跛入或隔离加注</small>}
                   {game.street === "preflop" && game.raiseCount > 0 && <small className="sizing-basis-note">快捷倍数按对手当前加注额计算</small>}
                 </div>
               </>
@@ -2687,21 +2746,35 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
           ) : (
             <div className="analysis-content">
               <section className="equity-card">
-                <div className="section-label"><span>牌面与行动范围</span><b>{isHumanTurn ? "RANGE" : "WAIT"}</b></div>
+                <div className="section-label"><span>{game.street === "preflop" ? "翻前范围节点" : "牌面与行动范围"}</span><b>{isHumanTurn ? "RANGE" : "WAIT"}</b></div>
                 <div className="equity-main">
-                  <div className="equity-number"><strong>{isHumanTurn ? Math.round(equity * 100) : "—"}</strong><span>%<br />估算权益</span></div>
+                  <div className="equity-number"><strong>{isHumanTurn
+                    ? game.street === "preflop" && advice
+                      ? Number((advice.preflopEnterFrequency * 100).toFixed(1))
+                      : Math.round(equity * 100)
+                    : "—"}</strong><span>%<br />{game.street === "preflop" ? "本手入池频率" : "估算权益"}</span></div>
                   <div className="equity-bars">
-                    <span><i style={{ width: `${isHumanTurn ? equity * 100 : 0}%` }} /></span>
+                    <span><i style={{ width: `${isHumanTurn
+                      ? game.street === "preflop" && advice ? advice.preflopEnterFrequency * 100 : equity * 100
+                      : 0}%` }} /></span>
                     <div><b>你的手牌</b><em>{human.hole.map(cardText).join("  ")}</em></div>
                   </div>
                 </div>
                 <div className="metric-grid">
-                  <div><span>底池赔率</span><strong>{isHumanTurn && advice ? `${Math.round(advice.potOdds * 100)}%` : "—"}</strong></div>
+                  {game.street === "preflop" && advice ? (
+                    <div><span>当前节点</span><strong>{advice.preflopPosition} · {advice.preflopScenario}</strong></div>
+                  ) : (
+                    <div><span>底池赔率</span><strong>{isHumanTurn && advice ? `${Math.round(advice.potOdds * 100)}%` : "—"}</strong></div>
+                  )}
                   <div><span>{isHumanTurn && advice ? `你 / ${advice.opponentName}` : "双方后手"}</span><strong>{isHumanTurn && advice ? `${advice.heroStackBb.toFixed(1)} / ${advice.opponentStackBb.toFixed(1)} BB` : "—"}</strong></div>
                   <div><span>有效 / SPR</span><strong>{isHumanTurn && advice ? `${advice.effectiveStackBb.toFixed(1)} / ${advice.spr.toFixed(1)}` : "—"}</strong></div>
                 </div>
                 <p className="range-note">{isHumanTurn && advice
-                  ? `${advice.strategySource} · 按位置、完整公开行动线、下注尺度与多人底池动态加权；不会读取电脑暗牌。`
+                  ? game.street === "preflop" && advice.preflopScenarioKey === "open"
+                    ? `未开池（RFI）：底池 ${committedPot(game)} 仅由小盲 ${SMALL_BLIND} + 大盲 ${BIG_BLIND} 构成，前面没有玩家 Limp。跛入的 40% 即时价格不能与原始摊牌权益直接比较。`
+                    : game.street === "preflop" && advice.preflopScenarioKey === "isolate"
+                      ? `前方已有 ${advice.preflopLimpers} 位玩家跛入；当前分开评估跟随跛入与隔离加注，不把它当作普通跟注。`
+                      : `${advice.strategySource} · 按位置、完整公开行动线、下注尺度与多人底池动态加权；不会读取电脑暗牌。`
                   : "等待你的行动点后，系统才会生成不读取电脑暗牌的范围估算。"}</p>
               </section>
 
@@ -2835,7 +2908,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                       <p>本手起始有效 {item.startingDepthBb.toFixed(1)} BB · 当前后手：你 {item.heroStackBb.toFixed(1)} BB / {item.opponentName} {item.opponentStackBb.toFixed(1)} BB · 本节点有效 {item.effectiveStackBb.toFixed(1)} BB{item.maxContestableBb > item.effectiveStackBb + 0.05 ? ` · 多人加注有效上限 ${item.maxContestableBb.toFixed(1)} BB` : ""}</p>
                       {item.sizingMix && <p>进入加注分支后的尺寸混合：{item.sizingMix}{item.sizeVerdict ? `；${item.sizeVerdict}` : ""}</p>}
                       {item.streetKey === "preflop" ? (
-                        <small>{item.preflopPosition} · {item.preflopScenario} · 基准继续范围约 {Math.round(item.preflopTargetRange * 100)}% · 本手进入频率约 {Math.round(item.preflopEnterFrequency * 100)}% · 来源：{item.strategySource}。{item.note}</small>
+                        <small>{item.preflopPosition} · {item.preflopScenario} · 基准继续范围约 {Math.round(item.preflopTargetRange * 100)}% · 本手进入频率 {formatPokerFrequency(item.preflopEnterFrequency)} · 翻前原始摊牌权益不作为首入池阈值 · 来源：{item.strategySource}。{item.note}</small>
                       ) : (
                         <small>对行动范围估算权益 {Math.round(item.equity * 100)}% / 直接赔率 {Math.round(item.potOdds * 100)}% / 权益实现参考线 {Math.round(item.realizationThreshold * 100)}% · 权益实现估算 {Math.round(item.equityRealization * 100)}% · 有效筹码 {item.effectiveStackBb.toFixed(1)} BB / SPR {item.spr.toFixed(1)}{item.callEv === null ? "" : ` · 跟注 EV 代理 ${item.callEv >= 0 ? "+" : ""}${Math.round(item.callEv)}`} · 来源：{item.strategySource}。{item.note}</small>
                       )}

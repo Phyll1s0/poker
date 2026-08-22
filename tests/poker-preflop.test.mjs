@@ -74,11 +74,16 @@ test("every published strategy is legal, normalized and bounded", () => {
 test("fixes canonical RFI errors for small pairs and early offsuit broadways", () => {
   const buttonDeuces = getPreflopStrategy({ hand: "22", scenario: "rfi", heroPosition: "BTN" });
   const cutoffDeuces = getPreflopStrategy({ hand: "22", scenario: "rfi", heroPosition: "CO" });
+  const cutoffQueenNineOffsuit = getPreflopStrategy({ hand: "Q9o", scenario: "rfi", heroPosition: "CO" });
+  const buttonQueenNineOffsuit = getPreflopStrategy({ hand: "Q9o", scenario: "rfi", heroPosition: "BTN" });
   const utgKingJack = getPreflopStrategy({ hand: "KJo", scenario: "rfi", heroPosition: "UTG" });
   const utgQueenJack = getPreflopStrategy({ hand: "QJo", scenario: "rfi", heroPosition: "UTG" });
 
   assert.ok(buttonDeuces.frequencies.raise >= 0.95);
   assert.ok(cutoffDeuces.frequencies.raise >= 0.9);
+  assert.equal(cutoffQueenNineOffsuit.frequencies.fold, 1);
+  assert.equal(cutoffQueenNineOffsuit.enterFrequency, 0);
+  assert.ok(buttonQueenNineOffsuit.frequencies.raise >= 0.7);
   assert.ok(utgKingJack.enterFrequency <= 0.1);
   assert.ok(utgQueenJack.enterFrequency <= 0.1);
 });

@@ -11,6 +11,7 @@ test("reserves 100% for pure actions and keeps tiny branches visible", () => {
   assert.equal(formatPokerFrequency(0.9996), ">99.9%");
   assert.equal(formatPokerFrequency(0.999_999), ">99.9%");
   assert.equal(formatPokerFrequency(0.996), "99.6%");
+  assert.equal(formatPokerFrequency(0.986_071), "98.6%");
   assert.equal(formatPokerFrequency(0.004), "0.4%");
   assert.equal(formatPokerFrequency(0.0004), "<0.1%");
   assert.equal(formatPokerFrequency(0), "0%");

@@ -14,7 +14,9 @@ export function formatPokerFrequency(value: number) {
   const percent = frequency * 100;
   if (percent < 0.1) return "<0.1%";
   if (percent >= 99.95) return ">99.9%";
-  if (percent < 10 || percent > 99) return `${percent.toFixed(1)}%`;
+  // Near-pure branches need one decimal so a 98.7/1.3 split is not displayed
+  // as 99/1.3 and mistaken for an impossible total above 100%.
+  if (percent < 10 || percent >= 98) return `${percent.toFixed(1)}%`;
   return `${Math.round(percent)}%`;
 }
 

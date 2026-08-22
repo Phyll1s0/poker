@@ -335,14 +335,18 @@ test("uses the 169-class chart for canonical opening and blind-defense hands", (
   const pairOfDeuces = { highRank: 2, lowRank: 2, pair: true, suited: false, gap: 0 };
   const kingJackOff = { highRank: 13, lowRank: 11, pair: false, suited: false, gap: 2 };
   const queenJackOff = { highRank: 12, lowRank: 11, pair: false, suited: false, gap: 1 };
+  const queenNineOff = { highRank: 12, lowRank: 9, pair: false, suited: false, gap: 3 };
 
   const buttonDeuces = evaluatePokerPolicy({ ...chartSpot, preflopPosition: "BTN", preflopHand: pairOfDeuces });
   const cutoffDeuces = evaluatePokerPolicy({ ...chartSpot, preflopPosition: "CO", preflopHand: pairOfDeuces });
+  const cutoffQueenNineOff = evaluatePokerPolicy({ ...chartSpot, preflopPosition: "CO", preflopHand: queenNineOff });
   const utgKingJack = evaluatePokerPolicy({ ...chartSpot, preflopPosition: "UTG", preflopHand: kingJackOff });
   const utgQueenJack = evaluatePokerPolicy({ ...chartSpot, preflopPosition: "UTG", preflopHand: queenJackOff });
 
   assert.ok(buttonDeuces.actionFrequencies.raise >= 0.8);
   assert.ok(buttonDeuces.actionFrequencies.call >= 0.1);
+  assert.equal(cutoffQueenNineOff.actionFrequencies.fold, 1);
+  assert.equal(cutoffQueenNineOff.preflopScenario, "open");
   assert.ok(cutoffDeuces.actionFrequencies.raise >= 0.82);
   assert.ok(cutoffDeuces.actionFrequencies.call >= 0.08);
   assert.ok(utgKingJack.actionFrequencies.fold >= 0.9);

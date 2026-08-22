@@ -148,6 +148,16 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /heroActive: !game\.players\[0\]\.folded/);
   assert.match(page, /formatPokerFrequencyMix/);
   assert.match(page, /encodePreflopHandClass/);
+  assert.match(page, /COACH_PROFILE: PokerPolicyProfile = \{ aggression: 0\.7, looseness: 0\.27, bluff: 0\.12 \}/);
+  assert.match(page, /function preflopPassiveActionLabel/);
+  assert.match(page, /Limp（跛入）/);
+  assert.match(page, /跟随跛入/);
+  assert.match(page, /隔离加注/);
+  assert.match(page, /未开池（RFI）/);
+  assert.match(page, /底池 \$\{committedPot\(game\)\} 仅由小盲/);
+  assert.match(page, /本手入池频率/);
+  assert.match(page, /翻前原始摊牌权益不作为首入池阈值/);
+  assert.match(page, /game\.street !== "preflop" && decisionPot\.finalPot/);
   assert.match(page, /当前若继续加注将是/);
   assert.match(page, /preflopRaiseActionLabel\(game\.raiseCount\)/);
   assert.match(page, /极低频路线/);
