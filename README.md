@@ -41,8 +41,9 @@
 - RangeCraft Standard v1 固定 100BB、无抽水 cEV、2.5BB 开池和完整离散下注树，并用稳定哈希阻止不同配置误命中
 - 通用两人零和 CFR+ 核心通过 Kuhn Poker 已知均衡值和精确 exploitability 回归
 - 可离线求解带权范围对范围的真实 1v1 河牌子博弈，并用 scalable best response 报告 NashConv / exploitability
+- 1v1 河牌已有一项固定 commit、同牌面/范围/底池/树的公开独立交叉验证；公开资源、许可边界和精度声明见 [`PUBLIC_GTO_VALIDATION.md`](PUBLIC_GTO_VALIDATION.md)
 
-> 当前牌桌 AI 与实时教练仍主要使用本地近似 GTO 混合频率策略，并非完整求解器。仓库已经加入可验证的 CFR+ 与 1v1 河牌求解链，但尚未覆盖任意 6 人动态节点；未命中解库前，界面中的评分仍是策略匹配度，不是精确 EV 损失。
+> 当前牌桌 AI 与实时教练仍主要使用本地近似 GTO 混合频率策略，并非完整求解器。仓库已经加入可验证的 CFR+ 与 1v1 河牌求解链，但公开独立交叉验证目前只有一棵固定河牌小树，尚未覆盖任意 6 人动态节点；未命中解库前，界面中的评分仍是策略匹配度，不是精确 EV 损失。
 
 ## 两种训练模式
 
@@ -110,7 +111,7 @@ npm run ai:benchmark -- --hands 100000 --seed my-run --stack-bb 200 --equity-ite
 
 ## GTO 求解基线
 
-完整设计、商业对标边界、1v1 / 1v2 / 翻前实施顺序和验收门槛见 [`GTO_SOLVER_ROADMAP.md`](GTO_SOLVER_ROADMAP.md)。
+完整设计、商业对标边界、1v1 / 1v2 / 翻前实施顺序和验收门槛见 [`GTO_SOLVER_ROADMAP.md`](GTO_SOLVER_ROADMAP.md)；公开求解器、数据集、商业免费版的用途和许可边界见 [`PUBLIC_GTO_VALIDATION.md`](PUBLIC_GTO_VALIDATION.md)。
 
 仓库内置一个小型真实河牌范围节点，可直接运行 CFR+：
 
@@ -122,6 +123,14 @@ npm run gto:river -- \
 ```
 
 输出会包含覆盖完整牌面/范围/权重/底池/筹码的 `spotId`、规则 `gameSpecId`、河牌树 `treeId`、solver 版本、每个组合在各公开行动线的混合频率，以及通过 best response 计算的树内 exploitability。这个命令用于离线生成和审计策略；完整范围的大规模节点后续应由原生并行求解任务预计算，浏览器只加载策略分片。
+
+公开独立基线使用 MIT 许可的 [`noambrown/poker_solver`](https://github.com/noambrown/poker_solver) commit `6a10442877ffc8fd28af93e16e279b9bbdd97b2a`。它把同一牌面、具体组合范围、底池、有效后手和下注树交给两套实现，并拒绝不完整或身份不一致的比较：
+
+```bash
+npm run gto:benchmark:river
+```
+
+这是一项实现一致性检查，不是完整商业策略库，也不能证明其他河牌、翻前、转牌/翻牌或三人节点已经对齐。
 
 ## 操作
 
@@ -140,4 +149,4 @@ npm run gto:river -- \
 
 [`lib/gto-standard.ts`](lib/gto-standard.ts) 锁定首个可复现牌局/下注树规范与策略结果 schema；[`lib/gto-cfr.ts`](lib/gto-cfr.ts) 提供通用 CFR+ 核心；[`lib/gto-river.ts`](lib/gto-river.ts) 将该核心接到真实德州扑克河牌范围子博弈。
 
-[`lib/gto-benchmark.ts`](lib/gto-benchmark.ts) 只比较用户合法提供、且 `gameSpecId/treeId` 完全相同的参考结果，报告 reach 覆盖率、频率 total variation、最大单动作误差和参考动作 EV 下的 regret；它不会联网或抓取商业策略数据。
+[`lib/gto-benchmark.ts`](lib/gto-benchmark.ts) 只比较用户合法提供、且 `gameSpecId/treeId` 完全相同的参考结果，报告 reach 覆盖率、频率 total variation、最大单动作误差和参考动作 EV 下的 regret；它不会联网或抓取商业策略数据。仓库内第一项公开 reference 的可信来源、原始输入/输出、SHA-256、生成命令与阈值保存在 [`benchmarks/external/noambrown-river-v1/`](benchmarks/external/noambrown-river-v1/)。

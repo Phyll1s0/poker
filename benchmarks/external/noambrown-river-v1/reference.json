@@ -1,0 +1,119 @@
+{
+  "schemaVersion": "rangecraft-public-river-benchmark/v1",
+  "contentHash": "35b1dbb2bbd65e718ccf0d20c5b0ee90dfecda9445e6dc5efa4f7bb8aa8584ba",
+  "benchmarkId": "noambrown-river-symmetric-pot-bet-v1",
+  "claimScope": "implementation-conformance-only",
+  "source": {
+    "name": "noambrown/poker_solver",
+    "repository": "https://github.com/noambrown/poker_solver",
+    "commit": "6a10442877ffc8fd28af93e16e279b9bbdd97b2a",
+    "license": "MIT",
+    "licenseUrl": "https://github.com/noambrown/poker_solver/blob/6a10442877ffc8fd28af93e16e279b9bbdd97b2a/LICENSE",
+    "inputFile": "input.json",
+    "inputSha256": "40c991eb4ed22f46e1a89b8e4fa0b18f4e8368001bef9dff7708cd3ec795ce91",
+    "rawOutputFile": "upstream-strategy.json.base64",
+    "rawOutputEncoding": "base64",
+    "rawOutputSha256": "9f6e5bc7c5b84f9d676ff3e03d5aa07b55e51f491003e8c52a636074f8c9978c",
+    "generationCommand": "c++ -std=c++17 -O3 -DNDEBUG -DCFR_USE_DOUBLE -I cpp/src cpp/src/cards.cpp cpp/src/river_game.cpp cpp/src/vector_eval.cpp cpp/src/mccfr.cpp cpp/src/subgame_config.cpp cpp/src/trainer.cpp cpp/src/main.cpp -o river_solver && ./river_solver --config input.json --algo cfr+ --iters 5000 --dump-strategy upstream-strategy.json"
+  },
+  "solver": {
+    "algorithm": "cfr+",
+    "iterations": 5000,
+    "chipScalePerBb": 100,
+    "nativeExploitability": {
+      "value": 0.00009,
+      "unit": "chips",
+      "potFraction": 9e-8
+    }
+  },
+  "identity": {
+    "spotId": "rc-hu-river-spot-v1-9d9782dee5df958c349abf8f98335b85687112bd29a8fcef533e30e4f9972fe1",
+    "gameSpecId": "rc-hu-river-game-v1-3613e43c15e6eca6b77f3f8c0374c29f6b382ce585ca1ca682b20194f4897d6c",
+    "treeId": "rc-hu-river-tree-v1-b07fd4665f40d861d0cf8c08348d7a6fff2d36fd6a1c2d177f1d6f44dbabee23"
+  },
+  "thresholds": {
+    "minimumCoverageFraction": 1,
+    "maximumReferenceExploitabilityPotFraction": 0.001,
+    "maximumCandidateExploitabilityPotFraction": 0.001,
+    "maximumNativeAuditDeltaPotFraction": 0.00001,
+    "maximumProfileValueDeltaPotFraction": 0.001,
+    "maximumWeightedReferenceEvRegretPotFraction": 0.001,
+    "maximumSingleReferenceActionRegretPotFraction": 0.003,
+    "maximumActionFrequencyError": 0.01
+  },
+  "spec": {
+    "board": [
+      { "rank": 14, "suit": "clubs" },
+      { "rank": 13, "suit": "diamonds" },
+      { "rank": 7, "suit": "spades" },
+      { "rank": 4, "suit": "hearts" },
+      { "rank": 2, "suit": "clubs" }
+    ],
+    "oopRange": [
+      { "cards": [{ "rank": 14, "suit": "spades" }, { "rank": 14, "suit": "diamonds" }], "weight": 1 },
+      { "cards": [{ "rank": 13, "suit": "spades" }, { "rank": 13, "suit": "clubs" }], "weight": 1 },
+      { "cards": [{ "rank": 12, "suit": "spades" }, { "rank": 11, "suit": "spades" }], "weight": 1 }
+    ],
+    "ipRange": [
+      { "cards": [{ "rank": 14, "suit": "spades" }, { "rank": 14, "suit": "diamonds" }], "weight": 1 },
+      { "cards": [{ "rank": 13, "suit": "spades" }, { "rank": 13, "suit": "clubs" }], "weight": 1 },
+      { "cards": [{ "rank": 12, "suit": "spades" }, { "rank": 11, "suit": "spades" }], "weight": 1 }
+    ],
+    "potBb": 10,
+    "effectiveStackBb": 10,
+    "bettingTree": {
+      "betPotFractions": [1],
+      "raisePotAfterCallFractions": [1],
+      "maxRaises": 0,
+      "allInAlwaysAvailable": false
+    }
+  },
+  "upstream": {
+    "players": [
+      {
+        "hands": ["AdAs", "KcKs", "JsQs"],
+        "weights": [0.3333333333, 0.3333333333, 0.3333333333],
+        "profile": {
+          "c/b1000": {
+            "actions": ["c", "f"],
+            "strategy": [
+              [0.99999998, 1.999601985e-8],
+              [4.727481434e-7, 0.9999995273],
+              [1.999600533e-8, 0.99999998]
+            ]
+          },
+          "root": {
+            "actions": ["c", "b1000"],
+            "strategy": [
+              [0.9999990472, 9.52835572e-7],
+              [0.9999996473, 3.526567414e-7],
+              [0.9999997734, 2.266213424e-7]
+            ]
+          }
+        }
+      },
+      {
+        "hands": ["AdAs", "KcKs", "JsQs"],
+        "weights": [0.3333333333, 0.3333333333, 0.3333333333],
+        "profile": {
+          "b1000": {
+            "actions": ["c", "f"],
+            "strategy": [
+              [0.99999996, 3.99920016e-8],
+              [2.938542726e-7, 0.9999997061],
+              [3.99920016e-8, 0.99999996]
+            ]
+          },
+          "c": {
+            "actions": ["c", "b1000"],
+            "strategy": [
+              [1.199760048e-7, 0.99999988],
+              [0.99999976, 2.399520096e-7],
+              [0.8243718968, 0.1756281032]
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

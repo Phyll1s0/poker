@@ -79,6 +79,7 @@ async function main() {
     exploitability: solution.exploitability,
     durationMs: Date.now() - startedAt,
     strategies: solution.strategies,
+    actionValues: solution.actionValues,
   };
   const encoded = `${JSON.stringify(portable, null, 2)}\n`;
   if (options.output) {

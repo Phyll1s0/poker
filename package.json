@@ -14,6 +14,7 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern dist-pages --ignore-pattern .next",
     "ai:benchmark": "node --experimental-strip-types scripts/ai-self-play.mjs --hands 20000 --seed 20260818 --stack-bb 100",
     "gto:river": "node --experimental-strip-types scripts/gto-river-solve.mjs",
+    "gto:benchmark:river": "node --experimental-strip-types scripts/gto-river-benchmark.mjs",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {

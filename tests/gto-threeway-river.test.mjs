@@ -43,6 +43,94 @@ function play(game, state, ...actions) {
   return actions.reduce((current, action) => game.nextState(current, action), state);
 }
 
+function collectInformationSets(model) {
+  const result = [new Map(), new Map(), new Map()];
+  const visit = (state) => {
+    const actor = model.game.currentActor(state);
+    if (actor === "terminal") return;
+    if (actor === "chance") {
+      for (const outcome of model.game.chanceOutcomes(state)) {
+        visit(model.game.nextState(state, outcome.action));
+      }
+      return;
+    }
+    const informationSet = model.game.informationSet(state, actor);
+    const actions = [...model.game.actions(state)];
+    const existing = result[actor].get(informationSet);
+    if (existing) assert.deepEqual(existing, actions);
+    else result[actor].set(informationSet, actions);
+    for (const action of actions) visit(model.game.nextState(state, action));
+  };
+  visit(model.game.initialState);
+  return result;
+}
+
+function deterministicMixedProfile(informationSets) {
+  return informationSets.map((player, playerIndex) => new Map(
+    [...player].map(([informationSet, actions], informationSetIndex) => {
+      const raw = actions.map((_action, actionIndex) => (
+        1 + ((playerIndex + 2) * (informationSetIndex + 3) * (actionIndex + 5)) % 11
+      ));
+      const total = raw.reduce((sum, value) => sum + value, 0);
+      return [informationSet, {
+        actions,
+        probabilities: raw.map((value) => value / total),
+      }];
+    }),
+  ));
+}
+
+function independentlyEvaluateProfile(model, profile) {
+  const evaluate = (state) => {
+    const actor = model.game.currentActor(state);
+    if (actor === "terminal") return [...model.game.terminalUtilities(state)];
+    if (actor === "chance") {
+      const total = [0, 0, 0];
+      for (const outcome of model.game.chanceOutcomes(state)) {
+        const child = evaluate(model.game.nextState(state, outcome.action));
+        child.forEach((value, player) => { total[player] += outcome.probability * value; });
+      }
+      return total;
+    }
+    const actions = model.game.actions(state);
+    const informationSet = model.game.informationSet(state, actor);
+    const entry = profile[actor].get(informationSet);
+    assert.ok(entry, `missing ${informationSet}`);
+    const probabilityByAction = new Map(entry.actions.map((action, index) => [action, entry.probabilities[index]]));
+    const total = [0, 0, 0];
+    for (const action of actions) {
+      const probability = probabilityByAction.get(action);
+      assert.notEqual(probability, undefined, `missing ${informationSet}.${action}`);
+      const child = evaluate(model.game.nextState(state, action));
+      child.forEach((value, player) => { total[player] += probability * value; });
+    }
+    return total;
+  };
+  return evaluate(model.game.initialState);
+}
+
+function independentlyEnumeratedBestResponse(model, profile, player, informationSets) {
+  const entries = [...informationSets[player]];
+  const policyCount = entries.reduce((count, [, actions]) => count * actions.length, 1);
+  assert.ok(policyCount <= 100_000, `pure-policy oracle unexpectedly large: ${policyCount}`);
+  let best = Number.NEGATIVE_INFINITY;
+  for (let encoded = 0; encoded < policyCount; encoded += 1) {
+    let cursor = encoded;
+    const response = new Map();
+    for (const [informationSet, actions] of entries) {
+      const chosenIndex = cursor % actions.length;
+      cursor = Math.floor(cursor / actions.length);
+      response.set(informationSet, {
+        actions,
+        probabilities: actions.map((_action, actionIndex) => actionIndex === chosenIndex ? 1 : 0),
+      });
+    }
+    const deviated = profile.map((strategy, index) => index === player ? response : strategy);
+    best = Math.max(best, independentlyEvaluateProfile(model, deviated)[player]);
+  }
+  return best;
+}
+
 test("three-way river chance uses product weights, rejects collisions, and hides both opponent holdings", () => {
   const model = createThreeWayRiverGame(threeWaySpec({
     ranges: [
@@ -174,6 +262,43 @@ test("three-way CFR+ publishes fixed-tree diagnostics, action EVs, stable IDs, a
   assert.ok(oopEv.actionEvBb.every(Number.isFinite));
   assert.throws(() => solution.averageStrategy[0].clear(), /只读结果/);
   assert.throws(() => solution.strategies.push(solution.strategies[0]), TypeError);
+});
+
+test("three-way audit exactly matches an independent exhaustive pure-policy oracle", () => {
+  const model = createThreeWayRiverGame(threeWaySpec({
+    potBb: 6,
+    stackBb: [4, 4, 4],
+    ranges: [
+      [
+        holding(card(14, "spades"), card(14, "diamonds")),
+        holding(card(14, "hearts"), card(8, "hearts")),
+      ],
+      [
+        holding(card(13, "spades"), card(13, "clubs")),
+        holding(card(13, "hearts"), card(8, "diamonds")),
+      ],
+      [
+        holding(card(12, "spades"), card(11, "spades")),
+        holding(card(12, "diamonds"), card(11, "diamonds")),
+      ],
+    ],
+    bettingTree: { betPotFractions: [0.5], allInAlwaysAvailable: false },
+  }));
+  const informationSets = collectInformationSets(model);
+  const profile = deterministicMixedProfile(informationSets);
+  const independentProfileValue = independentlyEvaluateProfile(model, profile);
+  const independentBestResponses = [0, 1, 2].map((player) =>
+    independentlyEnumeratedBestResponse(model, profile, player, informationSets));
+  const independentGains = independentBestResponses.map((value, player) => value - independentProfileValue[player]);
+  independentGains.forEach((gain) => assert.ok(gain >= -1e-10, `raw best-response gain ${gain}`));
+  const audit = model.audit(profile);
+
+  independentProfileValue.forEach((value, player) => {
+    assert.ok(Math.abs(value - audit.profileValueBb[player]) < 1e-10);
+    assert.ok(Math.abs(independentBestResponses[player] - audit.bestResponseValueBb[player]) < 1e-10);
+    assert.ok(Math.abs(independentGains[player] - audit.perPlayerGainBb[player]) < 1e-10);
+  });
+  assert.ok(Math.abs(independentGains.reduce((sum, gain) => sum + gain, 0) - audit.nashConvBb) < 1e-10);
 });
 
 test("resumable three-way sessions match a one-shot solve exactly", () => {

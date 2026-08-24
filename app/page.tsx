@@ -1696,9 +1696,9 @@ function AiDecisionHint({
                 {riverDeepSolve.status === "idle" && (
                   <>
                     {riverDeepSolve.mode === "three-way" ? (
-                      <div><b>可进行三人河牌多分辨率分析</b><span>先用快速代表范围求解，再用更高分辨率独立复核；同时检查固定树 NashConv 与动作 regret 稳定性。</span></div>
+                      <div><b>可进行三人河牌多分辨率分析</b><span>先用快速代表范围求解，再用更高分辨率重算并检查稳定性；同时检查固定树 NashConv 与动作 regret 漂移。</span></div>
                     ) : (
-                      <div><b>可进行河牌深度求解</b><span>单挑河牌可用真实 CFR+ 重新计算频率、尺寸和动作 EV。</span></div>
+                      <div><b>可进行河牌深度求解</b><span>单挑河牌可用真实 CFR+ 重新计算频率、尺寸和动作 EV；求解实现已通过一项公开 MIT 独立同题基线。</span></div>
                     )}
                     <button type="button" onClick={riverDeepSolve.onSolve}>{riverDeepSolve.mode === "three-way" ? "运行三人 CFR+ 近似" : "运行 CFR+ 深度分析"}</button>
                   </>
@@ -1717,7 +1717,7 @@ function AiDecisionHint({
                         : "未覆盖原提示或正式评分。"}</span>
                     </div>
                   ) : (
-                    <div><b>CFR+ 结果已锁定</b><span>本决策现已按局部求解频率与动作 EV 进行提示和评分。</span></div>
+                    <div><b>CFR+ 结果已锁定</b><span>本决策现已按局部求解频率与动作 EV 进行提示和评分；公开基线验证的是求解实现，不代表这个具体牌面已与商业数据库逐节点对照。</span></div>
                   )
                 )}
                 {riverDeepSolve.status === "error" && (

@@ -4,7 +4,7 @@
 
 RangeCraft 不再把“手写范围表 + 启发式频率”称作精确 GTO。后续策略统一分成三种来源：
 
-1. **内部已求解**：由 RangeCraft 自己的 CFR+/后续 DCFR 求解器生成，附带不可篡改的牌局规格、下注树、迭代次数和 exploitability/NashConv。
+1. **内部已求解**：由 RangeCraft 自己的 CFR+/后续 DCFR 求解器生成，附带内容寻址、哈希锁定的牌局规格、下注树、迭代次数和 exploitability/NashConv。
 2. **合法参考数据**：只接受许可允许用于本项目的数据，并记录来源、许可和校验和；不会抓取或复制商业训练器的策略库。
 3. **本地近似**：现有 169 手牌表、范围权益和连续混频模型。节点未命中时仍可训练，但必须明确标为“近似”，评分也不能冒充精确 EV loss。
 
@@ -54,6 +54,16 @@ RangeCraft 不再把“手写范围表 + 启发式频率”称作精确 GTO。�
 
 这是“真实求解器的第一块”，但它仍只是**固定范围、固定河牌、固定离散下注树的 heads-up 子博弈**，不能被包装成完整 6 人无限注 GTO。
 
+### 第一项公开独立交叉验证
+
+两人河牌链目前已有一项真正的同题外部基线：MIT 许可的 [`noambrown/poker_solver`](https://github.com/noambrown/poker_solver)，固定 commit `6a10442877ffc8fd28af93e16e279b9bbdd97b2a`。基准锁定公共牌 `A♣ K♦ 7♠ 4♥ 2♣`、双方三个等权具体组合、10 BB 底池、10 BB 有效后手、100% pot 首次下注且不允许再加注；上游以 double precision CFR+ 运行 5,000 次。
+
+```bash
+npm run gto:benchmark:river
+```
+
+比较前必须通过可信来源清单、fixture 内容哈希、原始输入/输出 SHA-256、`spotId/gameSpecId/treeId`、范围权重、手牌、节点与动作的完整覆盖检查；随后核对上游原生 best-response exploitability，并把外部与内部 profile 放入同一个严格审计模型，比较 profile value、重新计算的 exploitability、参考动作 EV regret 和频率误差。原始输入、原始策略字节、来源、生成命令和阈值都保存在 [`benchmarks/external/noambrown-river-v1/`](benchmarks/external/noambrown-river-v1/)。这只能证明一棵锁定小树上的实现一致性，不能外推到全部两人局或多人局。
+
 ## 1v1、1v2 与翻前标准的实施顺序
 
 ### P1：1v1 河牌（已完成核心）
@@ -66,9 +76,9 @@ RangeCraft 不再把“手写范围表 + 启发式频率”称作精确 GTO。�
 - 频率严格归一化；
 - 同输入可确定性重现；
 - exploitability 以底池比例报告；
-- 训练级节点要求不高于 1% pot，商业对标目标不高于 0.3% pot。
+- 训练级节点要求不高于 1% pot，内部高精度工程目标不高于 0.3% pot。
 
-这里的阈值只描述**给定范围和固定离散树内部**的求解误差。输出会另带 `accuracyScope: within-fixed-tree` 与 `externalBenchmarkStatus`；在同配置外部对标完成前，达到 0.3% 也不等于已经证明完整 NLHE 抽象与商业解一致。
+这里的阈值只描述**给定范围和固定离散树内部**的求解误差。输出会另带 `accuracyScope: within-fixed-tree` 与 `externalBenchmarkStatus`；即使上面的单项公开同题基准通过，也只覆盖那个固定子博弈，达到 0.3% 仍不等于已经证明完整 NLHE 抽象与商业解一致。
 
 下一步是离线批量生成典型 BTN vs BB、CO vs BB 河牌节点，并将它们分片存成策略包。浏览器只读取已算好的结果，不在主线程现场跑几十万次迭代。
 
@@ -108,15 +118,17 @@ RangeCraft 不再把“手写范围表 + 启发式频率”称作精确 GTO。�
 
 - 三人河牌固定单次下注树已接入单人训练；
 - 现场计算迁入 Web Worker，切换决策会取消旧任务，不再用 `setTimeout` 假装异步；
-- 使用每家 3 个代表组合快速求解，再以每家 5 个代表组合独立复核；
+- 使用每家 3 个代表组合快速求解，再以每家 5 个代表组合做跨分辨率稳定性复核；
 - 两档范围都必须达到 `NashConv ≤ 10% pot`，且各动作的相对 EV regret 跨分辨率漂移不高于 `10% pot`，才允许接管实验提示；
 - 频率 Total Variation 只作诊断，因为多个近似无差异动作可能在不同均衡近似中出现很大的频率变化；
 - 较高稳定性的实验 EV 评分另要求两档 NashConv 与当前手牌跨分辨率动作 regret 漂移都不高于 `3% pot`；全范围 NashConv 只作准入，不冒充逐手牌误差上界，评分死区仅使用当前动作 regret 漂移并明确标为经验校准；
 - 用户下注尺寸与最近固定树尺寸相差超过 `0.05 BB` 时，明确按树外动作处理，不会强行映射出伪精确 EV 分数。
 
-这里的 `10%` 是**实验提示门槛**，不是 RangeCraft Standard 的正式训练级或商业精度声明。下一步是在 Worker 基础上增加一次河牌再加注树；三人转牌和翻牌仍应走离线解库、牌面同构和 continuation value 路线。
+这里的 `10%` 是**实验提示门槛**，`3%` 也只是更高稳定性的经验评分门槛，不是 RangeCraft Standard 的正式训练级或商业精度声明。市场并无统一的“商业阈值”；作为量级参照，GTO Wizard 的[三人局公开基准](https://blog.gtowizard.com/gto_wizard_ai_3_way_benchmarks/)报告其测试河牌低于 `0.1% pot` Nash distance。数字阈值表面上相差约 100/30 倍，但测试树与 `3%` 稳定性指标并不相同，不能把它解释成精度倍数；当前三人功能也还没有公开独立同题基准。下一步是在 Worker 基础上增加一次河牌再加注树；三人转牌和翻牌仍应走离线解库、牌面同构和 continuation value 路线。
 
 ## 商业 GTO 如何对齐
+
+公开资料并非不存在，但应按用途区分：Apache-2.0 的 OpenSpiel 适合算法和小博弈复核；MIT 的 `noambrown/poker_solver` 可做当前河牌同题基线；Apache-2.0 的 PokerBench 是单点动作数据集，不含证明完整均衡所需的混频、动作 EV 和 exploitability；PioSOLVER Free 是只支持两个示例翻牌的专有评估版；`postflop-solver` 与 TexasSolver 使用 AGPL，后者还要求代码集成或网络服务联系商业许可；GTO Wizard 是受服务条款保护的商业策略服务。详细许可、链接和本项目使用边界见 [`PUBLIC_GTO_VALIDATION.md`](PUBLIC_GTO_VALIDATION.md)。
 
 对齐流程不是“看起来频率差不多”，而是同题考试：
 
@@ -128,11 +140,16 @@ RangeCraft 不再把“手写范围表 + 启发式频率”称作精确 GTO。�
 
 [`lib/gto-benchmark.ts`](lib/gto-benchmark.ts) 已把这套比较固化成离线工具：只有 `gameSpecId`、`treeId`、求解类型和位置顺序全部一致才允许比较，并输出参考 reach 覆盖率、频率 total variation、最大单动作误差；参考数据带完整动作 EV 时，还会计算候选混合相对参考最佳动作的加权 EV regret。
 
-商业数据只能用于用户有权进行的人工验证或许可导入。GTO Wizard 的 Benchmark API 条款明确限制抽取策略或用其数据训练/校准第三方 solver；PioSOLVER 的结果分享和服务用途也受许可证约束。RangeCraft 因此采用自己的算法与自己生成的解库，参考实现可研究 Apache-2.0 的 [OpenSpiel](https://github.com/google-deepmind/open_spiel)，不会把商业网页当数据库抓取。
+商业数据只能用于用户有权进行的人工验证或许可导入。GTO Wizard 的 Benchmark API 条款明确限制抽取策略或用其数据训练/校准第三方 solver；PioSOLVER 的结果分享和服务用途也受许可证约束。RangeCraft 因此采用自己的算法与自己生成的解库，只把许可兼容的公开实现用于独立工程复核，不会把商业网页当数据库抓取。
 
 相关原始资料：
 
 - [CFR 原始论文（NeurIPS 2007）](https://proceedings.neurips.cc/paper/2007/hash/08d98638c6fcd194a4b1e6992063e944-Abstract.html)
+- [OpenSpiel（Apache-2.0）](https://github.com/google-deepmind/open_spiel)
+- [PokerBench 数据集（Apache-2.0）](https://huggingface.co/datasets/RZ412/PokerBench)
+- [PioSOLVER Free 产品限制](https://piosolver.com/docs/product_comparison/)
+- [postflop-solver（AGPL-3.0-or-later）](https://github.com/b-inary/postflop-solver)
+- [TexasSolver（AGPL-3.0）](https://github.com/bupticybee/TexasSolver)
 - [GTO Wizard：为什么两个解不同](https://blog.gtowizard.com/why-doesnt-my-solution-match-gto-wizard/)
 - [GTO Wizard：三人局求解基准](https://blog.gtowizard.com/gto_wizard_ai_3_way_benchmarks/)
 - [GTO Wizard Benchmark API 条款](https://gtowizard.com/benchmark/terms)

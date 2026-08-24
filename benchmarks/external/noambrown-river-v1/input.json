@@ -1,0 +1,12 @@
+{
+  "board": ["Ac", "Kd", "7s", "4h", "2c"],
+  "pot": 1000,
+  "stack": 1000,
+  "bet_sizes": [1.0],
+  "include_all_in": false,
+  "max_raises": 0,
+  "players": [
+    { "hands": ["AsAd", "KsKc", "QsJs"], "weights": [1.0, 1.0, 1.0] },
+    { "hands": ["AsAd", "KsKc", "QsJs"], "weights": [1.0, 1.0, 1.0] }
+  ]
+}
