@@ -1,5 +1,5 @@
 import {
-  solveMultiwayCFRPlus,
+  MultiwayCFRPlusSolver,
   type MultiwayStrategyEntry,
   type MultiwayStrategyProfile,
   type TabularMultiwayGame,
@@ -133,6 +133,23 @@ export type SolveThreeWayRiverOptions = Readonly<{
   iterations: number;
   averagingDelay?: number;
   linearAveraging?: boolean;
+}>;
+
+export type ThreeWayRiverSolverSessionOptions = Readonly<{
+  averagingDelay?: number;
+  linearAveraging?: boolean;
+}>;
+
+export type ThreeWayRiverCheckpoint = Readonly<{
+  iterations: number;
+  audit: ThreeWayRiverAudit;
+  averageStrategy: MultiwayStrategyProfile<ThreeWayRiverAction>;
+}>;
+
+export type ThreeWayRiverSolverSession = Readonly<{
+  readonly iterations: number;
+  run(additionalIterations: number): ThreeWayRiverCheckpoint;
+  solution(): ThreeWayRiverSolution;
 }>;
 
 export type ThreeWayRiverGame = Readonly<{
@@ -818,13 +835,11 @@ function exportedStrategies(
   ));
 }
 
-export function solveThreeWayRiver(
-  spec: ThreeWayRiverSpec,
-  options: SolveThreeWayRiverOptions,
+function buildThreeWayRiverSolution(
+  model: ThreeWayRiverGame,
+  iterations: number,
+  averageStrategy: MultiwayStrategyProfile<ThreeWayRiverAction>,
 ): ThreeWayRiverSolution {
-  const model = createThreeWayRiverGame(spec);
-  const solved = solveMultiwayCFRPlus(model.game, options);
-  const averageStrategy = immutableStrategyProfile(solved.averageStrategy);
   const approximation: ThreeWayRiverApproximation = Object.freeze({
     equilibrium: "three-player-cfr+-approximation",
     cards: "exact-card-collision-aware",
@@ -841,7 +856,7 @@ export function solveThreeWayRiver(
     spotId: model.spotId,
     gameSpecId: model.gameSpecId,
     treeId: model.treeId,
-    iterations: solved.iterations,
+    iterations,
     compatibleDeals: model.compatibleDeals,
     accuracyScope: "within-fixed-tree",
     approximation,
@@ -850,6 +865,68 @@ export function solveThreeWayRiver(
     actionValues: model.actionValues(averageStrategy),
     averageStrategy,
   });
+}
+
+class StatefulThreeWayRiverSolverSession implements ThreeWayRiverSolverSession {
+  readonly #model: ThreeWayRiverGame;
+  readonly #solver: MultiwayCFRPlusSolver<ThreeWayRiverState, ThreeWayRiverAction>;
+  readonly #averagingDelay: number;
+  readonly #linearAveraging: boolean;
+  #averageStrategy: MultiwayStrategyProfile<ThreeWayRiverAction> | null = null;
+
+  constructor(spec: ThreeWayRiverSpec, options: ThreeWayRiverSolverSessionOptions) {
+    this.#model = createThreeWayRiverGame(spec);
+    this.#solver = new MultiwayCFRPlusSolver(this.#model.game);
+    this.#averagingDelay = options.averagingDelay ?? 0;
+    this.#linearAveraging = options.linearAveraging ?? true;
+  }
+
+  get iterations(): number {
+    return this.#solver.iterations;
+  }
+
+  run(additionalIterations: number): ThreeWayRiverCheckpoint {
+    const iterations = this.#solver.train({
+      iterations: additionalIterations,
+      averagingDelay: this.#averagingDelay,
+      linearAveraging: this.#linearAveraging,
+    });
+    const averageStrategy = immutableStrategyProfile(this.#solver.averageStrategy());
+    this.#averageStrategy = averageStrategy;
+    return Object.freeze({
+      iterations,
+      audit: this.#model.audit(averageStrategy),
+      averageStrategy,
+    });
+  }
+
+  solution(): ThreeWayRiverSolution {
+    if (!this.#averageStrategy) {
+      throw new Error("三人河牌求解会话尚未运行任何检查点");
+    }
+    return buildThreeWayRiverSolution(this.#model, this.iterations, this.#averageStrategy);
+  }
+}
+
+/**
+ * Creates a resumable three-player river solve. The same regret tables are
+ * preserved across run() calls, allowing UI clients to yield between bounded
+ * chunks, report measured progress, and stop once their training gate is met.
+ */
+export function createThreeWayRiverSolverSession(
+  spec: ThreeWayRiverSpec,
+  options: ThreeWayRiverSolverSessionOptions = {},
+): ThreeWayRiverSolverSession {
+  return Object.freeze(new StatefulThreeWayRiverSolverSession(spec, options));
+}
+
+export function solveThreeWayRiver(
+  spec: ThreeWayRiverSpec,
+  options: SolveThreeWayRiverOptions,
+): ThreeWayRiverSolution {
+  const session = createThreeWayRiverSolverSession(spec, options);
+  session.run(options.iterations);
+  return session.solution();
 }
 
 function playerIndex(player: ThreeWayRiverPlayer): PlayerIndex {

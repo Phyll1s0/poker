@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   createThreeWayRiverGame,
+  createThreeWayRiverSolverSession,
   solveThreeWayRiver,
   threeWayRiverActionEvEntry,
   threeWayRiverStrategyEntry,
@@ -173,4 +174,21 @@ test("three-way CFR+ publishes fixed-tree diagnostics, action EVs, stable IDs, a
   assert.ok(oopEv.actionEvBb.every(Number.isFinite));
   assert.throws(() => solution.averageStrategy[0].clear(), /只读结果/);
   assert.throws(() => solution.strategies.push(solution.strategies[0]), TypeError);
+});
+
+test("resumable three-way sessions match a one-shot solve exactly", () => {
+  const spec = threeWaySpec();
+  const options = { averagingDelay: 15, linearAveraging: true };
+  const session = createThreeWayRiverSolverSession(spec, options);
+  const first = session.run(40);
+  const second = session.run(60);
+  const chunked = session.solution();
+  const oneShot = solveThreeWayRiver(spec, { ...options, iterations: 100 });
+
+  assert.equal(first.iterations, 40);
+  assert.equal(second.iterations, 100);
+  assert.equal(session.iterations, 100);
+  assert.deepEqual(chunked.strategies, oneShot.strategies);
+  assert.deepEqual(chunked.actionValues, oneShot.actionValues);
+  assert.deepEqual(chunked.audit, oneShot.audit);
 });

@@ -117,6 +117,63 @@ export function riverCoachHoldingKey(cards: readonly [PokerCard, PokerCard]): st
     .join("");
 }
 
+export type MaterializedRiverRangeWeight = Readonly<{
+  holding: string;
+  weight: number;
+}>;
+
+/**
+ * Converts a public range-weight callback into cloneable plain data. This is
+ * intentionally only public range evidence: no opponent hole cards are read
+ * or included. The materialized table can safely cross a Web Worker boundary.
+ */
+export function materializeRiverRangeWeight(
+  board: readonly PokerCard[],
+  suits: readonly PokerSuit[],
+  rangeWeight: OpponentRangeWeight,
+): readonly MaterializedRiverRangeWeight[] {
+  if (suits.length !== 4 || new Set(suits.map(String)).size !== 4) {
+    throw new RangeError("求解需要四种不同花色");
+  }
+  const boardKeys = new Set(board.map(rawCardKey));
+  const deck: PokerCard[] = [];
+  for (const suit of suits) {
+    for (let rank = 2; rank <= 14; rank += 1) {
+      const card = { rank, suit };
+      if (!boardKeys.has(rawCardKey(card))) deck.push(card);
+    }
+  }
+  const result: MaterializedRiverRangeWeight[] = [];
+  for (let left = 0; left < deck.length; left += 1) {
+    for (let right = left + 1; right < deck.length; right += 1) {
+      const cards = [deck[left], deck[right]] as const;
+      const rawWeight = rangeWeight(cards);
+      const weight = Number.isFinite(rawWeight) ? Math.max(0, rawWeight) : 0;
+      if (weight <= 0) continue;
+      result.push(Object.freeze({ holding: riverCoachHoldingKey(cards), weight }));
+    }
+  }
+  return Object.freeze(result);
+}
+
+export function rangeWeightFromMaterialized(
+  entries: readonly MaterializedRiverRangeWeight[],
+): OpponentRangeWeight {
+  const weights = new Map<string, number>();
+  for (const [index, entry] of entries.entries()) {
+    if (!entry || typeof entry.holding !== "string" || entry.holding.length < 4) {
+      throw new TypeError(`materializedRange[${index}] 的手牌键无效`);
+    }
+    if (!Number.isFinite(entry.weight) || entry.weight <= 0) {
+      throw new RangeError(`materializedRange[${index}] 的权重必须为正有限数`);
+    }
+    if (weights.has(entry.holding)) throw new RangeError(`materializedRange 包含重复手牌 ${entry.holding}`);
+    weights.set(entry.holding, entry.weight);
+  }
+  if (weights.size === 0) throw new RangeError("materializedRange 不能为空");
+  return (cards) => weights.get(riverCoachHoldingKey(cards)) ?? 0;
+}
+
 type WeightedCandidate = Readonly<{
   cards: readonly [PokerCard, PokerCard];
   weight: number;

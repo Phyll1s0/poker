@@ -224,3 +224,37 @@ test("the multiplayer layer rejects two-player games and malformed utilities", (
     /must return 3 values/,
   );
 });
+
+test("decision nodes reject duplicate legal actions before training or evaluation", () => {
+  const game = {
+    playerCount: 3,
+    initialState: { terminal: false },
+    currentActor(state) {
+      return state.terminal ? "terminal" : 0;
+    },
+    actions() {
+      return ["same", "same"];
+    },
+    nextState() {
+      return { terminal: true };
+    },
+    informationSet() {
+      return "duplicate-actions";
+    },
+    chanceOutcomes() {
+      return [];
+    },
+    terminalUtilities() {
+      return [0, 0, 0];
+    },
+  };
+
+  assert.throws(
+    () => solveMultiwayCFRPlus(game, { iterations: 1 }),
+    /duplicate actions/,
+  );
+  assert.throws(
+    () => expectedMultiwayUtilities(game, [new Map(), new Map(), new Map()]),
+    /duplicate actions/,
+  );
+});

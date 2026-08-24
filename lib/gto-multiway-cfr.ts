@@ -170,6 +170,18 @@ function assertSameOrderedActions<Action extends string>(
   }
 }
 
+function validateDecisionActions<Action extends string>(
+  actions: readonly Action[],
+  informationSet: string,
+): void {
+  if (actions.length === 0) {
+    throw new Error(`Information set "${informationSet}" has no legal actions.`);
+  }
+  if (new Set(actions).size !== actions.length) {
+    throw new Error(`Information set "${informationSet}" contains duplicate actions.`);
+  }
+}
+
 function withPlayerReach(
   reach: ReachProbabilities,
   player: number,
@@ -328,10 +340,8 @@ export function expectedMultiwayUtilities<State, Action extends string>(
     }
 
     const actions = game.actions(state);
-    if (actions.length === 0) {
-      throw new Error(`Information set for player ${actor} has no legal actions.`);
-    }
     const informationSet = game.informationSet(state, actor);
+    validateDecisionActions(actions, informationSet);
     const probabilities = strategyProbabilities(
       profile,
       actor,
@@ -372,7 +382,13 @@ export class MultiwayCFRPlusSolver<State, Action extends string> {
     return this.#iterations;
   }
 
-  run(options: MultiwayCFRPlusRunOptions): MultiwayCFRPlusResult<Action> {
+  /**
+   * Advances regret and average-strategy tables without exporting or
+   * evaluating a profile. Worker clients use this for bounded chunks so every
+   * progress checkpoint does not pay for current strategy plus a full expected
+   * utility traversal.
+   */
+  train(options: MultiwayCFRPlusRunOptions): number {
     validateNonNegativeInteger(options.iterations, "iterations");
     const averagingDelay = options.averagingDelay ?? 0;
     const linearAveraging = options.linearAveraging ?? true;
@@ -402,6 +418,11 @@ export class MultiwayCFRPlusSolver<State, Action extends string> {
       this.#iterations = globalIteration;
     }
 
+    return this.#iterations;
+  }
+
+  run(options: MultiwayCFRPlusRunOptions): MultiwayCFRPlusResult<Action> {
+    this.train(options);
     const averageStrategy = this.averageStrategy();
     return Object.freeze({
       iterations: this.#iterations,
@@ -424,9 +445,7 @@ export class MultiwayCFRPlusSolver<State, Action extends string> {
     informationSet: string,
     actions: readonly Action[],
   ): InformationNode<Action> {
-    if (actions.length === 0) {
-      throw new Error(`Information set "${informationSet}" has no legal actions.`);
-    }
+    validateDecisionActions(actions, informationSet);
     const key = nodeKey(player, informationSet);
     const existing = this.#nodes.get(key);
     if (existing) {

@@ -44,10 +44,11 @@ import {
   type RiverCoachResult,
 } from "../lib/poker-river-coach";
 import {
-  solveThreeWayRiverCoachDecision,
   type ThreeWayRiverCoachRequest,
   type ThreeWayRiverCoachResult,
+  type ThreeWayRiverCoachProgress,
 } from "../lib/poker-threeway-river-coach";
+import { solveThreeWayRiverCoachDecisionInWorker } from "../lib/poker-threeway-river-worker-client";
 import {
   POKER_RUN_DECISION_HISTORY_LIMIT,
   POKER_RUN_HAND_HISTORY_LIMIT,
@@ -196,9 +197,14 @@ type Review = {
   solverExploitabilityPotFraction: number | null;
   solverNashConvBb: number | null;
   solverNashConvPotFraction: number | null;
+  solverQuickNashConvPotFraction: number | null;
+  solverActionRegretDriftPotFraction: number | null;
+  solverFrequencyTotalVariation: number | null;
   solverTargetPotFraction: number | null;
   solverTargetMet: boolean | null;
+  solverAcceptedForScoring: boolean | null;
   solverIterations: number | null;
+  solverQuickIterations: number | null;
   solverRepresentativeCombos: string;
   solverDetails: string;
   preflopPosition: string;
@@ -1309,6 +1315,7 @@ type DeepRiverCoachPlan =
 type SolvedRiverAdvice = SoloAdvice & Readonly<{
   riverSolver: DeepRiverCoachResult;
   riverSolverAccepted: boolean;
+  riverSolverGradingAccepted: boolean;
   riverSolverFallback: SoloAdvice;
 }>;
 
@@ -1427,6 +1434,10 @@ function buildSoloThreeWayRiverCoachRequest(
   const publicRangeState = {
     players: game.players,
     community: game.community,
+    // The three-way solver starts directly at this conditional public node;
+    // unlike the heads-up full-root solve, it does not multiply the observed
+    // prefix's strategy reach. Include river actions once here to form the
+    // posterior ranges on arrival at the current node.
     actions: game.actionHistory,
     bigBlind: BIG_BLIND,
     positionFactor: (playerId: number) => sixMaxPreflopPositionFactor(playerId, game.dealer),
@@ -1467,7 +1478,11 @@ function buildSoloThreeWayRiverCoachRequest(
     })),
     representativeCombos: 3,
     iterations: 120,
+    maxIterations: 360,
+    iterationChunk: 40,
     targetNashConvPotFraction: 0.1,
+    targetActionRegretDriftPotFraction: 0.1,
+    scoringTargetPotFraction: 0.03,
   };
 }
 
@@ -1548,21 +1563,28 @@ function applySolvedRiverAdvice(
     })
     .join(" · ");
   const threeWay = isThreeWayRiverResult(result);
-  const accepted = !threeWay || result.targetMet;
+  const accepted = !threeWay || result.acceptedForGuidance;
   if (!accepted) {
     const nashConvPercent = result.nashConvPotFraction * 100;
     const targetPercent = result.targetNashConvPotFraction * 100;
+    const quickNash = result.quickNashConvPotFraction === null
+      ? "未完成"
+      : `${(result.quickNashConvPotFraction * 100).toFixed(1)}%`;
+    const regretDrift = result.actionRegretDriftPotFraction === null
+      ? "未完成"
+      : `${(result.actionRegretDriftPotFraction * 100).toFixed(1)}%`;
     return {
       ...base,
-      note: `${base.note} 三人河牌实验解的动作混合为：${mix}；相对最高动作 EV：${evLine}。本次固定树 NashConv 为 ${nashConvPercent.toFixed(1)}% 底池，未达到 ≤${targetPercent.toFixed(0)}% 的训练门槛，因此只展示实验参考，不覆盖原提示或正式评分。`,
-      strategySource: `${base.strategySource}；三人 CFR+ 实验解未达误差门槛，未接管`,
+      note: `${base.note} 三人河牌高分辨率实验混合为：${mix}；相对最高动作 EV：${evLine}。快速/复核范围的 NashConv 分别为 ${quickNash} / ${nashConvPercent.toFixed(1)}%，跨分辨率动作 regret 差为 ${regretDrift}；未同时达到 ≤${targetPercent.toFixed(0)}% 的实验提示门槛，因此不覆盖原提示或正式评分。`,
+      strategySource: `${base.strategySource}；三人多分辨率 CFR+ 未通过稳定性门，未接管`,
       riverSolver: result,
       riverSolverAccepted: false,
+      riverSolverGradingAccepted: false,
       riverSolverFallback: base,
     };
   }
   const note = threeWay
-    ? `已在当前三人河牌节点运行 ${result.iterations} 轮 CFR+ 近似：三方起始筹码、完整公开行动线、固定下注尺寸与无碰撞发牌均进入计算。相对最高动作 EV（其余两家维持当前平均策略）：${evLine}。当前公开节点的固定树 NashConv 为 ${(result.nashConvPotFraction * 100).toFixed(1)}% 底池，达到 ≤${(result.targetNashConvPotFraction * 100).toFixed(0)}% 的求解收敛门槛；该门槛不包含代表范围与固定尺寸带来的抽象误差。这是每家 ${result.representativeCombos.oop} 个代表组合、单次下注且不含再加注的实验近似，不是精确或商业全树 GTO。`
+    ? `已用每家 ${result.quickRepresentativeCombos?.oop ?? 3}→${result.representativeCombos.oop} 个代表组合交叉求解当前三人河牌节点；核心 CFR+ 在浏览器支持时运行于独立线程，过程可取消。相对最高动作 EV：${evLine}。高分辨率 NashConv ${(result.nashConvPotFraction * 100).toFixed(1)}%，跨分辨率动作 regret 差 ${((result.actionRegretDriftPotFraction ?? 0) * 100).toFixed(1)}%，分别达到 ≤${(result.targetNashConvPotFraction * 100).toFixed(0)}% 与 ≤${(result.targetActionRegretDriftPotFraction * 100).toFixed(0)}% 的实验提示门槛；频率 TV ${((result.frequencyTotalVariation ?? 0) * 100).toFixed(1)}% 仅作诊断，不把近似无差异动作的频率变化误判为错误。${result.acceptedForScoring ? `同时达到 ≤${(result.scoringTargetPotFraction * 100).toFixed(0)}% 的较高稳定性评分门槛，可用于实验动作 EV 评分。` : `尚未达到 ≤${(result.scoringTargetPotFraction * 100).toFixed(0)}% 的较高稳定性评分门槛，因此只接管提示，评分仍采用公开范围启发式。`}固定树仍为单次下注且不含再加注，不是商业全树 GTO。`
     : (() => {
         const errorPercent = result.exploitabilityPotFraction * 100;
         return `已在当前单挑河牌节点运行 ${result.iterations} 轮 CFR+：底池、有效筹码、完整河牌行动线和合法尺寸均进入求解。相对最高动作 EV：${evLine}。固定树可剥削度约 ${errorPercent < 0.01 ? errorPercent.toFixed(3) : errorPercent.toFixed(2)}% 底池。这是双方各 ${result.representativeCombos.oop} 个等质量代表组合的缩减范围解，是真实求解器结果，但不冒充商业全组合、全尺寸解。`;
@@ -1584,6 +1606,7 @@ function applySolvedRiverAdvice(
       : `CFR+ 局部求解 · 单挑河牌 · ${result.representativeCombos.oop}×${result.representativeCombos.ip} 代表范围 · cEV/无抽水`,
     riverSolver: result,
     riverSolverAccepted: true,
+    riverSolverGradingAccepted: !threeWay || result.acceptedForScoring,
     riverSolverFallback: base,
   };
 }
@@ -1593,8 +1616,19 @@ type RiverDeepSolveControl = Readonly<{
   mode: "heads-up" | "three-way";
   status: "idle" | "running" | "solved" | "error";
   error?: string;
+  progress?: ThreeWayRiverCoachProgress;
   nashConvPotFraction?: number;
+  quickNashConvPotFraction?: number | null;
   targetNashConvPotFraction?: number;
+  actionRegretDriftPotFraction?: number | null;
+  targetActionRegretDriftPotFraction?: number;
+  frequencyTotalVariation?: number | null;
+  acceptedForScoring?: boolean;
+  scoringTargetPotFraction?: number;
+  quickRepresentativeCombos?: number | null;
+  representativeCombos?: number;
+  iterations?: number;
+  quickIterations?: number | null;
   targetMet?: boolean;
   onSolve: () => void;
 }>;
@@ -1603,6 +1637,7 @@ type RiverSolveState = Readonly<{
   decisionKey: string;
   status: "running" | "solved" | "error";
   result?: DeepRiverCoachResult;
+  progress?: ThreeWayRiverCoachProgress;
   error?: string;
 }>;
 
@@ -1661,7 +1696,7 @@ function AiDecisionHint({
                 {riverDeepSolve.status === "idle" && (
                   <>
                     {riverDeepSolve.mode === "three-way" ? (
-                      <div><b>可进行三人河牌实验分析</b><span>固定单次下注树与三方缩减公开范围；求解收敛门槛为 NashConv ≤ 10% 当前底池，不包含抽象误差。</span></div>
+                      <div><b>可进行三人河牌多分辨率分析</b><span>先用快速代表范围求解，再用更高分辨率独立复核；同时检查固定树 NashConv 与动作 regret 稳定性。</span></div>
                     ) : (
                       <div><b>可进行河牌深度求解</b><span>单挑河牌可用真实 CFR+ 重新计算频率、尺寸和动作 EV。</span></div>
                     )}
@@ -1669,13 +1704,17 @@ function AiDecisionHint({
                   </>
                 )}
                 {riverDeepSolve.status === "running" && (
-                  <div><b>正在求解当前节点…</b><span>已锁定当前底池、筹码、行动线与公开范围，{riverDeepSolve.mode === "three-way" ? "三方近似通常需要 2–8 秒。" : "单挑通常需要 1–4 秒。"}</span></div>
+                  <div><b>{riverDeepSolve.mode === "three-way" && riverDeepSolve.progress?.resolution === "verification" ? "正在用高分辨率范围复核…" : "正在求解当前节点…"}</b><span>{riverDeepSolve.mode === "three-way" && riverDeepSolve.progress
+                    ? `${riverDeepSolve.progress.representativeCombos} 个代表组合/人 · ${riverDeepSolve.progress.iterations}/${riverDeepSolve.progress.maxIterations} 轮 · 当前 NashConv ${(riverDeepSolve.progress.nashConvPotFraction * 100).toFixed(1)}%；正在后台分块计算，可随决策变化取消。`
+                    : `已锁定当前底池、筹码、行动线与公开范围，${riverDeepSolve.mode === "three-way" ? "三方近似通常需要 2–8 秒。" : "单挑通常需要 1–4 秒。"}`}</span></div>
                 )}
                 {riverDeepSolve.status === "solved" && (
                   riverDeepSolve.mode === "three-way" ? (
                     <div>
-                      <b>{riverDeepSolve.targetMet ? "三人 CFR+ 结果已达到训练门槛" : "三人 CFR+ 结果仅作实验参考"}</b>
-                      <span>NashConv {((riverDeepSolve.nashConvPotFraction ?? 0) * 100).toFixed(1)}% 底池 · 目标 ≤{((riverDeepSolve.targetNashConvPotFraction ?? 0.1) * 100).toFixed(0)}%；{riverDeepSolve.targetMet ? "已接管当前提示与动作 EV 评分。" : "未覆盖原提示或正式评分。"}</span>
+                      <b>{riverDeepSolve.targetMet ? "多分辨率结果已通过实验提示门槛" : "范围复核未通过，仅作实验参考"}</b>
+                      <span>{riverDeepSolve.quickRepresentativeCombos ?? 3}→{riverDeepSolve.representativeCombos ?? 5} 组合/人 · NashConv {((riverDeepSolve.quickNashConvPotFraction ?? 0) * 100).toFixed(1)}% / {((riverDeepSolve.nashConvPotFraction ?? 0) * 100).toFixed(1)}% · 动作 regret 差 {((riverDeepSolve.actionRegretDriftPotFraction ?? 0) * 100).toFixed(1)}%（实验目标 ≤{((riverDeepSolve.targetActionRegretDriftPotFraction ?? 0.1) * 100).toFixed(0)}%）· 频率 TV {((riverDeepSolve.frequencyTotalVariation ?? 0) * 100).toFixed(1)}% 仅作诊断；{riverDeepSolve.targetMet
+                        ? riverDeepSolve.acceptedForScoring ? "已接管提示与较高稳定性实验 EV 评分。" : "只接管提示，动作评分仍回退公开范围模型。"
+                        : "未覆盖原提示或正式评分。"}</span>
                     </div>
                   ) : (
                     <div><b>CFR+ 结果已锁定</b><span>本决策现已按局部求解频率与动作 EV 进行提示和评分。</span></div>
@@ -2282,6 +2321,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   const observedShowdownImageHand = useRef(0);
   const hintedDecisionKeys = useRef<Set<string>>(new Set());
   const soundOnRef = useRef(isPokerAudioEnabled());
+  const riverSolveAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -2474,27 +2514,53 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       && (riverSolve.status === "running" || riverSolve.status === "solved")
     ) return;
     const decisionKey = hintDecisionKey;
+    riverSolveAbortRef.current?.abort();
+    const controller = new AbortController();
+    riverSolveAbortRef.current = controller;
     setRiverSolve({ decisionKey, status: "running" });
     window.setTimeout(() => {
-      try {
-        const result = riverCoachPlan.mode === "three-way"
-          ? solveThreeWayRiverCoachDecision(riverCoachPlan.request)
-          : solveRiverCoachDecision(riverCoachPlan.request);
-        setRiverSolve((current) => {
-          if (current?.decisionKey !== decisionKey) return current;
-          if (current.status === "solved") return current;
-          return { decisionKey, status: "solved", result };
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "未知求解错误";
-        setRiverSolve((current) => (
-          current?.decisionKey === decisionKey
-            ? { decisionKey, status: "error", error: message }
-            : current
-        ));
-      }
+      void (async () => {
+        try {
+          const result = riverCoachPlan.mode === "three-way"
+            ? await solveThreeWayRiverCoachDecisionInWorker(riverCoachPlan.request, {
+                signal: controller.signal,
+                onProgress(progress) {
+                  setRiverSolve((current) => current?.decisionKey === decisionKey
+                    ? { ...current, status: "running", progress }
+                    : current);
+                },
+              })
+            : solveRiverCoachDecision(riverCoachPlan.request);
+          if (controller.signal.aborted) return;
+          setRiverSolve((current) => {
+            if (current?.decisionKey !== decisionKey) return current;
+            if (current.status === "solved") return current;
+            return { decisionKey, status: "solved", result };
+          });
+        } catch (error) {
+          if (controller.signal.aborted || (error instanceof Error && error.name === "AbortError")) return;
+          const message = error instanceof Error ? error.message : "未知求解错误";
+          setRiverSolve((current) => (
+            current?.decisionKey === decisionKey
+              ? { decisionKey, status: "error", error: message }
+              : current
+          ));
+        } finally {
+          if (riverSolveAbortRef.current === controller) riverSolveAbortRef.current = null;
+        }
+      })();
     }, 32);
   }, [hintDecisionKey, riverCoachPlan, riverSolve]);
+
+  useEffect(() => {
+    const controller = riverSolveAbortRef.current;
+    if (controller && riverSolve?.status === "running" && riverSolve.decisionKey !== hintDecisionKey) {
+      controller.abort();
+      riverSolveAbortRef.current = null;
+    }
+  }, [hintDecisionKey, riverSolve]);
+
+  useEffect(() => () => riverSolveAbortRef.current?.abort(), []);
   const riverDeepSolveControl = useMemo<RiverDeepSolveControl | undefined>(() => {
     if (!riverCoachPlan) return undefined;
     const threeWayResult = currentRiverSolve?.result && isThreeWayRiverResult(currentRiverSolve.result)
@@ -2505,8 +2571,19 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       mode: riverCoachPlan.mode,
       status: currentRiverSolve?.status ?? "idle",
       error: currentRiverSolve?.error,
+      progress: currentRiverSolve?.progress,
       nashConvPotFraction: threeWayResult?.nashConvPotFraction,
+      quickNashConvPotFraction: threeWayResult?.quickNashConvPotFraction,
       targetNashConvPotFraction: threeWayResult?.targetNashConvPotFraction,
+      actionRegretDriftPotFraction: threeWayResult?.actionRegretDriftPotFraction,
+      targetActionRegretDriftPotFraction: threeWayResult?.targetActionRegretDriftPotFraction,
+      frequencyTotalVariation: threeWayResult?.frequencyTotalVariation,
+      acceptedForScoring: threeWayResult?.acceptedForScoring,
+      scoringTargetPotFraction: threeWayResult?.scoringTargetPotFraction,
+      quickRepresentativeCombos: threeWayResult?.quickRepresentativeCombos?.oop,
+      representativeCombos: threeWayResult?.representativeCombos.oop,
+      iterations: threeWayResult?.iterations,
+      quickIterations: threeWayResult?.quickIterations,
       targetMet: threeWayResult?.targetMet,
       onSolve: runRiverDeepSolve,
     };
@@ -2550,6 +2627,8 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   }, [mode, game, sessionEnded, recordRunHand, recordSoloHandHistory]);
 
   const resetRun = useCallback((nextMode: GameMode, nextPreset: TablePresetKey) => {
+    riverSolveAbortRef.current?.abort();
+    riverSolveAbortRef.current = null;
     setMode(nextMode);
     setTraining(nextMode === "per_hand");
     setRevealedHintKey(null);
@@ -2625,12 +2704,28 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     if (!game || !human || !isHumanTurn || !advice) return;
     if (soundOn) void unlockPokerAudio().then((ready) => { if (ready) playPokerSound(kind); });
     const solvedAdvice = "riverSolver" in advice ? advice as SolvedRiverAdvice : null;
-    const solverSupportsAction = solvedAdvice?.riverSolver.actions.some((route) => route.action === kind) ?? true;
-    const gradingAdvice = solvedAdvice?.riverSolverAccepted && !solverSupportsAction
-      ? solvedAdvice.riverSolverFallback
-      : advice;
+    const sizingContext = pokerSizingContext(game, human);
+    const actualRaiseTo = kind === "raise" ? legalPokerRaiseTarget(sizingContext, raiseTo) : null;
+    const actualBetFraction = actualRaiseTo === null ? null : pokerRaiseFraction(sizingContext, actualRaiseTo);
+    const solvedRoutesForAction = solvedAdvice?.riverSolver.actions.filter((route) => route.action === kind) ?? [];
+    const selectedSolverRoute = kind === "raise" && actualRaiseTo !== null
+      ? [...solvedRoutesForAction].sort((left, right) => (
+          Math.abs((left.raiseToBb ?? 0) - actualRaiseTo / BIG_BLIND)
+          - Math.abs((right.raiseToBb ?? 0) - actualRaiseTo / BIG_BLIND)
+        ))[0]
+      : solvedRoutesForAction[0];
+    const solverOffTreeBb = kind === "raise"
+      && actualRaiseTo !== null
+      && selectedSolverRoute?.raiseToBb !== undefined
+        ? Math.abs(actualRaiseTo / BIG_BLIND - selectedSolverRoute.raiseToBb)
+        : 0;
+    const solverRouteEligible = Boolean(selectedSolverRoute && solverOffTreeBb <= 0.05);
+    const gradingAdvice = solvedAdvice
+      && (!solvedAdvice.riverSolverGradingAccepted || !solverRouteEligible)
+        ? solvedAdvice.riverSolverFallback
+        : advice;
     const bestFrequency = Math.max(...Object.values(gradingAdvice.frequencies));
-    let selectedFrequency = gradingAdvice.frequencies[kind];
+    const selectedFrequency = gradingAdvice.frequencies[kind];
     const relativeFrequency = selectedFrequency / Math.max(0.001, bestFrequency);
     const actionScore = selectedFrequency > 0 ? Math.round(40 + 60 * relativeFrequency) : 30;
     let actionVerdict = selectedFrequency <= Number.EPSILON
@@ -2642,9 +2737,6 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
           : relativeFrequency >= 0.28 || selectedFrequency >= 0.15
             ? "可接受混合"
             : "低频路线";
-    const sizingContext = pokerSizingContext(game, human);
-    const actualRaiseTo = kind === "raise" ? legalPokerRaiseTarget(sizingContext, raiseTo) : null;
-    const actualBetFraction = actualRaiseTo === null ? null : pokerRaiseFraction(sizingContext, actualRaiseTo);
     const sizeScore = actualRaiseTo === null
       ? null
       : scorePokerRaiseSize(sizingContext, actualRaiseTo, gradingAdvice.sizingRoutes);
@@ -2661,9 +2753,14 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     let solverExploitabilityPotFraction: number | null = null;
     let solverNashConvBb: number | null = null;
     let solverNashConvPotFraction: number | null = null;
+    let solverQuickNashConvPotFraction: number | null = null;
+    let solverActionRegretDriftPotFraction: number | null = null;
+    let solverFrequencyTotalVariation: number | null = null;
     let solverTargetPotFraction: number | null = null;
     let solverTargetMet: boolean | null = null;
+    let solverAcceptedForScoring: boolean | null = null;
     let solverIterations: number | null = null;
+    let solverQuickIterations: number | null = null;
     let solverRepresentativeCombos = "";
     let solverDetails = "";
     if (solvedAdvice) {
@@ -2674,53 +2771,62 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       if (threeWay) {
         solverNashConvBb = riverSolver.nashConvBb;
         solverNashConvPotFraction = riverSolver.nashConvPotFraction;
+        solverQuickNashConvPotFraction = riverSolver.quickNashConvPotFraction;
+        solverActionRegretDriftPotFraction = riverSolver.actionRegretDriftPotFraction;
+        solverFrequencyTotalVariation = riverSolver.frequencyTotalVariation;
         solverTargetPotFraction = riverSolver.targetNashConvPotFraction;
         solverTargetMet = riverSolver.targetMet;
-        solverRepresentativeCombos = `${riverSolver.representativeCombos.oop}×${riverSolver.representativeCombos.middle}×${riverSolver.representativeCombos.ip}`;
+        solverAcceptedForScoring = riverSolver.acceptedForScoring;
+        solverQuickIterations = riverSolver.quickIterations;
+        solverRepresentativeCombos = `${riverSolver.quickRepresentativeCombos?.oop ?? "—"}→${riverSolver.representativeCombos.oop} / 人`;
       } else {
         solverExploitabilityPotFraction = riverSolver.exploitabilityPotFraction;
         solverRepresentativeCombos = `${riverSolver.representativeCombos.oop}×${riverSolver.representativeCombos.ip}`;
       }
-      const solvedRoutes = riverSolver.actions.filter((route) => route.action === kind);
-      const selectedRoute = kind === "raise" && actualRaiseTo !== null
-        ? [...solvedRoutes].sort((left, right) => (
-            Math.abs((left.raiseToBb ?? 0) - actualRaiseTo / BIG_BLIND)
-            - Math.abs((right.raiseToBb ?? 0) - actualRaiseTo / BIG_BLIND)
-          ))[0]
-        : solvedRoutes[0];
-      if (selectedRoute && solvedAdvice.riverSolverAccepted) {
+      const selectedRoute = selectedSolverRoute;
+      const offTreeBb = solverOffTreeBb;
+      if (selectedRoute && solverRouteEligible && solvedAdvice.riverSolverGradingAccepted) {
         const bestEvBb = Math.max(...riverSolver.actions.map((route) => route.evBb));
         solverEvLossBb = Math.max(0, bestEvBb - selectedRoute.evBb);
-        selectedFrequency = selectedRoute.frequency;
         const lossPotFraction = solverEvLossBb / Math.max(0.5, committedPot(game) / BIG_BLIND);
-        const evScore = lossPotFraction <= 0.001
+        // Whole-range NashConv is an admission diagnostic, not a per-holding
+        // confidence interval. For a three-way score use only the observed
+        // current-hand action-regret drift across range resolutions as an
+        // empirical calibration zone; it is deliberately not described as a
+        // mathematical error bound.
+        const empiricalDeadZonePotFraction = threeWay
+          ? riverSolver.actionRegretDriftPotFraction ?? 0
+          : riverSolver.exploitabilityPotFraction;
+        const scorableLossPotFraction = Math.max(0, lossPotFraction - empiricalDeadZonePotFraction);
+        const evScore = scorableLossPotFraction <= 0.001
           ? 100
-          : lossPotFraction <= 0.005
+          : scorableLossPotFraction <= 0.005
             ? 96
-            : lossPotFraction <= 0.015
+            : scorableLossPotFraction <= 0.015
               ? 86
-              : lossPotFraction <= 0.03
+              : scorableLossPotFraction <= 0.03
                 ? 72
-                : Math.max(25, Math.round(72 * Math.exp(-(lossPotFraction - 0.03) * 8)));
+                : Math.max(25, Math.round(72 * Math.exp(-(scorableLossPotFraction - 0.03) * 8)));
         score = sizeScore === null
           ? evScore
           : Math.round(evScore * (0.72 + 0.28 * sizeScore / 100));
-        actionVerdict = lossPotFraction <= 0.001
-          ? "CFR+ EV 等价路线"
-          : lossPotFraction <= 0.005
+        actionVerdict = lossPotFraction <= empiricalDeadZonePotFraction
+          ? "落在跨分辨率经验稳定区内"
+          : scorableLossPotFraction <= 0.005
             ? "极低 EV 损失"
-            : lossPotFraction <= 0.015
+            : scorableLossPotFraction <= 0.015
               ? "可接受的局部解路线"
               : "明显 EV 损失";
-        solverDetails = `你的动作按最近固定树尺寸对应为 ${solverActionLabel(selectedRoute)}，相对当前最高动作的 EV 损失为 ${solverEvLossBb.toFixed(2)} BB；只比较同一中心化效用零点下的动作差，不把数值当作绝对盈利。`;
-        if (kind === "raise" && actualRaiseTo !== null && selectedRoute.raiseToBb !== undefined) {
-          const offTreeBb = Math.abs(actualRaiseTo / BIG_BLIND - selectedRoute.raiseToBb);
-          if (offTreeBb > 0.05) {
-            sizeVerdict += `${sizeVerdict ? "；" : ""}该尺寸不在固定树中，按最近节点相差 ${offTreeBb.toFixed(1)} BB 评估`;
-          }
-        }
+        solverDetails = threeWay
+          ? `你的动作对应 ${solverActionLabel(selectedRoute)}，相对当前最高动作的 EV 损失为 ${solverEvLossBb.toFixed(2)} BB；全范围 NashConv 只负责准入，评分采用当前手牌跨范围分辨率观察到的 ${(empiricalDeadZonePotFraction * 100).toFixed(1)}% 动作 regret 漂移作经验死区。它是保守校准，不是逐手牌误差上界。`
+          : `你的动作对应 ${solverActionLabel(selectedRoute)}，相对当前最高动作的 EV 损失为 ${solverEvLossBb.toFixed(2)} BB；评分先扣除约 ${(empiricalDeadZonePotFraction * 100).toFixed(1)}% 底池的固定树误差校准区。`;
+      } else if (selectedRoute && !solverRouteEligible) {
+        sizeVerdict += `${sizeVerdict ? "；" : ""}该尺寸与最近固定树节点相差 ${offTreeBb.toFixed(1)} BB，按树外尺寸处理`;
+        solverDetails = "你的下注尺寸不在当前固定树中，因此没有映射到最近尺寸计算看似精确的 EV 损失；本次尺寸与动作评分保留公开范围启发式。";
+      } else if (threeWay && solvedAdvice.riverSolverAccepted && !solvedAdvice.riverSolverGradingAccepted) {
+        solverDetails = `三人多分辨率结果已通过 ≤${(riverSolver.targetNashConvPotFraction * 100).toFixed(0)}% 实验提示门槛，但未通过 ≤${(riverSolver.scoringTargetPotFraction * 100).toFixed(0)}% 较高稳定性评分门槛；提示采用高分辨率混合，分数仍使用公开范围启发式。`;
       } else if (threeWay && !solvedAdvice.riverSolverAccepted) {
-        solverDetails = `三人实验解 NashConv ${(riverSolver.nashConvPotFraction * 100).toFixed(1)}% 未达到 ≤${(riverSolver.targetNashConvPotFraction * 100).toFixed(0)}% 门槛；本次仍按公开范围启发式评分。`;
+        solverDetails = `三人快速/复核 NashConv 与跨分辨率动作 regret 没有同时达到 ≤${(riverSolver.targetNashConvPotFraction * 100).toFixed(0)}% 实验提示门槛；本次仍按公开范围启发式提示与评分。`;
       } else if (threeWay && !selectedRoute) {
         solverDetails = "你的动作不在当前单次下注固定树中，因此没有把中心化动作效用映射成 EV 损失；该动作需要保留到更完整的含加注树复盘。";
       }
@@ -2770,9 +2876,14 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       solverExploitabilityPotFraction,
       solverNashConvBb,
       solverNashConvPotFraction,
+      solverQuickNashConvPotFraction,
+      solverActionRegretDriftPotFraction,
+      solverFrequencyTotalVariation,
       solverTargetPotFraction,
       solverTargetMet,
+      solverAcceptedForScoring,
       solverIterations,
+      solverQuickIterations,
       solverRepresentativeCombos,
       solverDetails,
       preflopPosition: gradingAdvice.preflopPosition,
@@ -3303,9 +3414,11 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                   <h3>{feedback.score >= 85 ? "线路漂亮，继续保持" : feedback.score >= 65 ? "可执行，但有更优选择" : "这里值得重点复盘"}</h3>
                   <p>你选择了{feedback.action}，属于{feedback.actionVerdict}（{formatPokerFrequency(feedback.selectedFrequency)}）。参考混合：{feedback.mix}。{feedback.sizingMix ? `进入加注分支后的尺寸混合：${feedback.sizingMix}。` : ""}{feedback.sizeVerdict ? `${feedback.sizeVerdict}。` : ""}{feedback.note}</p>
                   <p className="range-note">来源：{feedback.strategySource}。{feedback.solverKind === "three-way-approximation"
-                    ? `三人固定树 NashConv ${((feedback.solverNashConvPotFraction ?? 0) * 100).toFixed(1)}% 底池（目标 ≤${((feedback.solverTargetPotFraction ?? 0.1) * 100).toFixed(0)}%）；${!feedback.solverTargetMet
-                      ? "未达门槛，只展示实验结果，评分仍使用公开范围启发式。"
-                      : feedback.solverEvLossBb !== null
+                    ? `三人多分辨率 ${feedback.solverRepresentativeCombos} · 快速/复核 ${feedback.solverQuickIterations ?? "—"}/${feedback.solverIterations ?? "—"} 轮 · NashConv ${((feedback.solverQuickNashConvPotFraction ?? 0) * 100).toFixed(1)}% / ${((feedback.solverNashConvPotFraction ?? 0) * 100).toFixed(1)}% · 动作 regret 差 ${((feedback.solverActionRegretDriftPotFraction ?? 0) * 100).toFixed(1)}%；${!feedback.solverTargetMet
+                      ? "未通过实验提示门槛，提示和评分都使用公开范围启发式。"
+                      : !feedback.solverAcceptedForScoring
+                        ? "已接管提示，但未通过较高稳定性评分门槛，分数仍使用公开范围启发式。"
+                        : feedback.solverEvLossBb !== null
                         ? `已按相对最高动作 EV 损失 ${feedback.solverEvLossBb.toFixed(2)} BB 评分。`
                         : "求解已达门槛，但你的动作不在固定树中，因此没有按求解器 EV 损失评分。"}`
                     : feedback.solverEvLossBb === null
@@ -3430,7 +3543,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                         <small>{item.preflopPosition} · {item.preflopScenario} · 基准继续范围约 {Math.round(item.preflopTargetRange * 100)}% · 本手进入频率 {formatPokerFrequency(item.preflopEnterFrequency)} · 翻前原始摊牌权益不作为首入池阈值 · 来源：{item.strategySource}。{item.note}</small>
                       ) : (
                         <small>对行动范围估算权益 {Math.round(item.equity * 100)}% / 直接赔率 {Math.round(item.potOdds * 100)}% / 权益实现参考线 {Math.round(item.realizationThreshold * 100)}% · 权益实现估算 {Math.round(item.equityRealization * 100)}% · 有效筹码 {item.effectiveStackBb.toFixed(1)} BB / SPR {item.spr.toFixed(1)}{item.solverKind === "three-way-approximation"
-                          ? ` · 三人 NashConv ${((item.solverNashConvPotFraction ?? 0) * 100).toFixed(1)}% / 目标 ≤${((item.solverTargetPotFraction ?? 0.1) * 100).toFixed(0)}%${!item.solverTargetMet ? " · 未接管评分" : item.solverEvLossBb === null ? " · 树外动作无 EV 评分" : ` · 相对最高动作 EV 损失 ${item.solverEvLossBb.toFixed(2)} BB`}`
+                          ? ` · 三人 ${item.solverRepresentativeCombos} · NashConv ${((item.solverQuickNashConvPotFraction ?? 0) * 100).toFixed(1)}%/${((item.solverNashConvPotFraction ?? 0) * 100).toFixed(1)}% · regret 稳定差 ${((item.solverActionRegretDriftPotFraction ?? 0) * 100).toFixed(1)}%${!item.solverTargetMet ? " · 未接管提示或评分" : !item.solverAcceptedForScoring ? " · 仅接管提示" : item.solverEvLossBb === null ? " · 树外动作无 EV 评分" : ` · 相对最高动作 EV 损失 ${item.solverEvLossBb.toFixed(2)} BB`}`
                           : item.solverEvLossBb !== null
                             ? ` · CFR+ 动作 EV 损失 ${item.solverEvLossBb.toFixed(2)} BB · 固定树可剥削度 ${((item.solverExploitabilityPotFraction ?? 0) * 100).toFixed(3)}%`
                             : item.callEv === null ? "" : ` · 跟注 EV 代理 ${item.callEv >= 0 ? "+" : ""}${Math.round(item.callEv)}`} · 来源：{item.strategySource}。{item.note}</small>

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { solveThreeWayRiverCoachDecision } from "../lib/poker-threeway-river-coach.ts";
+import {
+  materializeThreeWayRiverCoachRequest,
+  solveMaterializedThreeWayRiverCoachDecision,
+  solveThreeWayRiverCoachDecision,
+} from "../lib/poker-threeway-river-coach.ts";
 
 const card = (rank, suit) => ({ rank, suit });
 const BOARD = [
@@ -56,8 +60,90 @@ test("three-way river coach exposes public-tree frequencies, action EVs, and a m
     result.playerDeviationGainsBb.reduce((sum, value) => sum + value, 0) - result.nashConvBb,
   ) < 1e-9);
   assert.equal(result.targetMet, result.nashConvPotFraction <= result.targetNashConvPotFraction);
+  assert.equal(result.acceptedForGuidance, result.targetMet);
+  assert.equal(result.solveMode, "fixed");
+  assert.equal(result.quickSpotId, null);
   assert.ok(Object.isFrozen(result));
   assert.ok(Object.isFrozen(result.actions));
+});
+
+test("adaptive coach verifies a cloneable public range at two resolutions", async () => {
+  const materialized = materializeThreeWayRiverCoachRequest(request({
+    iterations: 40,
+    maxIterations: 80,
+    iterationChunk: 40,
+    targetNashConvPotFraction: 1,
+    targetActionRegretDriftPotFraction: 1,
+    scoringTargetPotFraction: 1,
+  }));
+  assert.doesNotThrow(() => structuredClone(materialized));
+  assert.ok(Object.values(materialized.rangeWeights).every((range) => (
+    range.length > 1 && range.every((entry) => typeof entry.holding === "string" && entry.weight > 0)
+  )));
+
+  const progress = [];
+  const result = await solveMaterializedThreeWayRiverCoachDecision(materialized, {
+    yieldControl: async () => {},
+    onProgress: (checkpoint) => progress.push(checkpoint),
+  });
+  assert.equal(result.solveMode, "adaptive");
+  assert.deepEqual(result.quickRepresentativeCombos, { oop: 3, middle: 3, ip: 3 });
+  assert.deepEqual(result.representativeCombos, { oop: 5, middle: 5, ip: 5 });
+  assert.ok(result.quickIterations >= 40);
+  assert.ok(result.iterations >= 40);
+  assert.ok(result.quickCompatibleDeals > 0);
+  assert.ok(result.compatibleDeals > result.quickCompatibleDeals);
+  assert.ok(Number.isFinite(result.actionRegretDriftPotFraction));
+  assert.ok(result.frequencyTotalVariation >= 0 && result.frequencyTotalVariation <= 1);
+  assert.equal(result.acceptedForGuidance, true);
+  assert.equal(result.acceptedForScoring, true);
+  assert.equal(result.stopReason, "target-met");
+  assert.ok(progress.some((item) => item.resolution === "quick"));
+  assert.ok(progress.some((item) => item.resolution === "verification"));
+  assert.doesNotThrow(() => structuredClone(result));
+});
+
+test("adaptive training does not stop at the loose guidance gate before trying the scoring target", async () => {
+  const result = await solveMaterializedThreeWayRiverCoachDecision(
+    materializeThreeWayRiverCoachRequest(request({
+      heroPlayer: "oop",
+      publicActions: [],
+      iterations: 40,
+      maxIterations: 80,
+      iterationChunk: 40,
+      targetNashConvPotFraction: 1,
+      targetActionRegretDriftPotFraction: 1,
+      scoringTargetPotFraction: 1e-9,
+    })),
+    { yieldControl: async () => {} },
+  );
+
+  assert.equal(result.quickIterations, 80);
+  assert.equal(result.iterations, 80);
+  assert.equal(result.acceptedForGuidance, true);
+  assert.equal(result.acceptedForScoring, false);
+});
+
+test("adaptive coach stops a stale request between bounded chunks", async () => {
+  const materialized = materializeThreeWayRiverCoachRequest(request({
+    iterations: 80,
+    maxIterations: 160,
+    iterationChunk: 40,
+  }));
+  const controller = new AbortController();
+  let checkpoints = 0;
+  await assert.rejects(
+    solveMaterializedThreeWayRiverCoachDecision(materialized, {
+      signal: controller.signal,
+      yieldControl: async () => {},
+      onProgress: () => {
+        checkpoints += 1;
+        controller.abort();
+      },
+    }),
+    (error) => error instanceof Error && error.name === "AbortError",
+  );
+  assert.equal(checkpoints, 1);
 });
 
 test("one caller does not end a three-way river decision", () => {

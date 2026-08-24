@@ -1,14 +1,21 @@
 import {
+  createThreeWayRiverSolverSession,
   solveThreeWayRiver,
   threeWayRiverActionEvEntry,
   threeWayRiverStrategyEntry,
   type ThreeWayRiverAction,
+  type ThreeWayRiverCheckpoint,
   type ThreeWayRiverPlayer,
+  type ThreeWayRiverSolution,
+  type ThreeWayRiverSpec,
 } from "./gto-threeway-river.ts";
 import { type OpponentRangeWeight, type PokerCard, type PokerSuit } from "./poker-evaluator.ts";
 import {
+  materializeRiverRangeWeight,
+  rangeWeightFromMaterialized,
   representativeRiverRange,
   riverCoachHoldingKey,
+  type MaterializedRiverRangeWeight,
 } from "./poker-river-coach.ts";
 import type { WeightedRiverHolding } from "./gto-river.ts";
 import type { StrategyAction, StrategyCard } from "./poker-strategy.ts";
@@ -32,8 +39,58 @@ export type ThreeWayRiverCoachRequest = Readonly<{
   stackAtStreetStartBb: readonly [number, number, number];
   publicActions: readonly ThreeWayRiverCoachPublicAction[];
   representativeCombos?: number;
+  /** Minimum iterations before an adaptive solve may be accepted. */
   iterations?: number;
+  /** Upper bound for adaptive browser solving. Defaults to 360. */
+  maxIterations?: number;
+  /** Work per cooperative chunk before yielding to the UI. */
+  iterationChunk?: number;
   targetNashConvPotFraction?: number;
+  /** Maximum cross-resolution action-regret drift, as a fraction of the pot. */
+  targetActionRegretDriftPotFraction?: number;
+  /** Stricter stability gate required before experimental solver EV may grade an action. */
+  scoringTargetPotFraction?: number;
+}>;
+
+export type MaterializedThreeWayRiverCoachRequest = Readonly<{
+  board: readonly [PokerCard, PokerCard, PokerCard, PokerCard, PokerCard];
+  suits: readonly [PokerSuit, PokerSuit, PokerSuit, PokerSuit];
+  heroCards: readonly [PokerCard, PokerCard];
+  heroPlayer: ThreeWayRiverPlayer;
+  rangeWeights: Readonly<Record<ThreeWayRiverPlayer, readonly MaterializedRiverRangeWeight[]>>;
+  potAtStreetStartBb: number;
+  stackAtStreetStartBb: readonly [number, number, number];
+  publicActions: readonly ThreeWayRiverCoachPublicAction[];
+  representativeCombos?: number;
+  iterations?: number;
+  maxIterations?: number;
+  iterationChunk?: number;
+  targetNashConvPotFraction?: number;
+  targetActionRegretDriftPotFraction?: number;
+  scoringTargetPotFraction?: number;
+}>;
+
+export type ThreeWayRiverCoachCheckpoint = Readonly<{
+  resolution: "quick" | "verification";
+  representativeCombos: number;
+  iterations: number;
+  nashConvPotFraction: number;
+}>;
+
+export type ThreeWayRiverCoachProgress = Readonly<{
+  resolution: "quick" | "verification";
+  representativeCombos: number;
+  iterations: number;
+  maxIterations: number;
+  nashConvPotFraction: number;
+  targetNashConvPotFraction: number;
+}>;
+
+export type ThreeWayRiverCoachAsyncOptions = Readonly<{
+  signal?: AbortSignal;
+  onProgress?: (progress: ThreeWayRiverCoachProgress) => void;
+  /** Test hook; production defaults to yielding one macrotask between chunks. */
+  yieldControl?: () => Promise<void>;
 }>;
 
 export type ThreeWayRiverCoachAction = Readonly<{
@@ -63,6 +120,20 @@ export type ThreeWayRiverCoachResult = Readonly<{
   nashConvNormalizationPotBb: number;
   nashConvPotFraction: number;
   targetNashConvPotFraction: number;
+  quickSpotId: string | null;
+  quickIterations: number | null;
+  quickRepresentativeCombos: Readonly<{ oop: number; middle: number; ip: number }> | null;
+  quickCompatibleDeals: number | null;
+  quickNashConvPotFraction: number | null;
+  actionRegretDriftPotFraction: number | null;
+  frequencyTotalVariation: number | null;
+  targetActionRegretDriftPotFraction: number;
+  scoringTargetPotFraction: number;
+  acceptedForGuidance: boolean;
+  acceptedForScoring: boolean;
+  checkpoints: readonly ThreeWayRiverCoachCheckpoint[];
+  solveMode: "fixed" | "adaptive";
+  stopReason: "fixed-iterations" | "target-met" | "iteration-limit" | "abstraction-unstable";
   targetMet: boolean;
 }>;
 
@@ -220,15 +291,43 @@ function diversifiedRepresentativeRange(
   return Object.freeze(selected);
 }
 
-/**
- * Solves a reduced three-player river abstraction and audits the returned
- * profile against exact unilateral best responses inside that same tree.
- * Multiplayer CFR+ has no general Nash-convergence guarantee, so targetMet is
- * a measured training gate rather than a claim of commercial/full-game GTO.
- */
-export function solveThreeWayRiverCoachDecision(
+type PreparedThreeWayRiverCoachLevel = Readonly<{
+  resolution: "quick" | "verification";
+  representativeCombos: number;
+  ranges: readonly [
+    readonly WeightedRiverHolding[],
+    readonly WeightedRiverHolding[],
+    readonly WeightedRiverHolding[],
+  ];
+  spec: ThreeWayRiverSpec;
+}>;
+
+type PreparedThreeWayRiverCoachPlan = Readonly<{
+  heroPlayer: ThreeWayRiverPlayer;
+  heroHolding: string;
+  history: string;
+  quick: PreparedThreeWayRiverCoachLevel;
+  verification: PreparedThreeWayRiverCoachLevel;
+  minIterations: number;
+  maxIterations: number;
+  iterationChunk: number;
+  targetNashConvPotFraction: number;
+  targetActionRegretDriftPotFraction: number;
+  scoringTargetPotFraction: number;
+}>;
+
+function boundedFraction(value: number | undefined, fallback: number, label: string): number {
+  const candidate = value ?? fallback;
+  if (!Number.isFinite(candidate) || candidate <= 0 || candidate > 1) {
+    throw new RangeError(`${label} 必须位于 (0, 1]`);
+  }
+  return candidate;
+}
+
+function prepareThreeWayRiverCoachPlan(
   request: ThreeWayRiverCoachRequest,
-): ThreeWayRiverCoachResult {
+  multiResolution = true,
+): PreparedThreeWayRiverCoachPlan {
   if (request.board.length !== 5 || request.heroCards.length !== 2) {
     throw new RangeError("三人河牌求解必须包含 5 张公共牌和 2 张英雄手牌");
   }
@@ -238,77 +337,360 @@ export function solveThreeWayRiverCoachDecision(
     finiteNonNegative(value, `stackAtStreetStartBb[${index}]`)
   )) as [number, number, number];
   if (stackBb.some((value) => value <= 0)) throw new RangeError("三位玩家河牌开始时都必须仍有可行动筹码");
-  // Three seats multiply compatible chance tuples cubically. Three
-  // representatives per seat keeps the on-demand browser solve responsive;
-  // the measured NashConv gate below decides whether that coarse run is usable.
-  const representativeCombos = request.representativeCombos ?? 3;
-  const ranges = PLAYERS.map((player) => diversifiedRepresentativeRange(
-    request,
-    player,
-    representativeCombos,
-  )) as [
-    ReturnType<typeof representativeRiverRange>,
-    ReturnType<typeof representativeRiverRange>,
-    ReturnType<typeof representativeRiverRange>,
-  ];
   const publicNode = publicHistoryAndTree(request);
-  const iterations = Math.max(100, Math.min(5_000, Math.round(request.iterations ?? 120)));
-  const solution = solveThreeWayRiver({
-    board: Object.freeze(request.board.map(toStrategyCard)) as readonly [
-      StrategyCard,
-      StrategyCard,
-      StrategyCard,
-      StrategyCard,
-      StrategyCard,
-    ],
-    ranges,
-    potBb,
-    stackBb,
-    bettingTree: publicNode.bettingTree,
-    startingHistory: publicNode.historyActions,
-  }, {
-    iterations,
-    averagingDelay: Math.min(80, Math.max(15, Math.floor(iterations * 0.08))),
-    linearAveraging: true,
+  const board = Object.freeze(request.board.map(toStrategyCard)) as readonly [
+    StrategyCard,
+    StrategyCard,
+    StrategyCard,
+    StrategyCard,
+    StrategyCard,
+  ];
+  const quickCombos = request.representativeCombos ?? 3;
+  if (!Number.isSafeInteger(quickCombos) || quickCombos < 2 || quickCombos > 12) {
+    throw new RangeError("三人快速范围代表组合必须是 2..12 的整数");
+  }
+  const verificationCombos = Math.min(24, Math.max(quickCombos + 2, Math.ceil(quickCombos * 5 / 3)));
+  const makeLevel = (
+    resolution: PreparedThreeWayRiverCoachLevel["resolution"],
+    representativeCombos: number,
+  ): PreparedThreeWayRiverCoachLevel => {
+    const ranges = PLAYERS.map((player) => diversifiedRepresentativeRange(
+      request,
+      player,
+      representativeCombos,
+    )) as [
+      ReturnType<typeof representativeRiverRange>,
+      ReturnType<typeof representativeRiverRange>,
+      ReturnType<typeof representativeRiverRange>,
+    ];
+    return Object.freeze({
+      resolution,
+      representativeCombos,
+      ranges: Object.freeze(ranges),
+      spec: Object.freeze({
+        board,
+        ranges,
+        potBb,
+        stackBb: Object.freeze(stackBb),
+        bettingTree: publicNode.bettingTree,
+        startingHistory: publicNode.historyActions,
+      }),
+    });
+  };
+  const minIterations = Math.max(40, Math.min(5_000, Math.round(request.iterations ?? 120)));
+  const maxIterations = Math.max(
+    minIterations,
+    Math.min(5_000, Math.round(request.maxIterations ?? 360)),
+  );
+  const iterationChunk = Math.max(
+    20,
+    Math.min(maxIterations, Math.round(request.iterationChunk ?? 40)),
+  );
+  const quick = makeLevel("quick", quickCombos);
+  const verification = multiResolution
+    ? makeLevel("verification", verificationCombos)
+    : quick;
+  return Object.freeze({
+    heroPlayer: request.heroPlayer,
+    heroHolding: riverCoachHoldingKey(request.heroCards),
+    history: publicNode.history,
+    quick,
+    verification,
+    minIterations,
+    maxIterations,
+    iterationChunk,
+    targetNashConvPotFraction: boundedFraction(
+      request.targetNashConvPotFraction,
+      0.1,
+      "targetNashConvPotFraction",
+    ),
+    targetActionRegretDriftPotFraction: boundedFraction(
+      request.targetActionRegretDriftPotFraction,
+      0.1,
+      "targetActionRegretDriftPotFraction",
+    ),
+    scoringTargetPotFraction: boundedFraction(
+      request.scoringTargetPotFraction,
+      0.03,
+      "scoringTargetPotFraction",
+    ),
   });
-  const heroHolding = riverCoachHoldingKey(request.heroCards);
-  const strategy = threeWayRiverStrategyEntry(solution, request.heroPlayer, heroHolding, publicNode.history);
-  const actionValues = threeWayRiverActionEvEntry(solution, request.heroPlayer, heroHolding, publicNode.history);
+}
+
+function coachActions(
+  solution: ThreeWayRiverSolution,
+  plan: PreparedThreeWayRiverCoachPlan,
+): readonly ThreeWayRiverCoachAction[] {
+  const strategy = threeWayRiverStrategyEntry(solution, plan.heroPlayer, plan.heroHolding, plan.history);
+  const actionValues = threeWayRiverActionEvEntry(solution, plan.heroPlayer, plan.heroHolding, plan.history);
   if (!strategy || !actionValues) throw new Error("三人求解结果缺少当前手牌信息集");
   const evByAction = new Map(actionValues.actions.map((action, index) => [action, actionValues.actionEvBb[index]]));
-  const actions = Object.freeze(strategy.actions.map((solverAction, index) => Object.freeze({
+  return Object.freeze(strategy.actions.map((solverAction, index) => Object.freeze({
     solverAction,
     ...publicAction(solverAction),
     frequency: strategy.probabilities[index],
     evBb: evByAction.get(solverAction) ?? 0,
   })));
-  const targetNashConvPotFraction = Math.max(
-    0.01,
-    Math.min(1, request.targetNashConvPotFraction ?? 0.1),
+}
+
+function crossResolutionDiagnostics(
+  quick: readonly ThreeWayRiverCoachAction[],
+  verification: readonly ThreeWayRiverCoachAction[],
+  normalizationPotBb: number,
+): Readonly<{ actionRegretDriftPotFraction: number; frequencyTotalVariation: number }> {
+  const quickByAction = new Map(quick.map((action) => [action.solverAction, action]));
+  const verificationByAction = new Map(verification.map((action) => [action.solverAction, action]));
+  if (quickByAction.size !== verificationByAction.size
+    || [...quickByAction.keys()].some((action) => !verificationByAction.has(action))) {
+    throw new Error("两档三人范围分辨率的合法动作集合不一致");
+  }
+  const quickBest = Math.max(...quick.map((action) => action.evBb));
+  const verificationBest = Math.max(...verification.map((action) => action.evBb));
+  let maximumRegretDrift = 0;
+  let frequencyDifference = 0;
+  for (const [solverAction, quickAction] of quickByAction) {
+    const verificationAction = verificationByAction.get(solverAction)!;
+    const quickRegret = quickBest - quickAction.evBb;
+    const verificationRegret = verificationBest - verificationAction.evBb;
+    maximumRegretDrift = Math.max(maximumRegretDrift, Math.abs(quickRegret - verificationRegret));
+    frequencyDifference += Math.abs(quickAction.frequency - verificationAction.frequency);
+  }
+  return Object.freeze({
+    actionRegretDriftPotFraction: maximumRegretDrift / normalizationPotBb,
+    frequencyTotalVariation: frequencyDifference / 2,
+  });
+}
+
+function buildCoachResult(
+  plan: PreparedThreeWayRiverCoachPlan,
+  finalSolution: ThreeWayRiverSolution,
+  quickSolution: ThreeWayRiverSolution | null,
+  checkpoints: readonly ThreeWayRiverCoachCheckpoint[],
+  solveMode: ThreeWayRiverCoachResult["solveMode"],
+  stopReason: ThreeWayRiverCoachResult["stopReason"],
+): ThreeWayRiverCoachResult {
+  const actions = coachActions(finalSolution, plan);
+  const quickActions = quickSolution ? coachActions(quickSolution, plan) : null;
+  const crossResolution = quickActions
+    ? crossResolutionDiagnostics(
+        quickActions,
+        actions,
+        finalSolution.audit.normalizationPotBb,
+      )
+    : null;
+  const quickNashConv = quickSolution?.audit.nashConvPotFraction ?? null;
+  const actionRegretDrift = crossResolution?.actionRegretDriftPotFraction ?? null;
+  const acceptedForGuidance = finalSolution.audit.nashConvPotFraction <= plan.targetNashConvPotFraction
+    && (quickNashConv === null || quickNashConv <= plan.targetNashConvPotFraction)
+    && (actionRegretDrift === null || actionRegretDrift <= plan.targetActionRegretDriftPotFraction);
+  const uncertainty = Math.max(
+    finalSolution.audit.nashConvPotFraction,
+    quickNashConv ?? 0,
+    actionRegretDrift ?? 0,
   );
+  const acceptedForScoring = quickSolution !== null
+    && acceptedForGuidance
+    && uncertainty <= plan.scoringTargetPotFraction;
+  const finalRanges = quickSolution ? plan.verification.ranges : plan.quick.ranges;
   return Object.freeze({
     status: "solved",
     source: "internal-cfr+-reduced-three-way-river",
     scope: "three-way-river-single-bet-representative-ranges",
     approximation: "experimental-multiplayer-cfr+",
-    spotId: solution.spotId,
-    heroPlayer: request.heroPlayer,
-    heroHolding,
-    history: publicNode.history,
+    spotId: finalSolution.spotId,
+    heroPlayer: plan.heroPlayer,
+    heroHolding: plan.heroHolding,
+    history: plan.history,
     actions,
-    iterations: solution.iterations,
+    iterations: finalSolution.iterations,
     representativeCombos: Object.freeze({
-      oop: ranges[0].length,
-      middle: ranges[1].length,
-      ip: ranges[2].length,
+      oop: finalRanges[0].length,
+      middle: finalRanges[1].length,
+      ip: finalRanges[2].length,
     }),
-    compatibleDeals: solution.compatibleDeals,
-    profileValueBb: solution.audit.profileValueBb,
-    playerDeviationGainsBb: solution.audit.perPlayerGainBb,
-    nashConvBb: solution.audit.nashConvBb,
-    nashConvNormalizationPotBb: solution.audit.normalizationPotBb,
-    nashConvPotFraction: solution.audit.nashConvPotFraction,
-    targetNashConvPotFraction,
-    targetMet: solution.audit.nashConvPotFraction <= targetNashConvPotFraction,
+    compatibleDeals: finalSolution.compatibleDeals,
+    profileValueBb: finalSolution.audit.profileValueBb,
+    playerDeviationGainsBb: finalSolution.audit.perPlayerGainBb,
+    nashConvBb: finalSolution.audit.nashConvBb,
+    nashConvNormalizationPotBb: finalSolution.audit.normalizationPotBb,
+    nashConvPotFraction: finalSolution.audit.nashConvPotFraction,
+    targetNashConvPotFraction: plan.targetNashConvPotFraction,
+    quickSpotId: quickSolution?.spotId ?? null,
+    quickIterations: quickSolution?.iterations ?? null,
+    quickRepresentativeCombos: quickSolution ? Object.freeze({
+      oop: plan.quick.ranges[0].length,
+      middle: plan.quick.ranges[1].length,
+      ip: plan.quick.ranges[2].length,
+    }) : null,
+    quickCompatibleDeals: quickSolution?.compatibleDeals ?? null,
+    quickNashConvPotFraction: quickNashConv,
+    actionRegretDriftPotFraction: actionRegretDrift,
+    frequencyTotalVariation: crossResolution?.frequencyTotalVariation ?? null,
+    targetActionRegretDriftPotFraction: plan.targetActionRegretDriftPotFraction,
+    scoringTargetPotFraction: plan.scoringTargetPotFraction,
+    acceptedForGuidance,
+    acceptedForScoring,
+    checkpoints: Object.freeze([...checkpoints]),
+    solveMode,
+    stopReason,
+    targetMet: acceptedForGuidance,
   });
+}
+
+/** Creates a structured-clone-safe request for the river solver Worker. */
+export function materializeThreeWayRiverCoachRequest(
+  request: ThreeWayRiverCoachRequest,
+): MaterializedThreeWayRiverCoachRequest {
+  return Object.freeze({
+    ...request,
+    rangeWeights: Object.freeze({
+      oop: materializeRiverRangeWeight(request.board, request.suits, request.rangeWeights.oop),
+      middle: materializeRiverRangeWeight(request.board, request.suits, request.rangeWeights.middle),
+      ip: materializeRiverRangeWeight(request.board, request.suits, request.rangeWeights.ip),
+    }),
+  });
+}
+
+function hydrateThreeWayRiverCoachRequest(
+  request: MaterializedThreeWayRiverCoachRequest,
+): ThreeWayRiverCoachRequest {
+  return {
+    ...request,
+    rangeWeights: {
+      oop: rangeWeightFromMaterialized(request.rangeWeights.oop),
+      middle: rangeWeightFromMaterialized(request.rangeWeights.middle),
+      ip: rangeWeightFromMaterialized(request.rangeWeights.ip),
+    },
+  };
+}
+
+function fixedSolutionForPlan(plan: PreparedThreeWayRiverCoachPlan): ThreeWayRiverSolution {
+  return solveThreeWayRiver(plan.quick.spec, {
+    iterations: plan.minIterations,
+    averagingDelay: Math.min(80, Math.max(15, Math.floor(plan.minIterations * 0.08))),
+    linearAveraging: true,
+  });
+}
+
+/**
+ * Backwards-compatible one-resolution solve for deterministic tests and
+ * non-browser callers. Browser training uses the adaptive Worker path below.
+ */
+export function solveThreeWayRiverCoachDecision(
+  request: ThreeWayRiverCoachRequest,
+): ThreeWayRiverCoachResult {
+  const plan = prepareThreeWayRiverCoachPlan(request, false);
+  const solution = fixedSolutionForPlan(plan);
+  return buildCoachResult(
+    plan,
+    solution,
+    null,
+    [Object.freeze({
+      resolution: "quick",
+      representativeCombos: plan.quick.representativeCombos,
+      iterations: solution.iterations,
+      nashConvPotFraction: solution.audit.nashConvPotFraction,
+    })],
+    "fixed",
+    "fixed-iterations",
+  );
+}
+
+function abortError(): Error {
+  const error = new Error("三人河牌求解已取消");
+  error.name = "AbortError";
+  return error;
+}
+
+async function yieldMacrotask(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+async function solveAdaptiveLevel(
+  plan: PreparedThreeWayRiverCoachPlan,
+  level: PreparedThreeWayRiverCoachLevel,
+  checkpoints: ThreeWayRiverCoachCheckpoint[],
+  options: ThreeWayRiverCoachAsyncOptions,
+): Promise<ThreeWayRiverSolution> {
+  const session = createThreeWayRiverSolverSession(level.spec, {
+    averagingDelay: Math.min(80, Math.max(15, Math.floor(plan.minIterations * 0.08))),
+    linearAveraging: true,
+  });
+  const yieldControl = options.yieldControl ?? yieldMacrotask;
+  // Keep training past the looser guidance gate when the caller requested a
+  // stricter EV-scoring gate. Otherwise a 9% checkpoint would stop a solve
+  // that still had budget to reach the published 3% scoring threshold.
+  const trainingTarget = Math.min(
+    plan.targetNashConvPotFraction,
+    plan.scoringTargetPotFraction,
+  );
+  while (session.iterations < plan.maxIterations) {
+    if (options.signal?.aborted) throw abortError();
+    await yieldControl();
+    if (options.signal?.aborted) throw abortError();
+    const additionalIterations = Math.min(
+      plan.iterationChunk,
+      plan.maxIterations - session.iterations,
+    );
+    const checkpoint: ThreeWayRiverCheckpoint = session.run(additionalIterations);
+    const progress = Object.freeze({
+      resolution: level.resolution,
+      representativeCombos: level.representativeCombos,
+      iterations: checkpoint.iterations,
+      maxIterations: plan.maxIterations,
+      nashConvPotFraction: checkpoint.audit.nashConvPotFraction,
+      targetNashConvPotFraction: plan.targetNashConvPotFraction,
+    });
+    checkpoints.push(Object.freeze({
+      resolution: level.resolution,
+      representativeCombos: level.representativeCombos,
+      iterations: checkpoint.iterations,
+      nashConvPotFraction: checkpoint.audit.nashConvPotFraction,
+    }));
+    options.onProgress?.(progress);
+    if (
+      checkpoint.iterations >= plan.minIterations
+      && checkpoint.audit.nashConvPotFraction <= trainingTarget
+    ) break;
+  }
+  return session.solution();
+}
+
+/**
+ * Worker-friendly adaptive solve. It first converges a quick 3-combo panel,
+ * then independently verifies the same node at a higher range resolution.
+ * Guidance is accepted only when both trees converge and their per-action
+ * regret vectors agree within the published pot-fraction bound. Frequency TV
+ * remains diagnostic because near-indifferent equilibria may legitimately use
+ * very different mixes.
+ */
+export async function solveMaterializedThreeWayRiverCoachDecision(
+  request: MaterializedThreeWayRiverCoachRequest,
+  options: ThreeWayRiverCoachAsyncOptions = {},
+): Promise<ThreeWayRiverCoachResult> {
+  const plan = prepareThreeWayRiverCoachPlan(hydrateThreeWayRiverCoachRequest(request));
+  const checkpoints: ThreeWayRiverCoachCheckpoint[] = [];
+  const quickSolution = await solveAdaptiveLevel(plan, plan.quick, checkpoints, options);
+  const verificationSolution = await solveAdaptiveLevel(plan, plan.verification, checkpoints, options);
+  const provisional = buildCoachResult(
+    plan,
+    verificationSolution,
+    quickSolution,
+    checkpoints,
+    "adaptive",
+    "iteration-limit",
+  );
+  const bothTreesConverged = quickSolution.audit.nashConvPotFraction <= plan.targetNashConvPotFraction
+    && verificationSolution.audit.nashConvPotFraction <= plan.targetNashConvPotFraction;
+  const stopReason: ThreeWayRiverCoachResult["stopReason"] = provisional.acceptedForGuidance
+    ? "target-met"
+    : bothTreesConverged ? "abstraction-unstable" : "iteration-limit";
+  return buildCoachResult(
+    plan,
+    verificationSolution,
+    quickSolution,
+    checkpoints,
+    "adaptive",
+    stopReason,
+  );
 }
