@@ -80,6 +80,22 @@ export type HeadsUpRiverStrategy = Readonly<{
   frequencies: readonly number[];
 }>;
 
+/**
+ * Acting-player EV for forcing each legal action at one information set and
+ * then returning to the solved profile. Values are normalized by chance and
+ * opponent counterfactual reach, so the unit remains big blinds. An information
+ * set with zero opponent reach reports zero for every action and exposes that
+ * fact through `counterfactualReach`.
+ */
+export type HeadsUpRiverActionEv = Readonly<{
+  player: HeadsUpRiverPlayer;
+  holding: string;
+  history: string;
+  actions: readonly HeadsUpRiverAction[];
+  actionEvBb: readonly number[];
+  counterfactualReach: number;
+}>;
+
 export type HeadsUpRiverExploitability = Readonly<{
   profileValueBb: number;
   oopBestResponseValueBb: number;
@@ -103,6 +119,7 @@ export type HeadsUpRiverSolution = Readonly<{
   accuracyLevel: HeadsUpAccuracyLevel;
   exploitability: HeadsUpRiverExploitability;
   strategies: readonly HeadsUpRiverStrategy[];
+  actionValues: readonly HeadsUpRiverActionEv[];
   averageStrategy: CFRStrategyProfile<HeadsUpRiverAction>;
 }>;
 
@@ -123,6 +140,7 @@ export type HeadsUpRiverGame = Readonly<{
   holdingKey(player: CFRPlayer, holdingIndex: number): string;
   informationSet(player: CFRPlayer, holdingIndex: number, history: readonly string[]): string;
   exploitability(profile: CFRStrategyProfile<HeadsUpRiverAction>): HeadsUpRiverExploitability;
+  actionValues(profile: CFRStrategyProfile<HeadsUpRiverAction>): readonly HeadsUpRiverActionEv[];
 }>;
 
 const SUITS = ["spades", "hearts", "diamonds", "clubs"] as const;
@@ -627,6 +645,134 @@ export function createHeadsUpRiverGame(input: HeadsUpRiverSpec): HeadsUpRiverGam
     });
   };
 
+  const actionValues = (
+    profile: CFRStrategyProfile<HeadsUpRiverAction>,
+  ): readonly HeadsUpRiverActionEv[] => {
+    const continuationCache = new Map<string, Float64Array>();
+    const continuationValues = (
+      state: Extract<HeadsUpRiverState, { phase: "play" }>,
+    ): Float64Array => {
+      const key = historyKey(state.history);
+      const cached = continuationCache.get(key);
+      if (cached) return cached;
+      if (state.terminal) {
+        const terminal = Float64Array.from(
+          deals,
+          (_, dealIndex) => terminalUtilityForDeal(state, dealIndex),
+        );
+        continuationCache.set(key, terminal);
+        return terminal;
+      }
+
+      const actions = publicActions(spec, state);
+      const values = new Float64Array(deals.length);
+      for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
+        const child = continuationValues(
+          playNextState(spec, state, actions[actionIndex]) as Extract<HeadsUpRiverState, { phase: "play" }>,
+        );
+        for (let dealIndex = 0; dealIndex < deals.length; dealIndex += 1) {
+          const holdingIndex = deals[dealIndex].holdingIndices[state.actor];
+          const informationSet = infoKey(state.actor, holdingIndex, state.history);
+          const probability = strategyProbability(
+            profile,
+            state.actor,
+            informationSet,
+            actions,
+            actionIndex,
+          );
+          values[dealIndex] += probability * child[dealIndex];
+        }
+      }
+      continuationCache.set(key, values);
+      return values;
+    };
+
+    const result = new Map<string, HeadsUpRiverActionEv>();
+    const traverse = (
+      state: Extract<HeadsUpRiverState, { phase: "play" }>,
+      reaches: readonly [Float64Array, Float64Array],
+    ): void => {
+      if (state.terminal) return;
+      const actor = state.actor;
+      const opponent = actor === 0 ? 1 : 0;
+      const actions = publicActions(spec, state);
+      const childValues = actions.map((action) => continuationValues(
+        playNextState(spec, state, action) as Extract<HeadsUpRiverState, { phase: "play" }>,
+      ));
+      const holdingCount = actor === 0 ? spec.oopRange.length : spec.ipRange.length;
+      const utilitySign = actor === 0 ? 1 : -1;
+
+      for (let holdingIndex = 0; holdingIndex < holdingCount; holdingIndex += 1) {
+        const informationSet = infoKey(actor, holdingIndex, state.history);
+        if (!profile[actor].has(informationSet)) continue;
+        let counterfactualReach = 0;
+        const sums = new Float64Array(actions.length);
+        for (let dealIndex = 0; dealIndex < deals.length; dealIndex += 1) {
+          if (deals[dealIndex].holdingIndices[actor] !== holdingIndex) continue;
+          const weight = deals[dealIndex].probability * reaches[opponent][dealIndex];
+          counterfactualReach += weight;
+          for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
+            sums[actionIndex] += weight * utilitySign * childValues[actionIndex][dealIndex];
+          }
+        }
+        const [, , holding, history] = informationSet.split("|");
+        result.set(informationSet, Object.freeze({
+          player: actor === 0 ? "oop" : "ip",
+          holding,
+          history,
+          actions: Object.freeze([...actions]),
+          actionEvBb: Object.freeze(Array.from(
+            sums,
+            (value) => counterfactualReach > 0 ? value / counterfactualReach : 0,
+          )),
+          counterfactualReach,
+        }));
+      }
+
+      for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
+        const actorReach = Float64Array.from(reaches[actor]);
+        for (let dealIndex = 0; dealIndex < deals.length; dealIndex += 1) {
+          const holdingIndex = deals[dealIndex].holdingIndices[actor];
+          const informationSet = infoKey(actor, holdingIndex, state.history);
+          actorReach[dealIndex] *= strategyProbability(
+            profile,
+            actor,
+            informationSet,
+            actions,
+            actionIndex,
+          );
+        }
+        const childReaches: [Float64Array, Float64Array] = actor === 0
+          ? [actorReach, reaches[1]]
+          : [reaches[0], actorReach];
+        traverse(
+          playNextState(spec, state, actions[actionIndex]) as Extract<HeadsUpRiverState, { phase: "play" }>,
+          childReaches,
+        );
+      }
+    };
+
+    const root: Extract<HeadsUpRiverState, { phase: "play" }> = {
+      phase: "play",
+      dealIndex: 0,
+      actor: 0,
+      history: [],
+      contributions: [0, 0],
+      checks: 0,
+      raises: 0,
+      lastFullRaiseBb: 0,
+    };
+    traverse(root, [
+      new Float64Array(deals.length).fill(1),
+      new Float64Array(deals.length).fill(1),
+    ]);
+    return Object.freeze([...result.values()].sort((left, right) =>
+      left.player.localeCompare(right.player)
+        || left.history.localeCompare(right.history)
+        || left.holding.localeCompare(right.holding),
+    ));
+  };
+
   const standardTree = isDefaultTree(spec.bettingTree);
   const gameSpecId = `rc-hu-river-game-v1-${stableGtoHash({
     variant: "no-limit-holdem",
@@ -669,6 +815,7 @@ export function createHeadsUpRiverGame(input: HeadsUpRiverSpec): HeadsUpRiverGam
     },
     informationSet: infoKey,
     exploitability,
+    actionValues,
   });
 }
 
@@ -744,6 +891,7 @@ export function solveHeadsUpRiver(
   const solved = solveCFRPlus(model.game, options);
   const averageStrategy = immutableStrategyProfile(solved.averageStrategy);
   const exploitability = model.exploitability(averageStrategy);
+  const actionValues = model.actionValues(averageStrategy);
   return Object.freeze({
     solverVersion: "rangecraft-cfr+/0.1.0",
     spotId: model.spotId,
@@ -758,6 +906,7 @@ export function solveHeadsUpRiver(
     accuracyLevel: headsUpAccuracyLevel(exploitability.exploitabilityPotFraction),
     exploitability,
     strategies: exportedStrategies(averageStrategy),
+    actionValues,
     averageStrategy,
   });
 }
@@ -781,4 +930,16 @@ export function headsUpRiverStrategyEntry(
 ): CFRStrategyEntry<HeadsUpRiverAction> | undefined {
   const informationSet = `river|P${player === "oop" ? 0 : 1}|${holding}|${history}`;
   return solution.averageStrategy[player === "oop" ? 0 : 1].get(informationSet);
+}
+
+/** Query one solved information set's acting-player counterfactual action EVs. */
+export function headsUpRiverActionEvEntry(
+  solution: HeadsUpRiverSolution,
+  player: HeadsUpRiverPlayer,
+  holding: string,
+  history = "root",
+): HeadsUpRiverActionEv | undefined {
+  return solution.actionValues.find((entry) =>
+    entry.player === player && entry.holding === holding && entry.history === history,
+  );
 }

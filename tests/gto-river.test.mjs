@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   createHeadsUpRiverGame,
   exactTinyRiverExploitability,
+  headsUpRiverActionEvEntry,
   headsUpRiverStrategyEntry,
   solveHeadsUpRiver,
 } from "../lib/gto-river.ts";
@@ -136,6 +137,50 @@ test("real river CFR+ converges and its scalable best response matches exact tin
     /只读结果/,
   );
   assert.equal(solution.averageStrategy[0].has("injected"), false);
+});
+
+test("river solution reports immutable acting-player counterfactual action EVs", () => {
+  const solution = solveHeadsUpRiver(riverSpec(), {
+    iterations: 5_000,
+    averagingDelay: 100,
+    linearAveraging: true,
+  });
+  const informationSetCount = solution.averageStrategy[0].size + solution.averageStrategy[1].size;
+
+  assert.equal(solution.actionValues.length, informationSetCount);
+  assert.ok(Object.isFrozen(solution.actionValues));
+  for (const actionValue of solution.actionValues) {
+    const strategy = headsUpRiverStrategyEntry(
+      solution,
+      actionValue.player,
+      actionValue.holding,
+      actionValue.history,
+    );
+    assert.ok(strategy);
+    assert.deepEqual(actionValue.actions, strategy.actions);
+    assert.equal(actionValue.actionEvBb.length, strategy.probabilities.length);
+    assert.ok(actionValue.actionEvBb.every(Number.isFinite));
+    assert.ok(actionValue.counterfactualReach >= 0 && actionValue.counterfactualReach <= 1);
+    assert.ok(Object.isFrozen(actionValue));
+    assert.ok(Object.isFrozen(actionValue.actions));
+    assert.ok(Object.isFrozen(actionValue.actionEvBb));
+  }
+
+  const acesFacingBet = headsUpRiverActionEvEntry(
+    solution,
+    "oop",
+    "AsAd",
+    "check>bet-to:10",
+  );
+  assert.ok(acesFacingBet);
+  const bestIndex = acesFacingBet.actionEvBb.indexOf(Math.max(...acesFacingBet.actionEvBb));
+  assert.equal(acesFacingBet.actions[bestIndex], "call");
+  assert.ok(Math.abs(acesFacingBet.actionEvBb[acesFacingBet.actions.indexOf("fold")] - -5) < 1e-12);
+  assert.ok(Math.abs(acesFacingBet.actionEvBb[acesFacingBet.actions.indexOf("call")] - 15) < 1e-12);
+  assert.throws(() => {
+    acesFacingBet.actionEvBb[0] = 0;
+  }, TypeError);
+  assert.throws(() => solution.actionValues.push(acesFacingBet), TypeError);
 });
 
 test("default river abstraction references Standard v1 as a template without impersonating its identity", () => {

@@ -39,6 +39,11 @@ import {
 } from "../lib/poker-policy";
 import { createPublicOpponentRanges, type PublicBettingAction } from "../lib/poker-range";
 import {
+  solveRiverCoachDecision,
+  type RiverCoachRequest,
+  type RiverCoachResult,
+} from "../lib/poker-river-coach";
+import {
   POKER_RUN_DECISION_HISTORY_LIMIT,
   POKER_RUN_HAND_HISTORY_LIMIT,
   createPokerRunDecisionStats,
@@ -181,6 +186,9 @@ type Review = {
   maxContestableBb: number;
   spr: number;
   strategySource: string;
+  solverEvLossBb: number | null;
+  solverExploitabilityPotFraction: number | null;
+  solverDetails: string;
   preflopPosition: string;
   preflopScenario: string;
   preflopTargetRange: number;
@@ -490,7 +498,10 @@ function isPlayerInPosition(game: Game, player: Player) {
     }
     return player.id === game.dealer;
   }
-  const activePlayers = game.players.filter((candidate) => !candidate.folded && candidate.stack > 0);
+  // Position is fixed by seats, not by whether an opponent became all-in on
+  // this street. Keeping all non-folded players preserves the original river
+  // action order when the current decision is facing an all-in wager.
+  const activePlayers = game.players.filter((candidate) => !candidate.folded);
   const actionOrderRank = (candidate: Player) => {
     const offset = (candidate.id - game.dealer + game.players.length) % game.players.length;
     return offset === 0 ? game.players.length : offset;
@@ -1259,8 +1270,8 @@ function getAdvice(game: Game, player: Player, equity: number) {
     maxContestableBb: policyInput.maxContestableBb,
     spr: policyPlan.spr,
     strategySource: game.street === "preflop"
-      ? "本地近似 · 六人桌 169 手牌基准表"
-      : "本地近似 · 行动加权范围启发式模型",
+      ? "本地手工校准 · 六人桌 169 类 · cEV/无抽水近似（非 Solver 解）"
+      : "本地范围模型 · cEV/无抽水启发式（非 Solver 解）",
     preflopPosition: policyPlan.preflopPosition,
     preflopScenarioKey: policyPlan.preflopScenario,
     preflopScenario: PREFLOP_SCENARIO_LABELS[policyPlan.preflopScenario],
@@ -1278,18 +1289,179 @@ function getAdvice(game: Game, player: Player, equity: number) {
   };
 }
 
+type SoloAdvice = ReturnType<typeof getAdvice>;
+type SolvedRiverAdvice = SoloAdvice & Readonly<{
+  riverSolver: RiverCoachResult;
+}>;
+
+function buildSoloRiverCoachRequest(
+  game: Game,
+  hero: Player,
+  heroImage: TableImage,
+): RiverCoachRequest | null {
+  if (
+    game.street !== "river"
+    || game.status !== "playing"
+    || game.current !== hero.id
+    || game.community.length !== 5
+    || hero.hole.length !== 2
+  ) return null;
+  const contenders = game.players.filter((player) => !player.folded);
+  if (contenders.length !== 2) return null;
+  const opponent = contenders.find((player) => player.id !== hero.id);
+  if (!opponent) return null;
+  const riverActions = game.actionHistory.filter((action) => action.street === "river");
+  if (riverActions.some((action) => (
+    action.kind === "fold"
+    || !contenders.some((player) => player.id === action.playerId)
+  ))) return null;
+
+  const publicRangeState = {
+    players: game.players,
+    community: game.community,
+    actions: game.actionHistory,
+    bigBlind: BIG_BLIND,
+    positionFactor: (playerId: number) => sixMaxPreflopPositionFactor(playerId, game.dealer),
+    position: (playerId: number) => sixMaxPreflopPosition(playerId, game.dealer),
+  };
+  const opponentRange = createPublicOpponentRanges({
+    ...publicRangeState,
+    viewerId: hero.id,
+  }).find((range) => range.playerId === opponent.id);
+  const heroRange = createPublicOpponentRanges({
+    ...publicRangeState,
+    viewerId: opponent.id,
+    tendency: (playerId) => playerId === hero.id ? heroPublicRangeTendency(heroImage) : undefined,
+  }).find((range) => range.playerId === hero.id);
+  if (!opponentRange || !heroRange) return null;
+
+  const heroPlayer = isPlayerInPosition(game, hero) ? "ip" : "oop";
+  const playerRole = (playerId: number) => {
+    const isHero = playerId === hero.id;
+    return isHero ? heroPlayer : heroPlayer === "ip" ? "oop" : "ip";
+  };
+  const heroStreetStart = hero.stack + hero.bet;
+  const opponentStreetStart = opponent.stack + opponent.bet;
+  const effectiveStackAtStreetStartBb = Math.min(heroStreetStart, opponentStreetStart) / BIG_BLIND;
+  if (effectiveStackAtStreetStartBb <= 0 || game.pot <= 0) return null;
+  return {
+    board: game.community as unknown as readonly [Card, Card, Card, Card, Card],
+    suits: ["♠", "♥", "♦", "♣"],
+    heroCards: hero.hole as unknown as readonly [Card, Card],
+    heroPlayer,
+    oopRangeWeight: heroPlayer === "oop" ? heroRange.weight : opponentRange.weight,
+    ipRangeWeight: heroPlayer === "ip" ? heroRange.weight : opponentRange.weight,
+    potAtStreetStartBb: game.pot / BIG_BLIND,
+    effectiveStackAtStreetStartBb,
+    publicActions: riverActions.map((action) => ({
+      player: playerRole(action.playerId),
+      kind: action.kind,
+      amountPaidBb: action.amount / BIG_BLIND,
+    })),
+    canRaise: !hero.raiseLocked && canAnyOpponentRespond(game, hero),
+    representativeCombos: 8,
+    iterations: 800,
+  };
+}
+
+function solverActionLabel(action: RiverCoachResult["actions"][number]) {
+  if (action.action !== "raise") return ACTION_LABELS[action.action];
+  return `${action.solverAction.startsWith("bet-to:") ? "下注至" : "加注至"} ${action.raiseToBb?.toFixed(1)} BB`;
+}
+
+function applySolvedRiverAdvice(
+  base: SoloAdvice,
+  result: RiverCoachResult,
+  game: Game,
+  hero: Player,
+): SolvedRiverAdvice {
+  const frequencies: Record<ActionKind, number> = { fold: 0, check: 0, call: 0, raise: 0 };
+  result.actions.forEach((route) => {
+    frequencies[route.action] += route.frequency;
+  });
+  const action = (Object.entries(frequencies) as [ActionKind, number][])
+    .reduce((best, candidate) => candidate[1] > best[1] ? candidate : best)[0];
+  const labels: Record<ActionKind, string> = { fold: "弃牌", check: "过牌", call: "跟注", raise: "下注/加注" };
+  const mix = formatPokerFrequencyMix(
+    (Object.entries(frequencies) as [ActionKind, number][])
+      .map(([kind, frequency]) => ({ label: labels[kind], frequency })),
+  );
+  const sizingContext = pokerSizingContext(game, hero);
+  const raiseFrequency = Math.max(Number.EPSILON, frequencies.raise);
+  const sizingByTarget = new Map<number, { target: number; fraction: number; frequency: number; allIn: boolean }>();
+  for (const route of result.actions) {
+    if (route.action !== "raise" || route.raiseToBb === undefined) continue;
+    const target = legalPokerRaiseTarget(sizingContext, route.raiseToBb * BIG_BLIND);
+    const existing = sizingByTarget.get(target);
+    const frequency = route.frequency / raiseFrequency;
+    sizingByTarget.set(target, {
+      target,
+      fraction: pokerRaiseFraction(sizingContext, target),
+      frequency: (existing?.frequency ?? 0) + frequency,
+      allIn: target === sizingContext.playerBet + sizingContext.playerStack,
+    });
+  }
+  const sizingRoutes = [...sizingByTarget.values()].sort((left, right) => left.target - right.target);
+  const sizingMix = formatPokerFrequencyMix(sizingRoutes.map((route) => ({
+    label: formatPokerSizingRoute(sizingContext, route),
+    frequency: route.frequency,
+  })));
+  const preferredSizingRoute = preferredPokerSizingRoute(sizingRoutes);
+  const recommendedRaiseTo = action === "raise" ? preferredSizingRoute?.target ?? null : null;
+  const recommendedBetFraction = action === "raise" ? preferredSizingRoute?.fraction ?? null : null;
+  const recommendedLabel = action === "raise" && preferredSizingRoute
+    ? formatPokerSizingRoute(sizingContext, preferredSizingRoute)
+    : labels[action];
+  const evLine = result.actions
+    .map((route) => `${solverActionLabel(route)} ${route.evBb >= 0 ? "+" : ""}${route.evBb.toFixed(2)} BB`)
+    .join(" · ");
+  const errorPercent = result.exploitabilityPotFraction * 100;
+  const note = `已在当前单挑河牌节点运行 ${result.iterations} 轮 CFR+：底池、有效筹码、完整河牌行动线和合法尺寸均进入求解。动作 EV（行动玩家视角）：${evLine}。固定树可剥削度约 ${errorPercent < 0.01 ? errorPercent.toFixed(3) : errorPercent.toFixed(2)}% 底池。这是双方各 ${result.representativeCombos.oop} 个等质量代表组合的缩减范围解，是真实求解器结果，但不冒充商业全组合、全尺寸解。`;
+  return {
+    ...base,
+    action,
+    note,
+    frequencies,
+    mix,
+    sizingContext,
+    sizingRoutes,
+    sizingMix,
+    recommendedRaiseTo,
+    recommendedBetFraction,
+    recommendedLabel,
+    strategySource: `CFR+ 局部求解 · 单挑河牌 · ${result.representativeCombos.oop}×${result.representativeCombos.ip} 代表范围 · cEV/无抽水`,
+    riverSolver: result,
+  };
+}
+
+type RiverDeepSolveControl = Readonly<{
+  eligible: boolean;
+  status: "idle" | "running" | "solved" | "error";
+  error?: string;
+  onSolve: () => void;
+}>;
+
+type RiverSolveState = Readonly<{
+  decisionKey: string;
+  status: "running" | "solved" | "error";
+  result?: RiverCoachResult;
+  error?: string;
+}>;
+
 function AiDecisionHint({
   enabled,
   isHumanTurn,
   advice,
   revealed,
+  riverDeepSolve,
   compact = false,
   onReveal,
 }: {
   enabled: boolean;
   isHumanTurn: boolean;
-  advice: ReturnType<typeof getAdvice> | null;
+  advice: SoloAdvice | SolvedRiverAdvice | null;
   revealed: boolean;
+  riverDeepSolve?: RiverDeepSolveControl;
   compact?: boolean;
   onReveal: () => void;
 }) {
@@ -1326,6 +1498,28 @@ function AiDecisionHint({
             </div>
             <p>{advice.mix}。{advice.sizingMix ? `进入加注分支后的尺寸混合：${advice.sizingMix}。` : ""}{advice.note}</p>
             <small className="coach-hint-source">{advice.strategySource} · 保留原始混合频率；仅使用公开行动与范围估算，不读取电脑暗牌</small>
+            {riverDeepSolve?.eligible && (
+              <div className={`river-deep-solve ${riverDeepSolve.status}`}>
+                {riverDeepSolve.status === "idle" && (
+                  <>
+                    <div><b>可进行河牌深度求解</b><span>单挑河牌可用真实 CFR+ 重新计算频率、尺寸和动作 EV。</span></div>
+                    <button type="button" onClick={riverDeepSolve.onSolve}>运行 CFR+ 深度分析</button>
+                  </>
+                )}
+                {riverDeepSolve.status === "running" && (
+                  <div><b>正在求解当前节点…</b><span>已锁定当前底池、筹码、行动线与公开范围，通常需要 1–4 秒。</span></div>
+                )}
+                {riverDeepSolve.status === "solved" && (
+                  <div><b>CFR+ 结果已锁定</b><span>本决策现已按局部求解频率与动作 EV 进行提示和评分。</span></div>
+                )}
+                {riverDeepSolve.status === "error" && (
+                  <>
+                    <div><b>当前节点未能完成求解</b><span>{riverDeepSolve.error ?? "公开行动线超出了当前固定树。"}</span></div>
+                    <button type="button" onClick={riverDeepSolve.onSolve}>重试</button>
+                  </>
+                )}
+              </div>
+            )}
           </>
         )}
       </div>
@@ -1888,7 +2082,8 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
   const [training, setTraining] = useState(true);
   const [revealedHintKey, setRevealedHintKey] = useState<string | null>(null);
   const [hintUseCount, setHintUseCount] = useState(0);
-  const [raiseTo, setRaiseTo] = useState(30);
+  const [raiseTo, setRaiseTo] = useState(BIG_BLIND * 2.5);
+  const [riverSolve, setRiverSolve] = useState<RiverSolveState | null>(null);
   const [review, setReview] = useState<Review[]>([]);
   const [feedback, setFeedback] = useState<Review | null>(null);
   const [showLog, setShowLog] = useState(false);
@@ -2059,25 +2254,41 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
 
   useEffect(() => {
     if (!isHumanTurn || maxTarget <= 0) return;
-    const timer = window.setTimeout(() => setRaiseTo(Math.max(minTarget, Math.min(maxTarget, Math.max(30, minTarget)))), 0);
+    const defaultTarget = game?.street === "preflop" && game.raiseCount === 0
+      ? BIG_BLIND * 2.5
+      : minTarget;
+    const timer = window.setTimeout(() => setRaiseTo(Math.max(minTarget, Math.min(maxTarget, defaultTarget))), 0);
     return () => window.clearTimeout(timer);
-  }, [isHumanTurn, minTarget, maxTarget, game?.street]);
+  }, [isHumanTurn, minTarget, maxTarget, game?.street, game?.raiseCount]);
 
   const equity = useMemo(() => {
     if (!game || !human || !isHumanTurn) return 0;
     return currentEquity(game, human, game.street === "preflop" ? 600 : 1_200);
   }, [game, human, isHumanTurn]);
 
-  const advice = useMemo(() => (game && human && isHumanTurn ? getAdvice(game, human, equity) : null), [game, human, isHumanTurn, equity]);
+  const baseAdvice = useMemo(() => (
+    game && human && isHumanTurn ? getAdvice(game, human, equity) : null
+  ), [game, human, isHumanTurn, equity]);
+  const hintDecisionKey = game && human && isHumanTurn
+    ? `${game.handNo}:${game.street}:${game.actionHistory.length}:${game.highestBet}:${human.bet}`
+    : null;
+  const riverCoachRequest = useMemo(() => (
+    game && human && isHumanTurn ? buildSoloRiverCoachRequest(game, human, heroImage) : null
+  ), [game, human, isHumanTurn, heroImage]);
+  const currentRiverSolve = hintDecisionKey && riverSolve?.decisionKey === hintDecisionKey
+    ? riverSolve
+    : null;
+  const advice = useMemo(() => {
+    if (!baseAdvice) return null;
+    if (!game || !human || currentRiverSolve?.status !== "solved" || !currentRiverSolve.result) return baseAdvice;
+    return applySolvedRiverAdvice(baseAdvice, currentRiverSolve.result, game, human);
+  }, [baseAdvice, currentRiverSolve, game, human]);
   const passiveActionLabel = game?.street === "preflop" && advice
     ? preflopPassiveActionLabel(advice.preflopScenarioKey)
     : "跟注";
   const aggressiveActionLabel = game?.street === "preflop" && advice
     ? preflopAggressiveActionLabel(advice.preflopScenarioKey, game.raiseCount)
     : "加注";
-  const hintDecisionKey = game && human && isHumanTurn
-    ? `${game.handNo}:${game.street}:${game.actionHistory.length}:${game.highestBet}:${human.bet}`
-    : null;
   const hintRevealed = Boolean(hintDecisionKey && revealedHintKey === hintDecisionKey);
   const revealCurrentHint = useCallback(() => {
     if (!hintDecisionKey) return;
@@ -2087,6 +2298,36 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     }
     setRevealedHintKey(hintDecisionKey);
   }, [hintDecisionKey]);
+  const runRiverDeepSolve = useCallback(() => {
+    if (!hintDecisionKey || !riverCoachRequest) return;
+    if (
+      riverSolve?.decisionKey === hintDecisionKey
+      && (riverSolve.status === "running" || riverSolve.status === "solved")
+    ) return;
+    const decisionKey = hintDecisionKey;
+    setRiverSolve({ decisionKey, status: "running" });
+    window.setTimeout(() => {
+      try {
+        const result = solveRiverCoachDecision(riverCoachRequest);
+        setRiverSolve((current) => {
+          if (current?.decisionKey === decisionKey && current.status === "solved") return current;
+          return { decisionKey, status: "solved", result };
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "未知求解错误";
+        setRiverSolve({ decisionKey, status: "error", error: message });
+      }
+    }, 32);
+  }, [hintDecisionKey, riverCoachRequest, riverSolve]);
+  const riverDeepSolveControl = useMemo<RiverDeepSolveControl | undefined>(() => {
+    if (!riverCoachRequest) return undefined;
+    return {
+      eligible: true,
+      status: currentRiverSolve?.status ?? "idle",
+      error: currentRiverSolve?.error,
+      onSolve: runRiverDeepSolve,
+    };
+  }, [riverCoachRequest, currentRiverSolve, runRiverDeepSolve]);
 
   useEffect(() => {
     if (!game || dealing || game.status !== "playing" || game.current < 0) return;
@@ -2130,6 +2371,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     setTraining(nextMode === "per_hand");
     setRevealedHintKey(null);
     setHintUseCount(0);
+    setRiverSolve(null);
     hintedDecisionKeys.current.clear();
     setReview([]);
     setFeedback(null);
@@ -2144,7 +2386,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     setRunDecisionStats(createPokerRunDecisionStats());
     setHeroImage({ loose: 0.5, aggressive: 0.5, deceptive: 0.5, observations: 0, pressure: {} });
     setDealing(false);
-    setRaiseTo(BIG_BLIND * 3);
+    setRaiseTo(BIG_BLIND * 2.5);
     winSoundHand.current = 0;
     observedShowdownImageHand.current = 0;
     setHistoryRunId(createSoloHistoryRunId());
@@ -2200,10 +2442,10 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     if (!game || !human || !isHumanTurn || !advice) return;
     if (soundOn) void unlockPokerAudio().then((ready) => { if (ready) playPokerSound(kind); });
     const bestFrequency = Math.max(...Object.values(advice.frequencies));
-    const selectedFrequency = advice.frequencies[kind];
+    let selectedFrequency = advice.frequencies[kind];
     const relativeFrequency = selectedFrequency / Math.max(0.001, bestFrequency);
     const actionScore = selectedFrequency > 0 ? Math.round(40 + 60 * relativeFrequency) : 30;
-    const actionVerdict = selectedFrequency <= Number.EPSILON
+    let actionVerdict = selectedFrequency <= Number.EPSILON
       ? "当前模型不支持"
       : selectedFrequency < 0.02
         ? "极低频路线"
@@ -2218,14 +2460,60 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     const sizeScore = actualRaiseTo === null
       ? null
       : scorePokerRaiseSize(sizingContext, actualRaiseTo, advice.sizingRoutes);
-    const sizeVerdict = actualRaiseTo === null
+    let sizeVerdict = actualRaiseTo === null
       ? ""
       : pokerRaiseSizeVerdict(sizingContext, actualRaiseTo, advice.sizingRoutes);
     // A correct conditional size cannot rescue an action that barely exists in
     // the strategy. Size therefore adjusts the action score downward only.
-    const score = sizeScore === null
+    let score = sizeScore === null
       ? actionScore
       : Math.round(actionScore * (0.65 + 0.35 * sizeScore / 100));
+    let solverEvLossBb: number | null = null;
+    let solverExploitabilityPotFraction: number | null = null;
+    let solverDetails = "";
+    if ("riverSolver" in advice) {
+      const riverSolver = (advice as SolvedRiverAdvice).riverSolver;
+      const solvedRoutes = riverSolver.actions.filter((route) => route.action === kind);
+      const selectedRoute = kind === "raise" && actualRaiseTo !== null
+        ? [...solvedRoutes].sort((left, right) => (
+            Math.abs((left.raiseToBb ?? 0) - actualRaiseTo / BIG_BLIND)
+            - Math.abs((right.raiseToBb ?? 0) - actualRaiseTo / BIG_BLIND)
+          ))[0]
+        : solvedRoutes[0];
+      if (selectedRoute) {
+        const bestEvBb = Math.max(...riverSolver.actions.map((route) => route.evBb));
+        solverEvLossBb = Math.max(0, bestEvBb - selectedRoute.evBb);
+        solverExploitabilityPotFraction = riverSolver.exploitabilityPotFraction;
+        selectedFrequency = selectedRoute.frequency;
+        const lossPotFraction = solverEvLossBb / Math.max(0.5, committedPot(game) / BIG_BLIND);
+        const evScore = lossPotFraction <= 0.001
+          ? 100
+          : lossPotFraction <= 0.005
+            ? 96
+            : lossPotFraction <= 0.015
+              ? 86
+              : lossPotFraction <= 0.03
+                ? 72
+                : Math.max(25, Math.round(72 * Math.exp(-(lossPotFraction - 0.03) * 8)));
+        score = sizeScore === null
+          ? evScore
+          : Math.round(evScore * (0.72 + 0.28 * sizeScore / 100));
+        actionVerdict = lossPotFraction <= 0.001
+          ? "CFR+ EV 等价路线"
+          : lossPotFraction <= 0.005
+            ? "极低 EV 损失"
+            : lossPotFraction <= 0.015
+              ? "可接受的局部解路线"
+              : "明显 EV 损失";
+        solverDetails = `你的动作按最近固定树尺寸对应为 ${solverActionLabel(selectedRoute)}，动作 EV ${selectedRoute.evBb >= 0 ? "+" : ""}${selectedRoute.evBb.toFixed(2)} BB，相对当前最高 EV 损失 ${solverEvLossBb.toFixed(2)} BB。`;
+        if (kind === "raise" && actualRaiseTo !== null && selectedRoute.raiseToBb !== undefined) {
+          const offTreeBb = Math.abs(actualRaiseTo / BIG_BLIND - selectedRoute.raiseToBb);
+          if (offTreeBb > 0.05) {
+            sizeVerdict += `${sizeVerdict ? "；" : ""}该尺寸不在固定树中，按最近节点相差 ${offTreeBb.toFixed(1)} BB 评估`;
+          }
+        }
+      }
+    }
     const actionLabel = actualRaiseTo === null
       ? game.street === "preflop" && kind === "call"
         ? preflopPassiveActionLabel(advice.preflopScenarioKey)
@@ -2266,6 +2554,9 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       maxContestableBb: advice.maxContestableBb,
       spr: advice.spr,
       strategySource: advice.strategySource,
+      solverEvLossBb,
+      solverExploitabilityPotFraction,
+      solverDetails,
       preflopPosition: advice.preflopPosition,
       preflopScenario: advice.preflopScenario,
       preflopTargetRange: advice.preflopTargetRange,
@@ -2285,7 +2576,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       selectedFrequency,
       actionVerdict,
       score,
-      note: advice.note,
+      note: `${advice.note}${solverDetails ? ` ${solverDetails}` : ""}`,
       hintUsed: hintUsedForDecision,
     };
     setReview((items) => [entry, ...items].slice(0, POKER_RUN_DECISION_HISTORY_LIMIT));
@@ -2463,7 +2754,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
           <span className="status-dot" />
           <span>本地单机</span>
           <i />
-          <span>盲注 {SMALL_BLIND}/{BIG_BLIND} · 6-MAX</span>
+          <span>盲注 {SMALL_BLIND}/{BIG_BLIND} · 6-MAX · cEV 无抽水</span>
           <i />
           <span>{TABLE_PRESETS[game.presetKey].shortLabel} · {mode === "session"
             ? game.presetKey === "squid" ? `第 ${game.handNo} 手 · 剩余 ${game.squid.remaining} 条` : `${Math.min(game.handNo, SESSION_HANDS)} / ${SESSION_HANDS} 手`
@@ -2727,6 +3018,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                 isHumanTurn={isHumanTurn}
                 advice={advice}
                 revealed={hintRevealed}
+                riverDeepSolve={riverDeepSolveControl}
                 onReveal={revealCurrentHint}
               />
               <section className="public-state">
@@ -2783,6 +3075,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                 isHumanTurn={isHumanTurn}
                 advice={advice}
                 revealed={hintRevealed}
+                riverDeepSolve={riverDeepSolveControl}
                 onReveal={revealCurrentHint}
               />
 
@@ -2791,7 +3084,9 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                   <div className="decision-top"><span>上一决策{feedback.hintUsed ? " · 借助提示" : " · 独立完成"}</span><b className={feedback.score >= 85 ? "good" : feedback.score >= 65 ? "ok" : "bad"}>{feedback.score} 分</b></div>
                   <h3>{feedback.score >= 85 ? "线路漂亮，继续保持" : feedback.score >= 65 ? "可执行，但有更优选择" : "这里值得重点复盘"}</h3>
                   <p>你选择了{feedback.action}，属于{feedback.actionVerdict}（{formatPokerFrequency(feedback.selectedFrequency)}）。参考混合：{feedback.mix}。{feedback.sizingMix ? `进入加注分支后的尺寸混合：${feedback.sizingMix}。` : ""}{feedback.sizeVerdict ? `${feedback.sizeVerdict}。` : ""}{feedback.note}</p>
-                  <p className="range-note">来源：{feedback.strategySource}。分数表示与当前公开策略频率的匹配程度，不是求解器计算的 EV 损失。</p>
+                  <p className="range-note">来源：{feedback.strategySource}。{feedback.solverEvLossBb === null
+                    ? "分数表示与当前公开策略频率的匹配程度，不是求解器计算的 EV 损失。"
+                    : `分数以局部 CFR+ 动作 EV 损失 ${feedback.solverEvLossBb.toFixed(2)} BB 为主；固定树可剥削度约 ${((feedback.solverExploitabilityPotFraction ?? 0) * 100).toFixed(3)}% 底池。`}</p>
                 </section>
               ) : (
                 <section className="last-decision empty-decision"><span>完成第一个决策后，这里会出现即时反馈。</span></section>
@@ -2910,7 +3205,9 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                       {item.streetKey === "preflop" ? (
                         <small>{item.preflopPosition} · {item.preflopScenario} · 基准继续范围约 {Math.round(item.preflopTargetRange * 100)}% · 本手进入频率 {formatPokerFrequency(item.preflopEnterFrequency)} · 翻前原始摊牌权益不作为首入池阈值 · 来源：{item.strategySource}。{item.note}</small>
                       ) : (
-                        <small>对行动范围估算权益 {Math.round(item.equity * 100)}% / 直接赔率 {Math.round(item.potOdds * 100)}% / 权益实现参考线 {Math.round(item.realizationThreshold * 100)}% · 权益实现估算 {Math.round(item.equityRealization * 100)}% · 有效筹码 {item.effectiveStackBb.toFixed(1)} BB / SPR {item.spr.toFixed(1)}{item.callEv === null ? "" : ` · 跟注 EV 代理 ${item.callEv >= 0 ? "+" : ""}${Math.round(item.callEv)}`} · 来源：{item.strategySource}。{item.note}</small>
+                        <small>对行动范围估算权益 {Math.round(item.equity * 100)}% / 直接赔率 {Math.round(item.potOdds * 100)}% / 权益实现参考线 {Math.round(item.realizationThreshold * 100)}% · 权益实现估算 {Math.round(item.equityRealization * 100)}% · 有效筹码 {item.effectiveStackBb.toFixed(1)} BB / SPR {item.spr.toFixed(1)}{item.solverEvLossBb !== null
+                          ? ` · CFR+ 动作 EV 损失 ${item.solverEvLossBb.toFixed(2)} BB · 固定树可剥削度 ${((item.solverExploitabilityPotFraction ?? 0) * 100).toFixed(3)}%`
+                          : item.callEv === null ? "" : ` · 跟注 EV 代理 ${item.callEv >= 0 ? "+" : ""}${Math.round(item.callEv)}`} · 来源：{item.strategySource}。{item.note}</small>
                       )}
                     </div>
                   </div>
@@ -3110,7 +3407,9 @@ export default function Home() {
         window.location.reload();
       };
       serviceWorker.addEventListener("controllerchange", reloadOnUpgrade);
-      removeServiceWorkerListener = () => serviceWorker.removeEventListener("controllerchange", reloadOnUpgrade);
+      removeServiceWorkerListener = () => {
+        serviceWorker.removeEventListener("controllerchange", reloadOnUpgrade);
+      };
       void serviceWorker.register(`${APP_BASE_PATH}sw.js`, {
         scope: APP_BASE_PATH,
         updateViaCache: "none",

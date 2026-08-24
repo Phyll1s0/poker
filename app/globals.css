@@ -952,6 +952,47 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
 }
 .coach-hint-button:hover, .coach-hint-button:focus-visible { border-color: rgba(101,198,159,.62); background: rgba(62,157,121,.2); outline: none; }
 .coach-hint-source { display: block; margin-top: 10px; color: #666d67; font-size: 7px; line-height: 1.5; }
+.river-deep-solve {
+  margin-top: 11px;
+  padding: 10px 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid rgba(101,198,159,.18);
+  border-radius: 4px;
+  background: rgba(7,19,15,.5);
+}
+.river-deep-solve > div { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.river-deep-solve b { color: #9bd7bd; font-size: 8px; letter-spacing: .04em; }
+.river-deep-solve span { color: #68736d; font-size: 7px; line-height: 1.5; }
+.river-deep-solve button {
+  flex: 0 0 auto;
+  padding: 7px 9px;
+  border: 1px solid rgba(101,198,159,.32);
+  border-radius: 3px;
+  background: rgba(62,157,121,.12);
+  color: #a8d8c2;
+  font-size: 7px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.river-deep-solve button:hover, .river-deep-solve button:focus-visible { border-color: rgba(101,198,159,.64); outline: none; }
+.river-deep-solve.running { position: relative; overflow: hidden; }
+.river-deep-solve.running::after {
+  content: "";
+  width: 35%;
+  height: 1px;
+  position: absolute;
+  left: -35%;
+  bottom: 0;
+  background: var(--green-bright);
+  animation: river-solve-progress 1.1s ease-in-out infinite;
+}
+.river-deep-solve.solved { border-color: rgba(101,198,159,.38); background: rgba(62,157,121,.1); }
+.river-deep-solve.error { border-color: rgba(191,96,76,.28); background: rgba(95,38,29,.09); }
+.river-deep-solve.error b { color: #c89586; }
+@keyframes river-solve-progress { to { left: 100%; } }
 .coach-hint-compact { border-top: 1px solid rgba(101,198,159,.08); border-bottom-color: rgba(101,198,159,.11) !important; }
 
 .decision-top { display: flex; justify-content: space-between; align-items: center; }
@@ -1342,6 +1383,7 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
 @media (prefers-reduced-motion: reduce) {
   .community-cards .dealt-card { opacity: 1; animation: none; }
   .action-dock.is-dealing .turn-summary span { animation: none; }
+  .river-deep-solve.running::after { animation: none; left: 0; width: 100%; }
   .landing-hero-actions button, .landing-hero-actions a, .landing-mode-card { transition: none; }
   .landing-hero-actions button:hover, .landing-hero-actions a:hover, .landing-mode-card:hover { transform: none; }
 }

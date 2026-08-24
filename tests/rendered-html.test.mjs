@@ -87,8 +87,10 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
 
   assert.match(page, /function settleShowdown/);
   assert.match(page, /function chooseAiAction/);
-  assert.match(page, /本地近似 · 六人桌 169 手牌基准表/);
-  assert.match(page, /本地近似 · 行动加权范围启发式模型/);
+  assert.match(page, /本地手工校准 · 六人桌 169 类 · cEV\/无抽水近似（非 Solver 解）/);
+  assert.match(page, /本地范围模型 · cEV\/无抽水启发式（非 Solver 解）/);
+  assert.match(page, /运行 CFR\+ 深度分析/);
+  assert.match(page, /CFR\+ 动作 EV 损失/);
   assert.match(page, /function LandingHome/);
   assert.match(page, /LANDING_GUIDE_ITEMS/);
   assert.match(page, /id="about-range-craft"/);
