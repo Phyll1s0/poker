@@ -87,7 +87,10 @@ export async function setPokerAudioEnabled(enabled: boolean) {
   masterGain.gain.setTargetAtTime(enabled ? 0.24 : 0.0001, context.currentTime, 0.018);
 }
 
-function preferredReactionVoice(tone: MultiplayerChatReactionTone): SpeechSynthesisVoice | null {
+const FEMALE_CHINESE_VOICE_HINT = /(?:ting[- ]?ting|婷婷|xiaoxiao|晓晓|xiaoyi|晓伊|huihui|慧慧|yaoyao|瑶瑶|mei[- ]?jia|美佳|sin[- ]?ji|善怡|female|woman|女声)/i;
+const MALE_CHINESE_VOICE_HINT = /(?:yunxi|云希|yunyang|云扬|kangkang|康康|male|man|男声)/i;
+
+function preferredReactionVoice(): SpeechSynthesisVoice | null {
   if (typeof window === "undefined" || !window.speechSynthesis) return null;
   let voices: SpeechSynthesisVoice[];
   try {
@@ -97,18 +100,31 @@ function preferredReactionVoice(tone: MultiplayerChatReactionTone): SpeechSynthe
   }
   const chinese = voices.filter((voice) => /^zh(?:-|_)/i.test(voice.lang));
   const simplifiedChinese = chinese.filter((voice) => /^zh(?:-|_)(?:cn|hans)(?:-|_|$)/i.test(voice.lang));
-  const localSimplifiedChinese = simplifiedChinese.filter((voice) => voice.localService);
-  const localChinese = chinese.filter((voice) => voice.localService);
-  const candidates = localSimplifiedChinese.length
-    ? localSimplifiedChinese
-    : simplifiedChinese.length
-      ? simplifiedChinese
-      : localChinese.length
-        ? localChinese
-        : chinese;
+  const namedFemale = chinese.filter((voice) => FEMALE_CHINESE_VOICE_HINT.test(voice.name));
+  const namedFemaleSimplified = namedFemale.filter((voice) => simplifiedChinese.includes(voice));
+  const localNamedFemaleSimplified = namedFemaleSimplified.filter((voice) => voice.localService);
+  const localNamedFemale = namedFemale.filter((voice) => voice.localService);
+  const nonMaleChinese = chinese.filter((voice) => !MALE_CHINESE_VOICE_HINT.test(voice.name));
+  const nonMaleSimplified = simplifiedChinese.filter((voice) => !MALE_CHINESE_VOICE_HINT.test(voice.name));
+  const localNonMaleSimplified = nonMaleSimplified.filter((voice) => voice.localService);
+  const localNonMaleChinese = nonMaleChinese.filter((voice) => voice.localService);
+  const candidates = localNamedFemaleSimplified.length
+    ? localNamedFemaleSimplified
+    : namedFemaleSimplified.length
+      ? namedFemaleSimplified
+      : localNamedFemale.length
+        ? localNamedFemale
+        : namedFemale.length
+          ? namedFemale
+          : localNonMaleSimplified.length
+            ? localNonMaleSimplified
+            : nonMaleSimplified.length
+              ? nonMaleSimplified
+              : localNonMaleChinese.length
+                ? localNonMaleChinese
+                : nonMaleChinese;
   if (!candidates.length) return null;
-  const offset = MULTIPLAYER_REACTION_VOICE_STYLES[tone].voiceOffset;
-  return candidates[offset % candidates.length] ?? null;
+  return candidates[0] ?? null;
 }
 
 function schedulePokerReactionVoice(
@@ -145,7 +161,7 @@ function schedulePokerReactionVoice(
     } catch {
       return;
     }
-    const voice = preferredReactionVoice(reactionTone);
+    const voice = preferredReactionVoice();
     utterance.lang = voice?.lang || "zh-CN";
     utterance.pitch = style.pitch;
     utterance.rate = style.rate;
@@ -332,19 +348,19 @@ export function playPokerReactionSound(
       [0, 1, 2].forEach((index) => chipClick(context, at + index * 0.06, 0.16));
       tone(context, at + 0.16, 659, 988, 0.2, 0.085, "triangle");
     } else if (reactionTone === "frustrated") {
-      vocalSyllable(context, at, 142, 92, 0.32, 0.075, "oo");
-      tone(context, at + 0.08, 265, 118, 0.34, 0.055, "triangle");
+      vocalSyllable(context, at, 235, 190, 0.2, 0.065, "eh");
+      tone(context, at + 0.055, 440, 280, 0.22, 0.045, "triangle");
     } else if (reactionTone === "taunt") {
-      vocalSyllable(context, at, 128, 145, 0.13, 0.085, "eh");
-      vocalSyllable(context, at + 0.17, 132, 118, 0.16, 0.08, "eh");
+      vocalSyllable(context, at, 260, 315, 0.11, 0.07, "eh");
+      vocalSyllable(context, at + 0.13, 285, 235, 0.13, 0.065, "eh");
     } else if (reactionTone === "surprised") {
       noise(context, at, 0.11, 2_100, 0.06, "highpass");
-      vocalSyllable(context, at + 0.025, 170, 315, 0.28, 0.07, "ah");
+      vocalSyllable(context, at + 0.025, 235, 420, 0.22, 0.065, "ah");
       tone(context, at + 0.12, 380, 780, 0.22, 0.045, "sine");
     } else {
       woodenKnock(context, at, 0.11);
       woodenKnock(context, at + 0.18, 0.09);
-      vocalSyllable(context, at + 0.04, 112, 96, 0.34, 0.055, "oo");
+      vocalSyllable(context, at + 0.04, 225, 195, 0.22, 0.045, "oo");
     }
   }
   if (messageId) schedulePokerReactionVoice(reactionTone, messageId, delaySeconds, expiresAt);

@@ -35,7 +35,10 @@ test("reaction speech keeps only the newest pending line and mute cancels owned 
   const speechSynthesis = {
     speaking: false,
     pending: false,
-    getVoices: () => [],
+    getVoices: () => [
+      { name: "Microsoft Yunxi", lang: "zh-CN", localService: true, default: true, voiceURI: "yunxi" },
+      { name: "Microsoft Xiaoxiao", lang: "zh-CN", localService: true, default: false, voiceURI: "xiaoxiao" },
+    ],
     speak: (utterance) => spoken.push(utterance),
     cancel: () => { cancelCount += 1; },
   };
@@ -58,7 +61,8 @@ test("reaction speech keeps only the newest pending line and mute cancels owned 
     assert.equal(spoken.length, 1);
     assert.equal(spoken[0].text, multiplayerReactionVoiceLine("taunt", "102"));
     assert.equal(spoken[0].lang, "zh-CN");
-    assert.ok(spoken[0].pitch < 1);
+    assert.equal(spoken[0].voice.name, "Microsoft Xiaoxiao");
+    assert.ok(spoken[0].pitch > 1);
     spoken[0].onend?.();
 
     now += 2_000;

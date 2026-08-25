@@ -17,12 +17,12 @@ test("every reaction has several short original voice lines and a safe delivery 
     assert.ok(lines.length >= 3, `${reaction.tone} should not repeat one fixed phrase`);
     assert.equal(new Set(lines).size, lines.length);
     lines.forEach((line) => {
-      assert.ok(Array.from(line).length >= 4 && Array.from(line).length <= 14);
+      assert.ok(Array.from(line).length >= 3 && Array.from(line).length <= 7);
       assert.match(line, /[\p{Script=Han}]/u);
       allLines.push(line);
     });
-    assert.ok(style.pitch >= 0.5 && style.pitch <= 1.5);
-    assert.ok(style.rate >= 0.75 && style.rate <= 1.35);
+    assert.ok(style.pitch >= 1.1 && style.pitch <= 1.35);
+    assert.ok(style.rate >= 1.2 && style.rate <= 1.35);
     assert.ok(style.volume >= 0.45 && style.volume <= 0.75);
   }
   assert.equal(new Set(allLines).size, allLines.length);
