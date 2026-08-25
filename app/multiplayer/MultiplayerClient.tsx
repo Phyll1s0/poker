@@ -2878,14 +2878,17 @@ export default function MultiplayerClient({
           <button
             className={styles.navHelpButton}
             type="button"
-            aria-label="查看德州扑克规则"
-            title="德州扑克规则"
+            aria-label="查看多人牌桌帮助与德州扑克规则"
+            aria-haspopup="dialog"
+            aria-expanded={rulesOpen}
+            aria-controls="multiplayer-help-dialog"
+            title="多人玩法与规则"
             onClick={() => {
               closeChat();
               setTableHintOpen(false);
               setRulesOpen(true);
             }}
-          >?</button>
+          ><span aria-hidden="true">?</span><b>玩法</b></button>
           <span>牌桌身份</span>
           <strong>{account?.handle ?? displayName}</strong>
           <a className={styles.signOut} href={signOutHref} onClick={onSignOut}>{signOutLabel}</a>
@@ -3449,7 +3452,20 @@ export default function MultiplayerClient({
         )}
       </main>
       {rulesOpen && (
-        <PokerRulesModal onClose={() => setRulesOpen(false)} closeLabel="看懂了，回到多人牌桌" />
+        <PokerRulesModal
+          context="multiplayer"
+          dialogId="multiplayer-help-dialog"
+          multiplayerStatus={{
+            ...tableHint,
+            ruleSummary: snapshot
+              ? `${tableModeLabel(snapshot.table.tableMode)} · ${tableDepthBb} BB · 盲注 ${snapshot.table.smallBlind}/${snapshot.table.bigBlind} · 读秒 ${snapshot.table.actionTimeMs / 1_000}/${snapshot.table.initialTimeBankMs / 1_000}s · AI ${snapshot.table.aiAssistLimit ? `${snapshot.table.aiAssistLimit} 次/人` : "关闭"} · ${snapshot.players.length}/${snapshot.room.maxPlayers} 人`
+              : `新桌预设 · ${tableMode === "cash" ? "现金练习" : "单桌淘汰"} · ${selectedDepthBb} BB · 盲注 5/10 · 读秒 ${actionSeconds}/${timeBankSeconds}s · AI ${aiAssistLimit ? `${aiAssistLimit} 次/人` : "关闭"}`,
+            timedTurn: Boolean(isMyTurn && phase === "playing"),
+            secondsLeft: actionSecondsLeft,
+          }}
+          onClose={() => setRulesOpen(false)}
+          closeLabel="看懂了，回到多人牌桌"
+        />
       )}
       {historyOpen && snapshot && (
         <HandHistoryModal

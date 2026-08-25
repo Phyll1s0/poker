@@ -202,6 +202,13 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(rulesModal, /50 ÷ 200 = 25%/);
   assert.match(rulesModal, /主池 300 · A \/ B \/ C 可争/);
   assert.match(rulesModal, /role="img" aria-label=\{label\}/);
+  assert.match(rulesModal, /多人牌桌指南/);
+  assert.match(rulesModal, /朋友局，四步开打/);
+  assert.match(rulesModal, /以 20 \/ 100s 为例，读秒这样使用/);
+  assert.match(rulesModal, /成功分析消耗 1 次，并自动为当前行动增加 10 秒/);
+  assert.match(rulesModal, /每手私密偷看 5 次/);
+  assert.match(rulesModal, /最近 30 手牌桌回放/);
+  assert.match(rulesModal, /帮助不会暂停行动计时/);
   assert.match(page, /if \(historyOpen \|\| rulesOpen\) return/);
   assert.match(multiplayerClient, /if \(!isMyTurn \|\| !game \|\| busy \|\| rulesOpen\) return/);
   assert.doesNotMatch(page, /ABOUT THE LAB|关于 GTO 边界/);
@@ -212,6 +219,10 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(globalsCss, /\.poker-seven-to-five/);
   assert.match(globalsCss, /\.poker-rule-card/);
   assert.match(globalsCss, /\.poker-pot-odds-diagram/);
+  assert.match(globalsCss, /\.poker-rules-toolbar\s*\{[\s\S]*?position:\s*sticky/);
+  assert.match(globalsCss, /\.multiplayer-guide-steps/);
+  assert.match(globalsCss, /\.multiplayer-resource-flow/);
+  assert.match(globalsCss, /max-height:\s*calc\(100dvh - 48px\)/);
   assert.match(page, /最近 30 手牌谱与回放/);
   assert.match(page, /所有电脑底牌已在赛后记录中公开/);
   assert.match(page, /setSealedRunHistory/);
@@ -388,8 +399,10 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /aria-label=\{soundOn \? "关闭牌桌音效与表情语音" : "开启牌桌音效与表情语音"\}/);
   assert.match(multiplayerClient, /const \[rulesOpen, setRulesOpen\] = useState\(false\)/);
   assert.match(multiplayerClient, /className=\{styles\.navHelpButton\}/);
-  assert.match(multiplayerClient, /aria-label="查看德州扑克规则"/);
-  assert.match(multiplayerClient, /<PokerRulesModal onClose=\{\(\) => setRulesOpen\(false\)\} closeLabel="看懂了，回到多人牌桌"/);
+  assert.match(multiplayerClient, /aria-label="查看多人牌桌帮助与德州扑克规则"/);
+  assert.match(multiplayerClient, /aria-haspopup="dialog"/);
+  assert.match(multiplayerClient, /aria-controls="multiplayer-help-dialog"/);
+  assert.match(multiplayerClient, /<PokerRulesModal[\s\S]*?context="multiplayer"[\s\S]*?dialogId="multiplayer-help-dialog"[\s\S]*?multiplayerStatus=\{\{[\s\S]*?onClose=\{\(\) => setRulesOpen\(false\)\}[\s\S]*?closeLabel="看懂了，回到多人牌桌"/);
   assert.match(multiplayerClient, /const \[tableHintOpen, setTableHintOpen\] = useState\(false\)/);
   assert.match(multiplayerClient, /styles\.navHintToggle/);
   assert.match(multiplayerClient, /查看牌桌操作提示/);

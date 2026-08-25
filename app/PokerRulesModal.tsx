@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type RuleSuit = "♠" | "♥" | "♦" | "♣";
 type RuleCardSpec = readonly [rank: string, suit: RuleSuit];
@@ -116,16 +116,142 @@ function RuleCardRow({
   );
 }
 
+export type MultiplayerHelpStatus = {
+  eyebrow: string;
+  title: string;
+  summary: string;
+  details: readonly string[];
+  ruleSummary: string;
+  timedTurn: boolean;
+  secondsLeft: number | null;
+};
+
+function MultiplayerGuide({
+  status,
+  onShowRules,
+}: {
+  status?: MultiplayerHelpStatus;
+  onShowRules: () => void;
+}) {
+  return (
+    <>
+      <section className={`multiplayer-guide-now${status?.timedTurn ? " is-timed-turn" : ""}`} aria-labelledby="multiplayer-guide-now-title">
+        <div className="multiplayer-guide-now-copy">
+          <span>{status?.eyebrow ?? "QUICK START"}</span>
+          <h3 id="multiplayer-guide-now-title">{status?.title ?? "创建一张桌，或用 8 位邀请码加入"}</h3>
+          <p>{status?.summary ?? "先完成昵称与房间设置；进入牌桌后全员准备，由房主开局。"}</p>
+          {status?.details?.length ? <ul>{status.details.map((detail) => <li key={detail}>{detail}</li>)}</ul> : null}
+        </div>
+        <div className="multiplayer-guide-table-rule">
+          <span>本桌规则</span>
+          <strong>{status?.ruleSummary ?? "加入房间后，这里会显示当前桌的模式、筹码、读秒与 AI 次数"}</strong>
+        </div>
+        {status?.timedTurn && (
+          <div className="multiplayer-guide-clock" role="alert">
+            <span>帮助不会暂停行动计时</span>
+            <strong>当前约剩 {status.secondsLeft ?? "—"} 秒</strong>
+            <small>需要操作时，请先关闭帮助回到下注台。</small>
+          </div>
+        )}
+      </section>
+
+      <section className="poker-rule-section" aria-labelledby="multiplayer-start-title">
+        <div className="poker-rule-section-heading"><span>FROM INVITE TO FIRST HAND</span><h3 id="multiplayer-start-title">朋友局，四步开打</h3></div>
+        <div className="multiplayer-guide-steps">
+          <article><b>01</b><span>取昵称</span><strong>创建牌桌或粘贴 8 位邀请码</strong><p>房主创建后，顶栏邀请码可以一键复制；朋友在大厅直接粘贴加入。</p></article>
+          <article><b>02</b><span>定桌规</span><strong>房主设置人数、模式与资源</strong><p>支持 2–10 人，并可设置起始筹码、每次行动时间、整局时间库与每人 AI 辅助次数。</p></article>
+          <article><b>03</b><span>全员准备</span><strong>有筹码的玩家确认“我已准备”</strong><p>至少两人入座后，由房主点击“开始牌局”；庄位与盲注会逐手移动。</p></article>
+          <article><b>04</b><span>轮流行动</span><strong>只在轮到你时操作下注台</strong><p>合法按钮、最小加注和最大金额都由服务器同步；行动结果会同时出现在所有人的牌桌上。</p></article>
+        </div>
+        <div className="multiplayer-guide-modes">
+          <article><span>CASH PRACTICE</span><strong>现金练习</strong><p>筹码归零后，下一手按房间起始筹码自动补回，适合持续训练；由房主主动结束整局。</p></article>
+          <article><span>SINGLE TABLE</span><strong>单桌淘汰</strong><p>筹码归零后继续观战，不会自动补码；直到只剩最后一位玩家。</p></article>
+          <aside><strong>共同桌规</strong><p>盲注固定 5/10，本桌不抽水。浅筹、标准、深筹只改变起始买入深度。</p></aside>
+        </div>
+      </section>
+
+      <section className="poker-rule-section" aria-labelledby="multiplayer-action-title">
+        <div className="poker-rule-section-heading"><span>BETTING · READ THE TOTAL</span><h3 id="multiplayer-action-title">下注台最容易看错的，是“到多少”</h3></div>
+        <div className="multiplayer-raise-example" aria-label="你已经投入十，选择加注到九十，本次再投入八十">
+          <div><span>你本街已投入</span><strong>10</strong></div><i>→</i>
+          <div className="is-highlight"><span>按钮显示</span><strong>加注到 90</strong></div><i>→</i>
+          <div><span>这次实际再投入</span><strong>80</strong></div>
+        </div>
+        <p className="multiplayer-guide-lead">“下注到 / 加注到”表示你在<strong>这一街的累计总投入</strong>，不是在现有金额上再加一次。滑杆、数字框、翻牌前的 BB 倍数和翻牌后的底池比例只是快捷尺寸，最终以按钮显示的合法范围为准。</p>
+        <div className="multiplayer-action-legend">
+          <div><b>弃牌</b><span>放弃本手，已投入筹码不退。</span></div>
+          <div><b>过牌</b><span>无需补码时，零成本继续。</span></div>
+          <div><b>跟注</b><span>补齐到当前最高投入。</span></div>
+          <div><b>下注 / 加注</b><span>提高本街累计投入。</span></div>
+          <div><b>全下</b><span>投入全部剩余筹码。</span></div>
+        </div>
+      </section>
+
+      <section className="poker-rule-section" aria-labelledby="multiplayer-clock-title">
+        <div className="poker-rule-section-heading"><span>ACTION CLOCK · TIME BANK · AI</span><h3 id="multiplayer-clock-title">以 20 / 100s 为例，读秒这样使用</h3></div>
+        <div className="multiplayer-resource-flow">
+          <article><b>20s</b><span>基础行动时间</span><p>每次轮到你都会重新获得。到 0 时，能过牌就自动过牌，否则自动弃牌。</p></article>
+          <i>＋</i>
+          <article><b>100s</b><span>整局时间库</span><p>每位玩家整局独立使用。每用一次时间牌，增加不超过一次基础行动时长，并扣掉同样的库存。</p></article>
+          <i>＋</i>
+          <article><b>AI +10s</b><span>本次决策分析</span><p>房主可设每人 0 / 5 / 10 次。成功分析消耗 1 次，并自动为当前行动增加 10 秒。</p></article>
+        </div>
+        <div className="multiplayer-guide-note"><strong>同一个决策可以放心重看：</strong><span>关闭分析后再次打开，不会重复扣次数，也不会重复加时间。AI 只读取你的底牌与牌桌公开信息；分析结果不会展示给其他玩家。</span></div>
+      </section>
+
+      <section className="poker-rule-section" aria-labelledby="multiplayer-social-title">
+        <div className="poker-rule-section-heading"><span>TABLE TALK · BETWEEN HANDS</span><h3 id="multiplayer-social-title">聊天、亮牌和下一手，共用一张牌桌</h3></div>
+        <div className="multiplayer-guide-grid">
+          <article><span>桌边互动</span><strong>表情与消息</strong><p>下注台旁打开“发表情”或“消息”。快捷表情会在座位边显示约 5 秒；顶栏音效开关同时控制牌桌音效和表情语音。</p></article>
+          <article><span>共同结算</span><strong>固定等待 20 秒</strong><p>一手结束后，结算与已公开牌会保留；若已公开且能组成牌型，还会展示赢家最佳五张。全员提前准备也不会跳过这段时间。</p></article>
+          <article><span>赢家选择</span><strong>亮牌或盖牌</strong><p>赢家在共同等待的前 12 秒决定；超时自动盖牌。若选择亮牌，手牌至少持续显示到 20 秒结算结束。</p></article>
+          <article><span>训练机会</span><strong>每手私密偷看 5 次</strong><p>本手参与者可在结算期查看未公开对手底牌；结果只对自己可见，也不会替对手公开。</p></article>
+        </div>
+        <div className="multiplayer-settlement-flow" aria-label="一手结束后的流程">
+          <b>本手结算</b><i>→</i><b>亮牌 / 盖牌与私密偷看</b><i>→</i><b>已公开手牌 / 最佳五张持续展示</b><i>→</i><b>20 秒后下一手或整局结算</b>
+        </div>
+      </section>
+
+      <section className="poker-rule-section" aria-labelledby="multiplayer-review-title">
+        <div className="poker-rule-section-heading"><span>REPLAY · LEAVE · SESSION REPORT</span><h3 id="multiplayer-review-title">离桌与复盘，不会再混在一起</h3></div>
+        <div className="multiplayer-guide-grid is-three">
+          <article><span>牌谱</span><strong>最近 30 手牌桌回放</strong><p>按实际牌桌重放行动顺序、下注到多少、底池与剩余筹码；底牌仍按你的查看权限呈现。</p></article>
+          <article><span>暂离 / 永久离开</span><strong>两个动作，结果不同</strong><p>左上角“←”只是暂离牌桌视图，座位保留；“更多 → 永久离开”才会退出房间，牌局中未全下的牌会自动弃掉。</p></article>
+          <article><span>整局结算</span><strong>只有房主可以结束游戏</strong><p>进行中的手牌会先正常打完，再生成全桌总结；重新开局会重置筹码、时间库、AI 次数与本局统计。</p></article>
+        </div>
+      </section>
+
+      <div className="multiplayer-guide-rule-link">
+        <div><span>还不熟悉牌型？</span><strong>七选五、九种牌型、底池赔率与边池规则都在下一页。</strong></div>
+        <button type="button" onClick={onShowRules}>查看德州扑克规则 →</button>
+      </div>
+    </>
+  );
+}
+
 export function PokerRulesModal({
   onClose,
   closeLabel = "看懂了，回到牌桌",
+  context = "poker",
+  multiplayerStatus,
+  dialogId = "poker-rules-dialog",
 }: {
   onClose: () => void;
   closeLabel?: string;
+  context?: "poker" | "multiplayer";
+  multiplayerStatus?: MultiplayerHelpStatus;
+  dialogId?: string;
 }) {
   const dialogRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
+  const [activePanel, setActivePanel] = useState<"multiplayer" | "rules">(context === "multiplayer" ? "multiplayer" : "rules");
+  const showMultiplayerGuide = context === "multiplayer" && activePanel === "multiplayer";
+
+  const selectPanel = (panel: "multiplayer" | "rules") => {
+    setActivePanel(panel);
+    window.requestAnimationFrame(() => dialogRef.current?.scrollTo({ top: 0, behavior: "smooth" }));
+  };
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -168,11 +294,27 @@ export function PokerRulesModal({
 
   return (
     <div className="modal-backdrop">
-      <section ref={dialogRef} className="info-modal poker-rules-modal" role="dialog" aria-modal="true" aria-labelledby="rules-title" aria-describedby="rules-intro">
-        <button ref={closeButtonRef} className="modal-close" type="button" onClick={onClose} aria-label="关闭德州扑克规则">×</button>
-        <span className="eyebrow">TEXAS HOLD&apos;EM RULEBOOK · ILLUSTRATED</span>
-        <h2 id="rules-title">先看懂一手牌，<br />再练好每个决定。</h2>
-        <p id="rules-intro">德州扑克的目标很简单：<strong>赢下底池</strong>。你可以让所有对手在摊牌前弃牌——此时通常无需亮牌；也可以坚持到最后，用自己的两张底牌和桌上的五张公共牌，从七张牌里组成最强的五张牌。</p>
+      <section id={dialogId} ref={dialogRef} className={`info-modal poker-rules-modal${context === "multiplayer" ? " is-multiplayer-help" : ""}`} role="dialog" aria-modal="true" aria-labelledby={`${dialogId}-title`} aria-describedby={`${dialogId}-intro`}>
+        <div className="poker-rules-toolbar">
+          <span>{context === "multiplayer" ? "FRIENDS TABLE FIELD GUIDE" : "TEXAS HOLD'EM RULEBOOK"}</span>
+          {context === "multiplayer" && (
+            <div className="poker-rules-tabs" role="tablist" aria-label="帮助内容">
+              <button id={`${dialogId}-multiplayer-tab`} type="button" role="tab" aria-selected={activePanel === "multiplayer"} aria-controls={`${dialogId}-multiplayer-panel`} onClick={() => selectPanel("multiplayer")}>多人牌桌指南</button>
+              <button id={`${dialogId}-rules-tab`} type="button" role="tab" aria-selected={activePanel === "rules"} aria-controls={`${dialogId}-rules-panel`} onClick={() => selectPanel("rules")}>德州扑克规则</button>
+            </div>
+          )}
+          <button ref={closeButtonRef} className="modal-close" type="button" onClick={onClose} aria-label={context === "multiplayer" ? "关闭多人牌桌帮助" : "关闭德州扑克规则"}>×</button>
+        </div>
+        <span className="eyebrow">{showMultiplayerGuide ? "MULTIPLAYER · 60 SECOND ORIENTATION" : "TEXAS HOLD'EM RULEBOOK · ILLUSTRATED"}</span>
+        <h2 id={`${dialogId}-title`}>{showMultiplayerGuide ? <>先把朋友叫上桌，<br />再把每个按钮看懂。</> : <>先看懂一手牌，<br />再练好每个决定。</>}</h2>
+        <p id={`${dialogId}-intro`}>{showMultiplayerGuide ? <>这里先解释 <strong>RangeCraft 朋友局实际怎么操作</strong>：从邀请码、准备和下注，到读秒、AI 辅助、亮牌、偷看与整局复盘。想查牌型大小时，切到“德州扑克规则”。</> : <>德州扑克的目标很简单：<strong>赢下底池</strong>。你可以让所有对手在摊牌前弃牌——此时通常无需亮牌；也可以坚持到最后，用自己的两张底牌和桌上的五张公共牌，从七张牌里组成最强的五张牌。</>}</p>
+
+        {context === "multiplayer" && (
+          <div id={`${dialogId}-multiplayer-panel`} role="tabpanel" aria-labelledby={`${dialogId}-multiplayer-tab`} hidden={!showMultiplayerGuide}>
+            <MultiplayerGuide status={multiplayerStatus} onShowRules={() => selectPanel("rules")} />
+          </div>
+        )}
+        <div id={context === "multiplayer" ? `${dialogId}-rules-panel` : undefined} role={context === "multiplayer" ? "tabpanel" : undefined} aria-labelledby={context === "multiplayer" ? `${dialogId}-rules-tab` : undefined} hidden={context === "multiplayer" && showMultiplayerGuide}>
 
         <div className="poker-seven-to-five" aria-label="七张牌选出最佳五张示例">
           <div className="poker-seven-to-five-copy">
@@ -311,6 +453,7 @@ export function PokerRulesModal({
         </div>
 
         <div className="poker-rule-memory"><span>30 秒记忆法</span><strong>先认牌型 → 再看最佳五张 → 算清要跟多少 → 最后考虑位置、范围与剩余筹码。</strong></div>
+        </div>
         <button className="modal-primary" type="button" onClick={onClose}>{closeLabel}</button>
       </section>
     </div>

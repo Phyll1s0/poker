@@ -2211,17 +2211,29 @@
 }
 
 .navHelpButton {
-  width: 32px;
-  height: 32px;
-  display: grid;
+  min-width: 64px;
+  height: 38px;
+  padding: 0 12px;
+  display: inline-flex;
   flex: 0 0 auto;
-  place-items: center;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 50%;
+  border-radius: 5px;
   color: #8f938e;
   background: rgba(255, 255, 255, 0.022);
   cursor: pointer;
+}
+
+.navHelpButton span {
   font: 600 12px/1 Georgia, serif;
+}
+
+.navHelpButton b {
+  font-size: 8px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
 }
 
 .navHelpButton:hover,
@@ -6256,7 +6268,8 @@
 
   .navChatToggle,
   .navSoundToggle,
-  .navHintToggle {
+  .navHintToggle,
+  .navHelpButton {
     width: 36px;
     min-width: 36px;
     min-height: 36px;
@@ -6268,6 +6281,7 @@
   .navSoundToggle b,
   .navSoundToggle small,
   .navHintToggle b,
+  .navHelpButton b,
   .multiplayerPage .navRight > strong {
     display: none;
   }
@@ -6294,7 +6308,8 @@
 
   .navChatToggle,
   .navSoundToggle,
-  .navHintToggle {
+  .navHintToggle,
+  .navHelpButton {
     width: 32px;
     min-width: 32px;
     min-height: 32px;
