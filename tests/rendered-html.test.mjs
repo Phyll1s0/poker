@@ -287,6 +287,28 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerToolbar, /styles\.tableMoreMenu/);
   assert.match(multiplayerToolbar, /结束游戏/);
   assert.match(multiplayerToolbar, /永久离开/);
+  const multiplayerNav = sourceBetween(
+    multiplayerClient,
+    '<nav className={styles.lobbyNav}>',
+    '</nav>',
+  );
+  assert.doesNotMatch(multiplayerNav, /navReactionToggle|aria-controls="multiplayer-chat"/);
+  assert.equal((multiplayerClient.match(/<TableTalkRail/g) ?? []).length, 1);
+  const localTableActions = sourceBetween(
+    multiplayerClient,
+    '<div className={styles.tableActionCluster}>',
+    '{rulesOpen && (',
+  );
+  assert.ok(
+    localTableActions.indexOf('<TableTalkRail')
+      < localTableActions.indexOf('<ChatDock')
+      && localTableActions.indexOf('<ChatDock')
+        < localTableActions.indexOf('styles.tableControls'),
+    "表情、消息和下注应位于同一个局部操作区",
+  );
+  assert.match(multiplayerClient, /id="table-talk-reactions-trigger"[\s\S]*?aria-controls="multiplayer-chat"/);
+  assert.match(multiplayerClient, /id="table-talk-message-trigger"[\s\S]*?unreadCount > 9/);
+  assert.match(multiplayerClient, /closeChatAndRestoreFocus[\s\S]*?preventScroll: true/);
   assert.doesNotMatch(multiplayerClient, /styles\.sessionMeta/);
   assert.match(multiplayerCss, /\.tableToolbarCopy\s*\{[^}]*min-width:\s*0/s);
   assert.match(multiplayerCss, /\.tableToolbarFacts\s*\{[^}]*min-width:\s*0/s);
@@ -475,7 +497,20 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(finalCardLane, /\.seat0 \.tableBet\s*\{\s*--bet-x:\s*0px;\s*--bet-y:\s*var\(--mp-wager-bottom-y\)/);
   assert.match(finalCardLane, /\.seat5 \.tableBet\s*\{\s*--bet-x:\s*0px;\s*--bet-y:\s*var\(--mp-wager-top-y\)/);
   assert.match(finalCardLane, /@media \(max-width: 700px\)[\s\S]*?aspect-ratio:\s*0\.92 \/ 1[\s\S]*?data-table-size="10"[\s\S]*?aspect-ratio:\s*0\.88 \/ 1[\s\S]*?\.boardArea\s*\{[\s\S]*?top:\s*45%/);
-  assert.match(finalCardLane, /@media \(min-width: 861px\) and \(max-height: 760px\)[\s\S]*?min-height:\s*560px[\s\S]*?100dvh - 210px/);
+  const compactInteractionStart = multiplayerCss.indexOf("/* Compact multiplayer interaction reach");
+  assert.ok(compactInteractionStart > finalCardLaneStart, "最终紧凑操作区必须覆盖旧牌桌高度规则");
+  const compactInteraction = sourceBetween(
+    multiplayerCss,
+    "/* Compact multiplayer interaction reach",
+    "/* End compact multiplayer interaction reach */",
+  );
+  assert.match(compactInteraction, /\.tableActionCluster\s*\{[\s\S]*?position:\s*relative/);
+  assert.match(compactInteraction, /\.tableTalkRail\s*\{[\s\S]*?min-height:\s*36px/);
+  assert.match(compactInteraction, /@media \(min-width: 861px\)[\s\S]*?\.tableActionCluster \.chatDock[\s\S]*?top:\s*auto[\s\S]*?bottom:\s*calc\(100% \+ 8px\)/);
+  assert.match(compactInteraction, /\.chatDockReactionFocus \.chatLog,[\s\S]*?\.chatDockReactionFocus \.chatComposer,[\s\S]*?display:\s*none/);
+  assert.match(compactInteraction, /@media \(max-width: 860px\)[\s\S]*?\.tableActionCluster \.chatDock[\s\S]*?position:\s*fixed[\s\S]*?bottom:\s*0/);
+  assert.match(compactInteraction, /@media \(max-width: 700px\)[\s\S]*?min-height:\s*clamp\(460px, calc\(100vw \+ 140px\), 530px\)[\s\S]*?\.tableTalkButton[\s\S]*?min-height:\s*42px/);
+  assert.match(compactInteraction, /@media \(min-width: 861px\) and \(max-height: 760px\)[\s\S]*?\.chatDockMessageFocus[\s\S]*?100dvh - 260px/);
   assert.match(multiplayerCss, /@keyframes multiplayerDealCommunityCard/);
   assert.match(multiplayerCss, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.multiplayerPage \.boardDealtCard/);
   assert.match(multiplayerCss, /\.multiplayerPage \.holeDealtCard\s*\{[\s\S]*?animation:\s*multiplayerDealHoleCard 460ms/);

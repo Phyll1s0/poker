@@ -31,6 +31,16 @@ const mobileLanes = sourceBetween(
   "@media (max-width: 700px) {",
   "@media (min-width: 861px) and (max-height: 760px)",
 );
+const compactWorkspace = sourceBetween(
+  css,
+  "/* Compact multiplayer interaction reach",
+  "/* End compact multiplayer interaction reach */",
+);
+const compactMobile = sourceBetween(
+  compactWorkspace,
+  "@media (max-width: 700px) {",
+  "@media (min-width: 861px) and (max-height: 760px)",
+);
 
 test("mobile multiplayer card rows fit the narrowest supported table", () => {
   const viewportWidth = 320;
@@ -142,6 +152,63 @@ test("320px two- and ten-player tables keep the board between both wager lanes",
     assert.ok(
       lowerSideBetStart - boardBottom >= 4,
       `${scenario.label}下层侧座下注轨道不应进入公共牌区域`,
+    );
+  }
+});
+
+test("compact mobile table leaves the betting dock visible without shrinking cards", () => {
+  assert.match(
+    compactMobile,
+    /min-height:\s*clamp\(460px, calc\(100vw \+ 140px\), 530px\)/,
+  );
+  assert.match(compactMobile, /margin-top:\s*52px/);
+  assert.match(compactMobile, /padding:\s*68px 30px 96px/);
+
+  const viewportHeight = 720;
+  const navigationHeight = 64;
+  const viewportTopMargin = 52;
+  for (const viewportWidth of [320, 390]) {
+    const tableViewportHeight = Math.min(530, Math.max(460, viewportWidth + 140));
+    const tableWidth = Math.min(330, viewportWidth - 74);
+    const denseTableHeight = tableWidth / 0.88;
+    const tableSafetyHeight = 68 + denseTableHeight + 96;
+    const visibleActionHeadroom = viewportHeight
+      - navigationHeight
+      - viewportTopMargin
+      - tableViewportHeight;
+
+    assert.ok(
+      tableSafetyHeight <= tableViewportHeight,
+      `${viewportWidth}px 十人桌应完整落在紧凑桌区安全带内`,
+    );
+    assert.ok(
+      visibleActionHeadroom >= 72,
+      `${viewportWidth}px 屏幕应在首屏露出至少 72px 操作区`,
+    );
+  }
+});
+
+test("compact desktop table keeps local interaction controls near the first viewport", () => {
+  assert.match(compactWorkspace, /margin-top:\s*56px/);
+  assert.match(compactWorkspace, /padding:\s*70px 82px 72px/);
+  assert.match(compactWorkspace, /100dvh - 410px/);
+
+  for (const scenario of [
+    { width: 1_366, height: 768 },
+    { width: 1_440, height: 900 },
+  ]) {
+    const tableWidth = Math.min(
+      1_080,
+      scenario.width - 220,
+      Math.max(620, (scenario.height - 410) * 2.05),
+    );
+    const tableHeight = tableWidth / 2.05;
+    const talkRailTop = 72 + 56 + 70 + tableHeight + 72;
+    const remainingViewport = scenario.height - talkRailTop;
+
+    assert.ok(
+      remainingViewport >= 132,
+      `${scenario.width}×${scenario.height} 应在首屏容纳表情栏和紧凑下注台`,
     );
   }
 });

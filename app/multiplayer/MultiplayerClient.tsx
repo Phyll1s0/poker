@@ -1144,6 +1144,50 @@ function HandHistoryModal({
   );
 }
 
+function TableTalkRail({
+  chatOpen,
+  focusTarget,
+  unreadCount,
+  onToggle,
+}: {
+  chatOpen: boolean;
+  focusTarget: ChatFocusTarget;
+  unreadCount: number;
+  onToggle: (target: ChatFocusTarget) => void;
+}) {
+  const reactionsOpen = chatOpen && focusTarget === "reactions";
+  const messagesOpen = chatOpen && focusTarget === "message";
+
+  return (
+    <div className={styles.tableTalkRail} role="group" aria-label="桌边互动快捷入口">
+      <span className={styles.tableTalkLabel}>桌边互动</span>
+      <button
+        id="table-talk-reactions-trigger"
+        className={`${styles.tableTalkButton} ${reactionsOpen ? styles.tableTalkButtonOn : ""}`}
+        type="button"
+        onClick={() => onToggle("reactions")}
+        aria-expanded={reactionsOpen}
+        aria-controls="multiplayer-chat"
+        aria-label={reactionsOpen ? "关闭快捷表情" : "打开快捷表情"}
+      >
+        <span aria-hidden="true">☺</span><b>发表情</b>
+      </button>
+      <button
+        id="table-talk-message-trigger"
+        className={`${styles.tableTalkButton} ${messagesOpen ? styles.tableTalkButtonOn : ""}`}
+        type="button"
+        onClick={() => onToggle("message")}
+        aria-expanded={messagesOpen}
+        aria-controls="multiplayer-chat"
+        aria-label={messagesOpen ? "关闭牌桌消息" : `打开牌桌消息${unreadCount ? `，${unreadCount} 条未读` : ""}`}
+      >
+        <span aria-hidden="true">✉</span><b>消息</b>
+        {unreadCount > 0 && <small>{unreadCount > 9 ? "9+" : unreadCount}</small>}
+      </button>
+    </div>
+  );
+}
+
 function ChatDock({
   messages,
   selfSeat,
@@ -1981,6 +2025,16 @@ export default function MultiplayerClient({
     setUnreadChatCount(0);
   }, []);
 
+  const closeChatAndRestoreFocus = useCallback(() => {
+    const triggerId = chatFocusTarget === "reactions"
+      ? "table-talk-reactions-trigger"
+      : "table-talk-message-trigger";
+    closeChat();
+    window.requestAnimationFrame(() => {
+      document.getElementById(triggerId)?.focus({ preventScroll: true });
+    });
+  }, [chatFocusTarget, closeChat]);
+
   const setChatPinned = useCallback((pinned: boolean) => {
     chatPinnedRef.current = pinned;
     if (pinned) setUnreadChatCount(0);
@@ -2719,7 +2773,7 @@ export default function MultiplayerClient({
     return {
       eyebrow: "TABLE STATUS",
       title: `等待 ${actingPlayer?.handle ?? "牌桌"} 行动`,
-      summary: "你现在不需要操作；可以观察公开行动，用顶栏“表情 / 消息”互动，或查看已经解锁的牌谱。",
+      summary: "你现在不需要操作；可以观察公开行动，用下注台旁的“表情 / 消息”互动，或查看已经解锁的牌谱。",
       details: ["快捷表情会在座位旁显示 5 秒", "牌桌会自动同步合法动作和倒计时"],
     };
   })();
@@ -2748,39 +2802,6 @@ export default function MultiplayerClient({
           {snapshot && (
             <button className={styles.navCodeButton} type="button" onClick={() => void copyJoinCode(snapshot.room.joinCode)} aria-label={`复制邀请码 ${snapshot.room.joinCode}`}>
               {snapshot.room.joinCode}<small>复制</small>
-            </button>
-          )}
-          {snapshot && (
-            <button
-              className={`${styles.navChatToggle} ${styles.navReactionToggle} ${chatOpen && chatFocusTarget === "reactions" ? styles.navChatToggleOn : ""}`}
-              type="button"
-              onClick={() => {
-                if (chatOpen && chatFocusTarget === "reactions") closeChat();
-                else openChat("reactions");
-              }}
-              aria-expanded={chatOpen}
-              aria-controls="multiplayer-chat"
-              aria-label={chatOpen && chatFocusTarget === "reactions" ? "关闭快捷表情" : "打开快捷表情"}
-              title="发表快捷表情"
-            >
-              <span aria-hidden="true">☺</span><b>表情</b>
-            </button>
-          )}
-          {snapshot && (
-            <button
-              className={`${styles.navChatToggle} ${chatOpen && chatFocusTarget === "message" ? styles.navChatToggleOn : ""}`}
-              type="button"
-              onClick={() => {
-                if (chatOpen && chatFocusTarget === "message") closeChat();
-                else openChat("message");
-              }}
-              aria-expanded={chatOpen}
-              aria-controls="multiplayer-chat"
-              aria-label={chatOpen && chatFocusTarget === "message" ? "关闭牌桌消息" : `打开牌桌消息${unreadChatCount ? `，${unreadChatCount} 条未读` : ""}`}
-              title="打开牌桌消息"
-            >
-              <span aria-hidden="true">✉</span><b>消息</b>
-              {unreadChatCount > 0 && <small>{unreadChatCount > 9 ? "9+" : unreadChatCount}</small>}
             </button>
           )}
           <button
@@ -3073,8 +3094,19 @@ export default function MultiplayerClient({
                 </div>
               )}
 
-              {chatOpen && (
-                <ChatDock
+              <div className={styles.tableActionCluster}>
+                <TableTalkRail
+                  chatOpen={chatOpen}
+                  focusTarget={chatFocusTarget}
+                  unreadCount={unreadChatCount}
+                  onToggle={(target) => {
+                    if (chatOpen && chatFocusTarget === target) closeChat();
+                    else openChat(target);
+                  }}
+                />
+
+                {chatOpen && (
+                  <ChatDock
                   messages={chatMessages}
                   selfSeat={snapshot.table.viewerSeat}
                   draft={chatDraft}
@@ -3083,13 +3115,13 @@ export default function MultiplayerClient({
                   unreadCount={unreadChatCount}
                   error={chatError}
                   onDraftChange={setChatDraft}
-                  onClose={closeChat}
+                  onClose={closeChatAndRestoreFocus}
                   onPinnedChange={setChatPinned}
                   onReadLatest={markLatestChatRead}
                   onSendText={sendChatText}
                   onSendReaction={sendChatReaction}
-                />
-              )}
+                  />
+                )}
 
             {phase === "finished" && snapshot.table.sessionReport && (
               <SessionSummary
@@ -3357,6 +3389,7 @@ export default function MultiplayerClient({
                 {(phase === "showdown" || phase === "between_hands") && <WinningHands game={game} />}
               </div>
             )}
+              </div>
             </div>
           </section>
         )}

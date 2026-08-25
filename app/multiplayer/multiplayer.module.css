@@ -6736,3 +6736,284 @@
   }
 }
 /* End final live-table cascade guard */
+
+/* Compact multiplayer interaction reach ----------------------------------
+   Keep the table, table-talk entry points and betting dock in one local
+   workspace. This block intentionally sits at the end of the live-table
+   cascade so older ten-seat safety rules cannot reintroduce the tall gaps. */
+.tableActionCluster {
+  width: min(1040px, calc(100% - 48px));
+  margin: 0 auto;
+  position: relative;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.tableTalkRail {
+  width: 100%;
+  min-height: 36px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.multiplayerPage .tableActionCluster .tableControls {
+  width: 100%;
+  margin: 0;
+}
+
+.tableStageEnded .tableActionCluster {
+  height: 100%;
+  min-height: 0;
+}
+
+.tableStageEnded .tableActionCluster .sessionSummary {
+  max-height: calc(100% - 48px);
+}
+
+.tableTalkLabel {
+  margin-right: 2px;
+  color: #6e756f;
+  font-size: 8px;
+  letter-spacing: 0.1em;
+}
+
+.tableTalkButton {
+  min-width: 76px;
+  min-height: 36px;
+  padding: 0 11px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  color: #a4aaa4;
+  background: rgba(19, 24, 21, 0.94);
+  cursor: pointer;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.24);
+}
+
+.tableTalkButton:hover,
+.tableTalkButton:focus-visible,
+.tableTalkButtonOn {
+  border-color: rgba(99, 196, 156, 0.4);
+  color: #d4e5dc;
+  outline: none;
+  background: rgba(99, 196, 156, 0.08);
+}
+
+.tableTalkButton > span {
+  color: var(--mp-green);
+  font: 700 16px/1 Georgia, serif;
+}
+
+.tableTalkButton > b {
+  font: 600 9px/1 Arial, sans-serif;
+  letter-spacing: 0.05em;
+}
+
+.tableTalkButton > small {
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #111613;
+  border-radius: 999px;
+  color: #101713;
+  background: var(--mp-green);
+  font: 800 8px/1 Arial, sans-serif;
+}
+
+.multiplayerPage .tableStage:not(.tableStageEnded) {
+  padding: 0 24px 14px;
+}
+
+.tableToolbar {
+  min-height: 50px;
+  padding: 6px 10px 6px 13px;
+  top: 8px;
+}
+
+.tableToolbarCopy {
+  gap: 3px;
+}
+
+.tableToolbar .statusPill,
+.tableToolbar .historyButton,
+.tableMoreMenu > summary {
+  min-height: 27px;
+}
+
+.tableViewport {
+  min-height: 0;
+  margin-top: 56px;
+  padding: 70px 82px 72px;
+}
+
+.multiplayerPage .tableViewport .pokerTable {
+  width: min(
+    1080px,
+    calc(100vw - 220px),
+    max(620px, calc((100dvh - 410px) * 2.05))
+  );
+}
+
+@media (min-width: 861px) {
+  .tableActionCluster .chatDock {
+    top: auto;
+    right: 0;
+    bottom: calc(100% + 8px);
+  }
+
+  .tableActionCluster .chatDockMessageFocus {
+    height: min(530px, calc(100dvh - 170px));
+    min-height: min(390px, calc(100dvh - 170px));
+  }
+
+  .tableStageEnded .tableActionCluster .chatDock {
+    top: 44px;
+    bottom: auto;
+  }
+}
+
+.chatDockReactionFocus {
+  height: auto;
+  min-height: 0;
+  grid-template-rows: auto auto;
+}
+
+.chatDockReactionFocus .chatLog,
+.chatDockReactionFocus .chatComposer,
+.chatDockReactionFocus .chatNewMessages {
+  display: none;
+}
+
+@media (max-width: 1279px) and (min-width: 861px) {
+  .tableViewport {
+    min-height: 0;
+    margin-top: 54px;
+    padding: 64px 64px 70px;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable {
+    width: min(
+      860px,
+      calc(100vw - 180px),
+      max(560px, calc((100dvh - 420px) * 1.78))
+    );
+  }
+
+}
+
+@media (max-width: 860px) {
+  .multiplayerPage .tableStage:not(.tableStageEnded) {
+    padding: 0 12px 12px;
+  }
+
+  .tableViewport {
+    min-height: 0;
+    margin-top: 52px;
+    padding: 60px 52px 72px;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable {
+    width: min(720px, calc(100vw - 150px));
+  }
+
+  .tableActionCluster .chatDock {
+    position: fixed;
+    z-index: 50;
+    top: auto;
+    right: 0;
+    bottom: 0;
+  }
+
+  .tableActionCluster {
+    width: calc(100% - 24px);
+  }
+}
+
+@media (max-width: 700px) {
+  .tableToolbar {
+    min-height: 48px;
+    padding: 5px 8px 5px 10px;
+    top: 8px;
+  }
+
+  .tableViewport {
+    min-height: clamp(460px, calc(100vw + 140px), 530px);
+    margin-top: 52px;
+    padding: 68px 30px 96px;
+  }
+
+  .tableTalkRail {
+    min-height: 42px;
+    gap: 5px;
+  }
+
+  .tableTalkLabel {
+    margin-right: 0;
+    font-size: 7px;
+  }
+
+  .tableTalkButton {
+    min-width: 72px;
+    min-height: 42px;
+    padding-inline: 9px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) {
+    padding: 9px;
+    gap: 7px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .controlSummary {
+    padding-bottom: 7px;
+    gap: 4px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .primaryActions {
+    gap: 6px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .primaryActions .actionButton {
+    height: 42px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .raiseControl {
+    gap: 6px;
+  }
+}
+
+@media (min-width: 861px) and (max-height: 760px) {
+  .tableViewport {
+    min-height: 0;
+    margin-top: 52px;
+    padding: 60px 68px 66px;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable {
+    width: min(
+      980px,
+      calc(100vw - 220px),
+      max(560px, calc((100dvh - 420px) * 1.9))
+    );
+  }
+
+  .tableActionCluster .chatDockMessageFocus {
+    height: min(500px, calc(100dvh - 260px));
+    min-height: min(320px, calc(100dvh - 260px));
+  }
+}
+/* End compact multiplayer interaction reach */
