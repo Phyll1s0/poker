@@ -444,9 +444,38 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerCss, /\.multiplayerPage \.boardDealtCard\s*\{[\s\S]*?animation:\s*multiplayerDealCommunityCard 0\.48s/);
   assert.match(multiplayerCss, /\.winningBestFive\s*\{/);
   assert.match(multiplayerCss, /\.multiplayerPage \.winningHandCards \.card\s*\{/);
-  assert.match(multiplayerCss, /\.multiplayerPage \.seatSelf \.miniCard,[\s\S]*?width:\s*48px/);
   assert.match(multiplayerCss, /\.navHelpButton\s*\{[\s\S]*?width:\s*32px/);
-  assert.match(multiplayerCss, /@media \(max-width: 700px\)[\s\S]*?\.multiplayerPage \.seatSelf \.miniCard,[\s\S]*?width:\s*52px/);
+  assert.match(multiplayerClient, /className=\{`\$\{styles\.cards\} \$\{styles\.boardCards\}`\} aria-label="公共牌"/);
+  const responsiveCardLane = sourceBetween(
+    multiplayerCss,
+    "/* Responsive multiplayer card and wager lanes",
+    "/* End responsive multiplayer card and wager lanes */",
+  );
+  assert.match(responsiveCardLane, /--mp-board-card-width:\s*clamp\(54px, 5vw, 74px\)/);
+  assert.match(responsiveCardLane, /--mp-board-card-gap:\s*clamp\(6px, 0\.75vw, 10px\)/);
+  assert.match(responsiveCardLane, /\.boardCards \.card,[\s\S]*?\.boardCards \.cardSlot[\s\S]*?width:\s*var\(--mp-board-card-width\)/);
+  assert.match(responsiveCardLane, /--mp-hero-card-width:\s*clamp\(50px, 3\.9vw, 56px\)/);
+  assert.match(responsiveCardLane, /@media \(max-width: 1279px\) and \(min-width: 861px\)[\s\S]*?--mp-board-card-width:\s*clamp\(50px, 5\.2vw, 64px\)[\s\S]*?--mp-wager-bottom-y:\s*-124px/);
+  assert.match(responsiveCardLane, /@media \(max-width: 860px\)[\s\S]*?--mp-board-card-width:\s*clamp\(44px, 6\.6vw, 58px\)[\s\S]*?--mp-wager-top-y:\s*96px/);
+  assert.match(responsiveCardLane, /@media \(max-width: 700px\)[\s\S]*?--mp-board-card-width:\s*clamp\(38px, 10\.5vw, 46px\)[\s\S]*?--mp-hero-card-width:\s*50px/);
+  assert.match(responsiveCardLane, /data-table-size="10"[\s\S]*?--mp-board-card-width:\s*clamp\(36px, 10vw, 42px\)/);
+  assert.match(responsiveCardLane, /\.seat \.tableBet\s*\{[\s\S]*?z-index:\s*12/);
+  assert.match(responsiveCardLane, /--mp-wager-bottom-y:\s*-132px/);
+  assert.match(responsiveCardLane, /--mp-wager-top-y:\s*112px/);
+  assert.match(responsiveCardLane, /@media \(max-width: 700px\)[\s\S]*?--mp-wager-lower-diagonal-x:\s*76px[\s\S]*?--mp-wager-upper-diagonal-y:\s*40px[\s\S]*?--mp-wager-side-lower-y:\s*30px[\s\S]*?--mp-wager-side-upper-y:\s*-55px[\s\S]*?--mp-wager-top-y:\s*98px/);
+  const finalCardLaneStart = multiplayerCss.indexOf("/* Final live-table cascade guard");
+  const tenSeatLayoutStart = multiplayerCss.indexOf("/* Ten-seat rail layout");
+  assert.ok(finalCardLaneStart > tenSeatLayoutStart, "最终牌面与下注安全区必须覆盖十人桌旧坐标");
+  const finalCardLane = sourceBetween(
+    multiplayerCss,
+    "/* Final live-table cascade guard",
+    "/* End final live-table cascade guard */",
+  );
+  assert.match(finalCardLane, /\.seatSelf \.seatCards\s*\{[\s\S]*?top:\s*var\(--mp-hero-card-top\)/);
+  assert.match(finalCardLane, /\.seat0 \.tableBet\s*\{\s*--bet-x:\s*0px;\s*--bet-y:\s*var\(--mp-wager-bottom-y\)/);
+  assert.match(finalCardLane, /\.seat5 \.tableBet\s*\{\s*--bet-x:\s*0px;\s*--bet-y:\s*var\(--mp-wager-top-y\)/);
+  assert.match(finalCardLane, /@media \(max-width: 700px\)[\s\S]*?aspect-ratio:\s*0\.92 \/ 1[\s\S]*?data-table-size="10"[\s\S]*?aspect-ratio:\s*0\.88 \/ 1[\s\S]*?\.boardArea\s*\{[\s\S]*?top:\s*45%/);
+  assert.match(finalCardLane, /@media \(min-width: 861px\) and \(max-height: 760px\)[\s\S]*?min-height:\s*560px[\s\S]*?100dvh - 210px/);
   assert.match(multiplayerCss, /@keyframes multiplayerDealCommunityCard/);
   assert.match(multiplayerCss, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.multiplayerPage \.boardDealtCard/);
   assert.match(multiplayerCss, /\.multiplayerPage \.holeDealtCard\s*\{[\s\S]*?animation:\s*multiplayerDealHoleCard 460ms/);

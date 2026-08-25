@@ -674,7 +674,7 @@ function TableSurface({
             <span>{game ? "底池" : "私人牌桌"}</span>
             <strong>{game ? <><i />{game.pot}</> : "WAITING"}</strong>
           </div>
-          <div className={styles.cards} aria-label="公共牌">
+          <div className={`${styles.cards} ${styles.boardCards}`} aria-label="公共牌">
             {(game?.board ?? []).map((card, index) => {
               const isNewCard = Boolean(
                 boardDeal

@@ -5953,6 +5953,173 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* Responsive multiplayer card and wager lanes -----------------------------
+   The felt grew for eight- and ten-handed play, but the board cards kept the
+   old compact ceiling. Card scale variables live here; the final cascade guard
+   below the ten-seat rail owns the actual card and wager coordinates. */
+.multiplayerPage .tableViewport .pokerTable {
+  --mp-board-card-width: clamp(54px, 5vw, 74px);
+  --mp-board-card-gap: clamp(6px, 0.75vw, 10px);
+  --mp-hole-card-width: clamp(38px, 2.75vw, 42px);
+  --mp-hero-card-width: clamp(50px, 3.9vw, 56px);
+  --mp-hole-card-top: -62px;
+  --mp-hole-card-bottom: -61px;
+  --mp-hero-card-top: -87px;
+  --mp-wager-bottom-y: -132px;
+  --mp-wager-lower-diagonal-x: 86px;
+  --mp-wager-lower-diagonal-y: 82px;
+  --mp-wager-upper-diagonal-x: 86px;
+  --mp-wager-upper-diagonal-y: 82px;
+  --mp-wager-side-x: 120px;
+  --mp-wager-side-lower-y: -18px;
+  --mp-wager-side-upper-y: 28px;
+  --mp-wager-top-y: 112px;
+}
+
+.multiplayerPage .tableViewport .pokerTable .boardCards {
+  gap: var(--mp-board-card-gap);
+}
+
+.multiplayerPage .tableViewport .pokerTable .boardCards .card,
+.multiplayerPage .tableViewport .pokerTable .boardCards .cardSlot {
+  width: var(--mp-board-card-width);
+  flex: 0 0 var(--mp-board-card-width);
+}
+
+.multiplayerPage .tableViewport .pokerTable .boardCards .card {
+  font-size: clamp(21px, 2.15vw, 30px);
+}
+
+.multiplayerPage .tableViewport .pokerTable .boardCards .cardSuit {
+  font-size: clamp(23px, 2.35vw, 33px);
+}
+
+.multiplayerPage .pokerTable .seat .seatCards {
+  gap: 5px;
+}
+
+.multiplayerPage .pokerTable .seat .miniCard,
+.multiplayerPage .pokerTable .seat .miniBack {
+  width: var(--mp-hole-card-width);
+  flex: 0 0 var(--mp-hole-card-width);
+  font-size: clamp(15px, 1.35vw, 17px);
+}
+
+.multiplayerPage .pokerTable .seat .miniCard > span {
+  font-size: clamp(18px, 1.55vw, 21px);
+}
+
+.multiplayerPage .pokerTable .seatSelf .seatCards {
+  z-index: 8;
+  gap: 7px;
+}
+
+.multiplayerPage .pokerTable .seatSelf .miniCard,
+.multiplayerPage .pokerTable .seatSelf .miniBack {
+  width: var(--mp-hero-card-width);
+  flex-basis: var(--mp-hero-card-width);
+  font-size: clamp(19px, 1.7vw, 22px);
+}
+
+.multiplayerPage .pokerTable .seatSelf .miniCard > span {
+  font-size: clamp(24px, 2vw, 28px);
+}
+
+.multiplayerPage .pokerTable .seat .tableBet {
+  z-index: 12;
+  border: 1px solid rgba(216, 183, 116, 0.22);
+  background: rgba(10, 14, 12, 0.9);
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.38);
+}
+
+@media (max-width: 1279px) and (min-width: 861px) {
+  .multiplayerPage .tableViewport .pokerTable {
+    --mp-board-card-width: clamp(50px, 5.2vw, 64px);
+    --mp-board-card-gap: clamp(5px, 0.7vw, 8px);
+    --mp-hole-card-width: 39px;
+    --mp-hero-card-width: 53px;
+    --mp-hole-card-top: -59px;
+    --mp-hole-card-bottom: -58px;
+    --mp-hero-card-top: -83px;
+    --mp-wager-bottom-y: -124px;
+    --mp-wager-lower-diagonal-x: 76px;
+    --mp-wager-lower-diagonal-y: 74px;
+    --mp-wager-upper-diagonal-x: 76px;
+    --mp-wager-upper-diagonal-y: 74px;
+    --mp-wager-side-x: 108px;
+    --mp-wager-side-lower-y: -16px;
+    --mp-wager-side-upper-y: 24px;
+    --mp-wager-top-y: 102px;
+  }
+}
+
+@media (max-width: 860px) {
+  .multiplayerPage .tableViewport .pokerTable {
+    --mp-board-card-width: clamp(44px, 6.6vw, 58px);
+    --mp-board-card-gap: 6px;
+    --mp-hole-card-width: 38px;
+    --mp-hero-card-width: 51px;
+    --mp-hole-card-top: -58px;
+    --mp-hole-card-bottom: -57px;
+    --mp-hero-card-top: -80px;
+    --mp-wager-bottom-y: -118px;
+    --mp-wager-lower-diagonal-x: 70px;
+    --mp-wager-lower-diagonal-y: 68px;
+    --mp-wager-upper-diagonal-x: 70px;
+    --mp-wager-upper-diagonal-y: 68px;
+    --mp-wager-side-x: 98px;
+    --mp-wager-side-lower-y: -15px;
+    --mp-wager-side-upper-y: 22px;
+    --mp-wager-top-y: 96px;
+  }
+}
+
+@media (max-width: 700px) {
+  .multiplayerPage .tableViewport .pokerTable {
+    --mp-board-card-width: clamp(38px, 10.5vw, 46px);
+    --mp-board-card-gap: 5px;
+    --mp-hole-card-width: 36px;
+    --mp-hero-card-width: 50px;
+    --mp-hole-card-top: -55px;
+    --mp-hole-card-bottom: -54px;
+    --mp-hero-card-top: -76px;
+    --mp-wager-bottom-y: -115px;
+    --mp-wager-lower-diagonal-x: 76px;
+    --mp-wager-lower-diagonal-y: 66px;
+    --mp-wager-upper-diagonal-x: 76px;
+    --mp-wager-upper-diagonal-y: 40px;
+    --mp-wager-side-x: 82px;
+    --mp-wager-side-lower-y: 30px;
+    --mp-wager-side-upper-y: -55px;
+    --mp-wager-top-y: 98px;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="7"],
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="8"],
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="9"],
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="10"] {
+    --mp-board-card-width: clamp(36px, 10vw, 42px);
+    --mp-board-card-gap: 4px;
+    --mp-hole-card-width: 34px;
+    --mp-hero-card-width: 49px;
+  }
+
+  .multiplayerPage .pokerTable .seat .tableBet {
+    padding: 3px 5px;
+    font-size: 9px;
+  }
+}
+
+@media (min-width: 861px) and (max-height: 760px) {
+  .multiplayerPage .tableViewport .pokerTable {
+    --mp-board-card-width: clamp(47px, 4.4vw, 64px);
+    --mp-hole-card-width: 38px;
+    --mp-hero-card-width: 52px;
+    --mp-hero-card-top: -81px;
+  }
+}
+/* End responsive multiplayer card and wager lanes */
+
 /* Private cards follow the server's real two-round dealing order. Animate the
    individual card only; seats and card groups already own positioning
    transforms for desktop and mobile layouts. */
@@ -6462,3 +6629,110 @@
 .multiplayerPage .tableControlsTransition {
   grid-template-columns: minmax(0, 1fr);
 }
+
+/* Final live-table cascade guard. The ten-seat rail is intentionally declared
+   late in this file; keep card lifts and wager lanes after it so an older seat
+   coordinate cannot move a chip label back underneath the cards. */
+.multiplayerPage .pokerTable .seat .seatCards {
+  top: var(--mp-hole-card-top);
+  bottom: auto;
+}
+
+.multiplayerPage .pokerTable .seat3 .seatCards,
+.multiplayerPage .pokerTable .seat4 .seatCards,
+.multiplayerPage .pokerTable .seat5 .seatCards,
+.multiplayerPage .pokerTable .seat6 .seatCards,
+.multiplayerPage .pokerTable .seat7 .seatCards {
+  top: auto;
+  bottom: var(--mp-hole-card-bottom);
+}
+
+.multiplayerPage .pokerTable .seatSelf .seatCards {
+  top: var(--mp-hero-card-top);
+  bottom: auto;
+}
+
+.multiplayerPage .pokerTable .seat0 .tableBet {
+  --bet-x: 0px;
+  --bet-y: var(--mp-wager-bottom-y);
+}
+
+.multiplayerPage .pokerTable .seat1 .tableBet {
+  --bet-x: var(--mp-wager-lower-diagonal-x);
+  --bet-y: calc(0px - var(--mp-wager-lower-diagonal-y));
+}
+
+.multiplayerPage .pokerTable .seat2 .tableBet {
+  --bet-x: var(--mp-wager-side-x);
+  --bet-y: var(--mp-wager-side-lower-y);
+}
+
+.multiplayerPage .pokerTable .seat3 .tableBet {
+  --bet-x: var(--mp-wager-side-x);
+  --bet-y: var(--mp-wager-side-upper-y);
+}
+
+.multiplayerPage .pokerTable .seat4 .tableBet {
+  --bet-x: var(--mp-wager-upper-diagonal-x);
+  --bet-y: var(--mp-wager-upper-diagonal-y);
+}
+
+.multiplayerPage .pokerTable .seat5 .tableBet {
+  --bet-x: 0px;
+  --bet-y: var(--mp-wager-top-y);
+}
+
+.multiplayerPage .pokerTable .seat6 .tableBet {
+  --bet-x: calc(0px - var(--mp-wager-upper-diagonal-x));
+  --bet-y: var(--mp-wager-upper-diagonal-y);
+}
+
+.multiplayerPage .pokerTable .seat7 .tableBet {
+  --bet-x: calc(0px - var(--mp-wager-side-x));
+  --bet-y: var(--mp-wager-side-upper-y);
+}
+
+.multiplayerPage .pokerTable .seat8 .tableBet {
+  --bet-x: calc(0px - var(--mp-wager-side-x));
+  --bet-y: var(--mp-wager-side-lower-y);
+}
+
+.multiplayerPage .pokerTable .seat9 .tableBet {
+  --bet-x: calc(0px - var(--mp-wager-lower-diagonal-x));
+  --bet-y: calc(0px - var(--mp-wager-lower-diagonal-y));
+}
+
+@media (max-width: 700px) {
+  .multiplayerPage .tableViewport .pokerTable {
+    aspect-ratio: 0.92 / 1;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="7"],
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="8"],
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="9"],
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="10"] {
+    aspect-ratio: 0.88 / 1;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable .boardArea {
+    top: 45%;
+  }
+
+  .multiplayerPage .pokerTable .seatSelf .seatCards {
+    top: var(--mp-hero-card-top);
+  }
+}
+
+@media (min-width: 861px) and (max-height: 760px) {
+  .tableViewport {
+    min-height: 560px;
+    padding: 90px 90px 118px;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable {
+    width: min(980px, calc(100vw - 280px), calc((100dvh - 210px) * 1.9));
+    min-width: 560px;
+    aspect-ratio: 1.9 / 1;
+  }
+}
+/* End final live-table cascade guard */
