@@ -4,6 +4,7 @@ import {
   ONLINE_DEFAULT_ACTION_TIME_MS,
   ONLINE_DEFAULT_TIME_BANK_MS,
   ONLINE_MAX_ACTION_TIME_MS,
+  ONLINE_MAX_PLAYERS,
   ONLINE_MAX_STARTING_STACK,
   ONLINE_MAX_TIME_BANK_MS,
   ONLINE_MIN_ACTION_TIME_MS,
@@ -233,8 +234,8 @@ function normalizeRoomName(value: unknown): string {
 }
 
 function normalizeMaxPlayers(value: unknown): number {
-  if (!Number.isInteger(value) || Number(value) < 2 || Number(value) > 6) {
-    throw new ApiError(400, "INVALID_ROOM", "房间人数需要是 2–6。");
+  if (!Number.isInteger(value) || Number(value) < 2 || Number(value) > ONLINE_MAX_PLAYERS) {
+    throw new ApiError(400, "INVALID_ROOM", `房间人数需要是 2–${ONLINE_MAX_PLAYERS}。`);
   }
   return Number(value);
 }
@@ -585,7 +586,7 @@ function publicRoomMessage(row: RoomMessageRow): MultiplayerChatMessage {
     !/^[1-9][0-9]{0,18}$/.test(String(row.id))
     || !Number.isInteger(row.author_seat)
     || row.author_seat < 0
-    || row.author_seat > 5
+    || row.author_seat >= ONLINE_MAX_PLAYERS
     || typeof row.author_handle !== "string"
     || (row.kind !== "text" && row.kind !== "reaction")
     || typeof row.body !== "string"
@@ -853,7 +854,7 @@ function parseCommand(payload: JsonObject): Exclude<OnlinePokerCommand, { type: 
     return { ...base, type, handId, show: payload.show };
   }
   if (type === "peek") {
-    if (!Number.isInteger(payload.targetSeat) || Number(payload.targetSeat) < 0 || Number(payload.targetSeat) >= 6) {
+    if (!Number.isInteger(payload.targetSeat) || Number(payload.targetSeat) < 0 || Number(payload.targetSeat) >= ONLINE_MAX_PLAYERS) {
       throw new ApiError(400, "INVALID_COMMAND", "targetSeat 必须是有效座位编号。");
     }
     return { ...base, type, handId, targetSeat: Number(payload.targetSeat) };

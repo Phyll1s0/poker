@@ -15,6 +15,13 @@
       "when": 1787246903451,
       "tag": "0001_shallow_sheva_callister",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787647351792,
+      "tag": "0002_polite_kylun",
+      "breakpoints": true
     }
   ]
 }

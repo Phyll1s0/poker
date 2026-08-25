@@ -127,8 +127,10 @@ test("room inputs are normalized and constrained to private table limits", () =>
   assert.equal(normalizeMaxPlayers(undefined), 6);
   assert.equal(normalizeMaxPlayers(2), 2);
   assert.equal(normalizeMaxPlayers(6), 6);
+  assert.equal(normalizeMaxPlayers(8), 8);
+  assert.equal(normalizeMaxPlayers(10), 10);
   assert.throws(
-    () => normalizeMaxPlayers(7),
+    () => normalizeMaxPlayers(11),
     (error) => error instanceof MultiplayerStoreError && error.code === "INVALID_ROOM",
   );
   assert.throws(
@@ -208,7 +210,15 @@ test("multiplayer command parsing accepts a seat-scoped private peek and rejects
     expectedRevision: 12,
   });
 
-  for (const targetSeat of [undefined, null, "1", -1, 6, 1.5]) {
+  assert.equal(parseMultiplayerCommand({
+    type: "peek",
+    handId: "hand-private-peek-1",
+    targetSeat: 9,
+    requestId: "private-peek-seat-nine",
+    expectedRevision: 12,
+  }).targetSeat, 9);
+
+  for (const targetSeat of [undefined, null, "1", -1, 10, 1.5]) {
     assert.throws(
       () => parseMultiplayerCommand({
         type: "peek",
@@ -290,6 +300,37 @@ test("room creation seats the owner and concurrent joins cannot exceed capacity"
   const ownerRooms = await store.listRooms(owner.id);
   assert.equal(ownerRooms.length, 1);
   assert.equal(ownerRooms[0].memberCount, 2);
+});
+
+test("D1 rooms allocate every seat through ten-max and preserve seat-nine chat identity", async (context) => {
+  const { sqlite, store } = await testStore();
+  context.after(() => sqlite.close());
+
+  const accounts = [];
+  for (let index = 0; index < 11; index += 1) {
+    accounts.push((await store.registerAccount(`ten-max-subject-${index}`, `玩家${index + 1}`)).account);
+  }
+  const room = await store.createRoom(accounts[0].id, "十人测试桌", 10);
+  for (let index = 1; index < 10; index += 1) {
+    const joined = await store.joinRoom(accounts[index].id, room.joinCode);
+    assert.equal(joined.room.seat, index);
+    assert.equal(joined.room.memberCount, index + 1);
+  }
+  await assert.rejects(
+    store.joinRoom(accounts[10].id, room.joinCode),
+    (error) => error instanceof MultiplayerStoreError && error.code === "ROOM_FULL",
+  );
+
+  const service = new MultiplayerGameService(new SqliteD1Database(sqlite));
+  const sent = await service.sendMessage(room.id, accounts[9].id, parseMultiplayerRoomMessage({
+    requestId: "ten-max-seat-nine-chat",
+    kind: "reaction",
+    content: "🔥",
+  }));
+  assert.equal(sent.message.seat, 9);
+  const snapshot = await service.getSnapshot(room.id, accounts[0].id);
+  assert.equal(snapshot.room.maxPlayers, 10);
+  assert.deepEqual(snapshot.players.map((player) => player.seat), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 });
 
 test("a concurrent retry from the same account increments the room revision only once", async (context) => {
@@ -383,6 +424,71 @@ test("schema and routes keep identity server-owned and enable the D1 binding", a
   assert.match(accountRoute, /registerAccount\(user\.userId, payload\.handle\)/);
   assert.match(roomsRoute, /aiAssistLimit: payload\.aiAssistLimit/);
   assert.match(joinRoute, /joinRoom\(account\.id, payload\.joinCode\)/);
+});
+
+test("the D1 ten-max migration preserves existing six-max rooms and foreign keys", async (context) => {
+  const sqlite = new DatabaseSync(":memory:");
+  context.after(() => sqlite.close());
+  sqlite.exec("PRAGMA foreign_keys = ON");
+  for (const name of ["0000_material_emma_frost.sql", "0001_shallow_sheva_callister.sql"]) {
+    const migration = await readFile(new URL(`../drizzle/${name}`, import.meta.url), "utf8");
+    sqlite.exec(migration.replaceAll("--> statement-breakpoint", ""));
+  }
+
+  const now = 1_777_000_000_000;
+  sqlite.prepare(`INSERT INTO accounts
+    (id, auth_subject, handle, handle_key, avatar_seed, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run("legacy-owner", "legacy-subject", "旧房主", "旧房主", "legacy-owner", now, now);
+  sqlite.prepare(`INSERT INTO rooms
+    (id, join_code, owner_account_id, name, status, max_players, revision, state_json,
+     current_hand_id, hand_no, created_at, updated_at, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run("legacy-room", "ABCDEFGH", "legacy-owner", "旧六人桌", "lobby", 6, 0, null, null, 0, now, now, now + 1_000);
+  sqlite.prepare(`INSERT INTO room_members (room_id, account_id, seat, ready, joined_at)
+    VALUES (?, ?, ?, ?, ?)`)
+    .run("legacy-room", "legacy-owner", 5, 0, now);
+  sqlite.prepare(`INSERT INTO room_messages
+    (room_id, account_id, request_id, author_seat, author_handle, kind, body, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run("legacy-room", "legacy-owner", "legacy-chat-request", 5, "旧房主", "text", "旧消息", now);
+
+  const migration = await readFile(new URL("../drizzle/0002_polite_kylun.sql", import.meta.url), "utf8");
+  sqlite.exec(migration.replaceAll("--> statement-breakpoint", ""));
+  assert.deepEqual(sqlite.prepare("PRAGMA foreign_key_check").all(), []);
+  assert.equal(sqlite.prepare("SELECT max_players FROM rooms WHERE id = ?").get("legacy-room").max_players, 6);
+  assert.equal(sqlite.prepare("SELECT seat FROM room_members WHERE room_id = ?").get("legacy-room").seat, 5);
+  assert.equal(sqlite.prepare("SELECT author_seat FROM room_messages WHERE room_id = ?").get("legacy-room").author_seat, 5);
+
+  sqlite.prepare("UPDATE rooms SET max_players = 10 WHERE id = ?").run("legacy-room");
+  sqlite.prepare("UPDATE room_members SET seat = 9 WHERE room_id = ? AND account_id = ?")
+    .run("legacy-room", "legacy-owner");
+  sqlite.prepare("UPDATE room_messages SET author_seat = 9 WHERE room_id = ?")
+    .run("legacy-room");
+  const nextMessage = sqlite.prepare(`INSERT INTO room_messages
+    (room_id, account_id, request_id, author_seat, author_handle, kind, body, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
+    .get("legacy-room", "legacy-owner", "post-migration-chat", 9, "旧房主", "text", "新消息", now + 1);
+  assert.equal(sqlite.prepare("SELECT max_players FROM rooms WHERE id = ?").get("legacy-room").max_players, 10);
+  assert.equal(sqlite.prepare("SELECT seat FROM room_members WHERE room_id = ?").get("legacy-room").seat, 9);
+  assert.equal(sqlite.prepare("SELECT author_seat FROM room_messages WHERE room_id = ?").get("legacy-room").author_seat, 9);
+  assert.equal(nextMessage.id, 2, "AUTOINCREMENT continues after copied legacy messages");
+});
+
+test("the Supabase service and migration enforce the same ten-max boundary", async () => {
+  const [edge, migration] = await Promise.all([
+    readFile(new URL("../supabase/functions/poker-api/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/20260825084930_expand_poker_tables_to_ten_players.sql", import.meta.url), "utf8"),
+  ]);
+  assert.match(edge, /ONLINE_MAX_PLAYERS/);
+  assert.doesNotMatch(edge, /targetSeat[^\n]*>= 6/);
+  assert.match(migration, /max_players between 2 and 10/i);
+  assert.match(migration, /seat between 0 and 9/i);
+  assert.match(migration, /author_seat between 0 and 9/i);
+  assert.match(migration, /v_seat > 9/i);
+  assert.match(migration, /v_seat < max_players/i);
+  assert.match(migration, /security invoker/i);
+  assert.match(migration, /revoke execute[\s\S]*from public, anon, authenticated/i);
 });
 
 test("D1 chat is server-authored, idempotent, ordered, and independent from poker revision", async (context) => {

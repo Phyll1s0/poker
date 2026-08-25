@@ -246,6 +246,30 @@ test("maps heads-up and full six-max occupied seats to poker positions", () => {
   );
 });
 
+test("maps eight and ten-handed extra early seats to a conservative UTG family", () => {
+  const eightMax = Array.from({ length: 8 }, (_, seat) => player(`e${seat}`, seat));
+  assert.deepEqual(
+    eightMax.map(({ seat }) => multiplayerPreflopPosition(seat, 7, eightMax)),
+    ["SB", "BB", "UTG", "UTG", "UTG", "HJ", "CO", "BTN"],
+  );
+
+  const tenMax = Array.from({ length: 10 }, (_, seat) => player(`t${seat}`, seat));
+  assert.deepEqual(
+    tenMax.map(({ seat }) => multiplayerPreflopPosition(seat, 9, tenMax)),
+    ["SB", "BB", "UTG", "UTG", "UTG", "UTG", "UTG", "HJ", "CO", "BTN"],
+  );
+});
+
+test("keeps the dealer, blinds and late positions correct when ten-max wraps at seat nine", () => {
+  const players = Array.from({ length: 10 }, (_, seat) => player(`p${seat}`, seat));
+  assert.equal(multiplayerPreflopPosition(8, 8, players), "BTN");
+  assert.equal(multiplayerPreflopPosition(9, 8, players), "SB");
+  assert.equal(multiplayerPreflopPosition(0, 8, players), "BB");
+  assert.equal(multiplayerPreflopPosition(7, 8, players), "CO");
+  assert.equal(multiplayerPreflopPosition(6, 8, players), "HJ");
+  assert.equal(multiplayerPreflopPosition(1, 8, players), "UTG");
+});
+
 test("uses actual postflop position for blind three-bet sizing", () => {
   const analysis = analyzeMultiplayerDecision({
     decisionId: "hand-20:preflop:1:hero",

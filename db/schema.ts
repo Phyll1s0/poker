@@ -42,7 +42,7 @@ export const rooms = sqliteTable("rooms", {
   uniqueIndex("idx_rooms_join_code").on(table.joinCode),
   index("idx_rooms_owner_updated").on(table.ownerAccountId, table.updatedAt),
   check("rooms_status_check", sql`${table.status} in ('lobby', 'playing', 'closed')`),
-  check("rooms_max_players_check", sql`${table.maxPlayers} between 2 and 6`),
+  check("rooms_max_players_check", sql`${table.maxPlayers} between 2 and 10`),
   check("rooms_revision_check", sql`${table.revision} >= 0`),
   check("rooms_hand_no_check", sql`${table.handNo} >= 0`),
 ]);
@@ -61,7 +61,7 @@ export const roomMembers = sqliteTable("room_members", {
   primaryKey({ columns: [table.roomId, table.accountId] }),
   uniqueIndex("idx_room_members_room_seat").on(table.roomId, table.seat),
   index("idx_room_members_account_joined").on(table.accountId, table.joinedAt),
-  check("room_members_seat_check", sql`${table.seat} between 0 and 5`),
+  check("room_members_seat_check", sql`${table.seat} between 0 and 9`),
 ]);
 
 export const roomMessages = sqliteTable("room_messages", {
@@ -81,7 +81,7 @@ export const roomMessages = sqliteTable("room_messages", {
 }, (table) => [
   uniqueIndex("idx_room_messages_request").on(table.roomId, table.accountId, table.requestId),
   index("idx_room_messages_room_cursor").on(table.roomId, table.id),
-  check("room_messages_seat_check", sql`${table.authorSeat} between 0 and 5`),
+  check("room_messages_seat_check", sql`${table.authorSeat} between 0 and 9`),
   check("room_messages_kind_check", sql`${table.kind} in ('text', 'reaction')`),
   check("room_messages_body_check", sql`length(${table.body}) between 1 and 120`),
 ]);

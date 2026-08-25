@@ -96,6 +96,28 @@ test("paper DCFR reaches a low audited error on the locked public tree", () => {
   assert.equal(dcfr.solverParameters.regretUpdateOrder, "add-then-sign-discount");
 });
 
+test("PDCFR+ independently reaches equilibrium without borrowing CFR+ frequency conformance", () => {
+  const predictive = solveHeadsUpRiver(fixture.spec, {
+    algorithm: "pdcfr+",
+    iterations: 200,
+  });
+  const report = benchmarkHeadsUpRiverAgainstPublicFixture(predictive, fixture);
+
+  assert.ok(predictive.exploitability.exploitabilityPotFraction < 1e-8);
+  assert.ok(report.candidateAuditedExploitabilityPotFraction < 1e-8);
+  assert.ok(report.weightedReferenceEvRegretPotFraction < 1e-8);
+  assert.equal(report.checks.candidateExploitability, true);
+  assert.equal(report.checks.candidateAuditAgreement, true);
+
+  // This small tree has non-unique equilibrium frequencies. PDCFR+ reaches an
+  // equally unexploitable profile but not the exact CFR+ frequency selection,
+  // so it must not inherit the external implementation-conformance badge.
+  assert.ok(report.maxActionFrequencyError.value > 0.1);
+  assert.equal(report.checks.frequencyMapping, false);
+  assert.equal(report.passed, false);
+  assert.equal(report.claimScope, "implementation-conformance-only");
+});
+
 test("fixture content, trusted source and exact spot identity cannot be silently changed", () => {
   const tampered = clone(rawFixture);
   tampered.upstream.players[1].profile.c.strategy[2] = [0.5, 0.5];

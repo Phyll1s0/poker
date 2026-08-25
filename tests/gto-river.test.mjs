@@ -168,6 +168,54 @@ test("river DCFR exposes paper parameters and converges on the same audited tree
   assert.equal(solution.convergence.checkpoints.length, 1);
 });
 
+test("river PDCFR+ exposes paper parameters and is certified by exact best response", () => {
+  const solution = solveHeadsUpRiver(riverSpec(), {
+    algorithm: "pdcfr+",
+    iterations: 100,
+  });
+  const exact = exactTinyRiverExploitability(
+    createHeadsUpRiverGame(riverSpec()),
+    solution.averageStrategy,
+  );
+
+  assert.equal(solution.algorithm, "pdcfr+");
+  assert.equal(solution.solverVersion, "rangecraft-pdcfr+/0.1.0");
+  assert.equal(
+    solution.solverParameters.averagingSchedule,
+    "alternating-paper-polynomial",
+  );
+  assert.equal(
+    solution.solverParameters.regretUpdateOrder,
+    "discount-add-clip-then-predict",
+  );
+  assert.deepEqual(solution.solverParameters.pdcfrPlus, { alpha: 2.3, gamma: 5 });
+  assert.ok(solution.exploitability.exploitabilityPotFraction < 0.0001);
+  assert.ok(Math.abs(
+    solution.exploitability.exploitabilityBb - exact.exploitability,
+  ) < 1e-10);
+});
+
+test("adaptive river PDCFR+ keeps checkpoint provenance and stops only after stable audits", () => {
+  const solution = solveHeadsUpRiverAdaptive(riverSpec(), {
+    algorithm: "pdcfr+",
+    maxIterations: 100,
+    checkpointInterval: 25,
+    minimumIterations: 25,
+    targetExploitabilityPotFraction: 0.001,
+    requiredConsecutiveTargetCheckpoints: 2,
+  });
+
+  assert.equal(solution.algorithm, "pdcfr+");
+  assert.equal(solution.solverVersion, "rangecraft-pdcfr+/0.1.0");
+  assert.deepEqual(solution.solverParameters.pdcfrPlus, { alpha: 2.3, gamma: 5 });
+  assert.equal(solution.convergence.mode, "adaptive");
+  assert.equal(solution.convergence.stopReason, "target-stable");
+  assert.equal(solution.convergence.consecutiveTargetCheckpoints, 2);
+  assert.equal(solution.convergence.checkpoints.at(-1).targetMet, true);
+  assert.ok(solution.convergence.trainedIterations >= 50);
+  assert.ok(solution.exploitability.exploitabilityPotFraction <= 0.001);
+});
+
 test("adaptive river DCFR requires repeated audited passes and returns its best checkpoint", () => {
   const options = {
     algorithm: "dcfr",

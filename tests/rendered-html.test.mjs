@@ -193,7 +193,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(rulesModal, /花色不分大小/);
   assert.match(rulesModal, /不足额全下不一定会/);
   assert.match(rulesModal, /不是标准德州扑克规则/);
-  assert.match(rulesModal, /多人 2–6 人，支持现金练习与单桌淘汰/);
+  assert.match(rulesModal, /多人 2–10 人，支持现金练习与单桌淘汰/);
   assert.doesNotMatch(page, /ABOUT THE LAB|关于 GTO 边界/);
   assert.match(globalsCss, /\.landing-about-grid/);
   assert.match(globalsCss, /\.landing-nav-actions > a:not\(\.landing-account-link\)/);
@@ -317,7 +317,12 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /visualSeat/);
   assert.match(multiplayerClient, /data-suit-tone=\{red \? "red" : "black"\}/);
   assert.match(multiplayerClient, /WebkitTextFillColor: red \? "#c92f35" : "#171b19"/);
-  assert.match(multiplayerClient, /const VISUAL_SEATS_BY_PLAYER_COUNT/);
+  assert.match(multiplayerClient, /multiplayerVisualSeat/);
+  assert.match(multiplayerClient, /normalizedMultiplayerTableSize/);
+  assert.match(multiplayerClient, /data-table-size={normalizedTableSize}/);
+  assert.match(multiplayerClient, /tableSize={snapshot\.room\.maxPlayers}/);
+  assert.match(multiplayerClient, /\[2, 3, 4, 5, 6, 7, 8, 9, 10\]\.map/);
+  assert.doesNotMatch(multiplayerClient, /Math\.min\(5, visualSeat\)|\+ 6\) % 6/);
   assert.match(multiplayerClient, /multiplayerHoleDealTransition/);
   assert.match(multiplayerClient, /multiplayerHoleCardDealDelayMs/);
   assert.match(multiplayerClient, /const cardKeyPrefix = handId \?\? "waiting"/);
@@ -353,8 +358,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /合法范围 \$\{legal\.minRaiseTo\}–\$\{legal\.maxRaiseTo\}/);
   assert.match(multiplayerClient, /朋友局只解释公开规则、合法金额和倒计时/);
   assert.doesNotMatch(multiplayerClient, /evaluatePokerPolicy|choosePokerPolicyAction|actionFrequencies|近似 GTO 建议/);
-  assert.match(multiplayerClient, /2: \[0, 3\]/);
-  assert.match(multiplayerClient, /3: \[0, 2, 4\]/);
+  assert.match(multiplayerClient, /styles\.tableViewport/);
   assert.match(multiplayerClient, /浅筹/);
   assert.match(multiplayerClient, /bigBlinds: 40/);
   assert.match(multiplayerClient, /标准/);
@@ -437,7 +441,11 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerCss, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.multiplayerPage \.holeDealtCard\s*\{[\s\S]*?opacity:\s*1;[\s\S]*?transform:\s*none;[\s\S]*?animation:\s*none;/);
   assert.match(multiplayerCss, /\[data-suit-tone="red"\][\s\S]*?-webkit-text-fill-color:\s*#c92f35/);
   assert.match(multiplayerCss, /\[data-suit-tone="black"\][\s\S]*?-webkit-text-fill-color:\s*#171b19/);
-  assert.match(multiplayerCss, /width: min\(800px, 78%, calc\(82dvh - 59px\)\)/);
+  assert.match(multiplayerCss, /Ten-seat rail layout/);
+  assert.match(multiplayerCss, /width: min\(1080px, calc\(100vw - 300px\), calc\(\(100svh - 280px\) \* 2\.05\)\)/);
+  assert.match(multiplayerCss, /\.multiplayerPage \.seat9,/);
+  assert.match(multiplayerCss, /\.multiplayerPage \.replaySeat9/);
+  assert.match(multiplayerCss, /\.multiplayerPage \.tableControls \{[\s\S]*?position:\s*relative;[\s\S]*?bottom:\s*auto/);
   assert.match(multiplayerCss, /grid-template-columns: 150px minmax\(330px, 1fr\) 270px/);
   const heroDockGuardStart = multiplayerCss.indexOf("/* Hero/action-dock safe zone");
   assert.ok(heroDockGuardStart > multiplayerCss.lastIndexOf(".multiplayerPage .seatSelf .seatCards", heroDockGuardStart - 1));

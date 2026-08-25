@@ -18,6 +18,11 @@ import {
   type MultiplayerHoleFrame,
 } from "../../lib/multiplayer-hole-animation";
 import {
+  multiplayerRelativeSeat,
+  multiplayerVisualSeat,
+  normalizedMultiplayerTableSize,
+} from "../../lib/multiplayer-seat-layout";
+import {
   multiplayerAudioTransition,
   type MultiplayerAudioFrame,
 } from "../../lib/multiplayer-audio-events";
@@ -507,15 +512,6 @@ const AI_ASSIST_OPTIONS = [
   { value: 10 as const, label: "10 次", description: "更适合教学与长局复盘" },
 ] as const;
 
-const VISUAL_SEATS_BY_PLAYER_COUNT: Record<number, number[]> = {
-  1: [0],
-  2: [0, 3],
-  3: [0, 2, 4],
-  4: [0, 1, 3, 5],
-  5: [0, 1, 2, 4, 5],
-  6: [0, 1, 2, 3, 4, 5],
-};
-
 function tableModeLabel(mode: RoomSnapshot["table"]["tableMode"]) {
   return mode === "cash" ? "现金练习" : "单桌淘汰";
 }
@@ -565,7 +561,7 @@ function PlayerSeat({
   const cardKeyPrefix = handId ?? "waiting";
   const className = [
     styles.seat,
-    styles[`seat${Math.max(0, Math.min(5, visualSeat))}`],
+    styles[`seat${Math.max(0, Math.min(9, visualSeat))}`],
     player.accountId === actorAccountId ? styles.seatActive : "",
     player.accountId === selfAccountId ? styles.seatSelf : "",
     player.status === "folded" || player.status === "out" ? styles.seatFolded : "",
@@ -636,6 +632,7 @@ function PlayerSeat({
 function TableSurface({
   players,
   selfAccountId,
+  tableSize,
   game,
   actionSecondsLeft,
   boardDeal,
@@ -645,6 +642,7 @@ function TableSurface({
 }: {
   players: PublicPlayer[];
   selfAccountId: string;
+  tableSize: number;
   game: PublicGame | null;
   actionSecondsLeft: number | null;
   boardDeal: MultiplayerBoardDeal | null;
@@ -653,18 +651,21 @@ function TableSurface({
   aiAssistEnabled: boolean;
 }) {
   const selfSeat = players.find((player) => player.accountId === selfAccountId)?.seat ?? 0;
+  const normalizedTableSize = normalizedMultiplayerTableSize(tableSize);
   const orderedPlayers = useMemo(() => [...players].sort((left, right) => {
-    const leftOffset = (left.seat - selfSeat + 6) % 6;
-    const rightOffset = (right.seat - selfSeat + 6) % 6;
+    const leftOffset = multiplayerRelativeSeat(left.seat, selfSeat, normalizedTableSize);
+    const rightOffset = multiplayerRelativeSeat(right.seat, selfSeat, normalizedTableSize);
     return leftOffset - rightOffset;
-  }), [players, selfSeat]);
-  const visualSeats = VISUAL_SEATS_BY_PLAYER_COUNT[Math.min(6, Math.max(1, orderedPlayers.length))] ?? VISUAL_SEATS_BY_PLAYER_COUNT[6];
+  }), [normalizedTableSize, players, selfSeat]);
   const activeHoleDeal = game?.street === "preflop" && holeDeal?.handId === game.handId
     ? holeDeal
     : null;
 
   return (
-    <div className={`${styles.pokerTable} ${game ? "" : styles.waitingPokerTable}`}>
+    <div
+      className={`${styles.pokerTable} ${game ? "" : styles.waitingPokerTable}`}
+      data-table-size={normalizedTableSize}
+    >
       <div className={styles.tableRail} />
       <div className={styles.tableFelt}>
         <div className={styles.feltGrain} />
@@ -695,13 +696,13 @@ function TableSurface({
         </div>
         <div className={styles.tableSignature}>RANGECRAFT <span>◆</span> FRIENDS CLUB</div>
       </div>
-      {orderedPlayers.map((player, index) => (
+      {orderedPlayers.map((player) => (
         <PlayerSeat
           key={player.accountId}
           player={player}
           selfAccountId={selfAccountId}
           actorAccountId={game?.actorAccountId ?? null}
-          visualSeat={visualSeats[index] ?? index}
+          visualSeat={multiplayerVisualSeat(player.seat, selfSeat, normalizedTableSize) ?? 0}
           handId={game?.handId ?? null}
           holeDeal={activeHoleDeal}
           actionSecondsLeft={actionSecondsLeft}
@@ -778,7 +779,7 @@ function ReplaySeat({
   const hiddenCount = player.holeCards ? 0 : player.holeCardCount;
   const seatClassName = [
     styles.replaySeat,
-    styles[`replaySeat${Math.max(0, Math.min(5, visualSeat))}`],
+    styles[`replaySeat${Math.max(0, Math.min(9, visualSeat))}`],
     currentAction ? styles.replaySeatActive : "",
     folded ? styles.replaySeatFolded : "",
     winner ? styles.replaySeatWinner : "",
@@ -831,10 +832,12 @@ function ReplayTable({
   entry,
   step,
   viewerSeat,
+  tableSize,
 }: {
   entry: HandHistoryEntry;
   step: number;
   viewerSeat: number | null;
+  tableSize: number;
 }) {
   const maxStep = entry.actions.length + 1;
   const visibleStep = Math.max(0, Math.min(step, maxStep));
@@ -867,15 +870,15 @@ function ReplayTable({
   const anchorSeat = viewerSeat !== null && entry.players.some((player) => player.seat === viewerSeat)
     ? viewerSeat
     : entry.players[0]?.seat ?? 0;
+  const normalizedTableSize = normalizedMultiplayerTableSize(tableSize);
   const orderedPlayers = [...entry.players].sort((left, right) => {
-    const leftOffset = (left.seat - anchorSeat + 6) % 6;
-    const rightOffset = (right.seat - anchorSeat + 6) % 6;
+    const leftOffset = multiplayerRelativeSeat(left.seat, anchorSeat, normalizedTableSize);
+    const rightOffset = multiplayerRelativeSeat(right.seat, anchorSeat, normalizedTableSize);
     return leftOffset - rightOffset;
   });
-  const visualSeats = VISUAL_SEATS_BY_PLAYER_COUNT[Math.min(6, Math.max(1, orderedPlayers.length))] ?? VISUAL_SEATS_BY_PLAYER_COUNT[6];
 
   return (
-    <div className={styles.replayTable} aria-label={`第 ${entry.number} 手牌桌回放`}>
+    <div className={styles.replayTable} data-table-size={normalizedTableSize} aria-label={`第 ${entry.number} 手牌桌回放`}>
       <div className={styles.tableRail} />
       <div className={styles.tableFelt}>
         <div className={styles.feltGrain} />
@@ -891,11 +894,11 @@ function ReplayTable({
         </div>
         <div className={styles.tableSignature}>RANGECRAFT <span>◆</span> HAND REPLAY</div>
       </div>
-      {orderedPlayers.map((player, index) => (
+      {orderedPlayers.map((player) => (
         <ReplaySeat
           key={`${entry.id}-${player.seat}`}
           player={player}
-          visualSeat={visualSeats[index] ?? index}
+          visualSeat={multiplayerVisualSeat(player.seat, anchorSeat, normalizedTableSize) ?? 0}
           stack={stackBySeat.get(player.seat) ?? player.stackAfterBlinds}
           entry={entry}
           folded={foldedSeats.has(player.seat)}
@@ -911,10 +914,12 @@ function ReplayTable({
 function HandHistoryModal({
   entries,
   viewerSeat,
+  tableSize,
   onClose,
 }: {
   entries: HandHistoryEntry[];
   viewerSeat: number | null;
+  tableSize: number;
   onClose: () => void;
 }) {
   const recentHands = useMemo(
@@ -1030,7 +1035,7 @@ function HandHistoryModal({
               <div className={styles.replayContent}>
                 <div className={styles.replayTableColumn}>
                   <div className={styles.replayTableViewport}>
-                    <ReplayTable entry={selected} step={visibleStep} viewerSeat={viewerSeat} />
+                    <ReplayTable entry={selected} step={visibleStep} viewerSeat={viewerSeat} tableSize={tableSize} />
                   </div>
                   <div className={styles.replayTransport}>
                     <button
@@ -2874,7 +2879,7 @@ export default function MultiplayerClient({
                 <p className={styles.eyebrow}>MULTIPLAYER LOBBY</p>
                 <h1>私人牌桌</h1>
               </div>
-              <p>创建房间，把邀请码发给朋友。支持 2–6 人、40/100/200BB 与自定义深度的无限注德州。</p>
+              <p>创建房间，把邀请码发给朋友。支持 2–10 人、40/100/200BB 与自定义深度的无限注德州。</p>
             </header>
 
             <div className={styles.lobbyGrid}>
@@ -2889,7 +2894,7 @@ export default function MultiplayerClient({
                   <div className={styles.field}>
                     <label htmlFor="max-players">人数</label>
                     <select id="max-players" value={maxPlayers} onChange={(event) => setMaxPlayers(Number(event.target.value))}>
-                      {[2, 3, 4, 5, 6].map((value) => <option key={value} value={value}>{value} 人</option>)}
+                      {[2, 3, 4, 5, 6, 7, 8, 9, 10].map((value) => <option key={value} value={value}>{value} 人</option>)}
                     </select>
                   </div>
                   <div className={`${styles.field} ${styles.createWideField}`}>
@@ -3053,16 +3058,19 @@ export default function MultiplayerClient({
               <div className={`${styles.tableAmbient} ${styles.tableAmbientOne}`} />
               <div className={`${styles.tableAmbient} ${styles.tableAmbientTwo}`} />
               {phase !== "finished" && (
-                <TableSurface
-                  players={game?.players ?? snapshot.players}
-                  selfAccountId={snapshot.selfAccountId}
-                  game={game}
-                  actionSecondsLeft={actionSecondsLeft}
-                  boardDeal={boardDeal?.roomId === snapshot.room.id ? boardDeal : null}
-                  holeDeal={holeDeal?.roomId === snapshot.room.id ? holeDeal : null}
-                  seatMessages={seatChatMessages}
-                  aiAssistEnabled={snapshot.table.aiAssistLimit > 0}
-                />
+                <div className={styles.tableViewport}>
+                  <TableSurface
+                    players={game?.players ?? snapshot.players}
+                    selfAccountId={snapshot.selfAccountId}
+                    tableSize={snapshot.room.maxPlayers}
+                    game={game}
+                    actionSecondsLeft={actionSecondsLeft}
+                    boardDeal={boardDeal?.roomId === snapshot.room.id ? boardDeal : null}
+                    holeDeal={holeDeal?.roomId === snapshot.room.id ? holeDeal : null}
+                    seatMessages={seatChatMessages}
+                    aiAssistEnabled={snapshot.table.aiAssistLimit > 0}
+                  />
+                </div>
               )}
 
               {chatOpen && (
@@ -3360,6 +3368,7 @@ export default function MultiplayerClient({
         <HandHistoryModal
           entries={handHistory}
           viewerSeat={snapshot.table.viewerSeat}
+          tableSize={snapshot.room.maxPlayers}
           onClose={() => setHistoryOpen(false)}
         />
       )}

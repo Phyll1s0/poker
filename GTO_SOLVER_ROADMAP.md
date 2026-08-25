@@ -26,7 +26,7 @@ RangeCraft 不再把“手写范围表 + 启发式频率”称作精确 GTO。�
 
 ## 已完成的第一条真实求解链
 
-### 通用 CFR+ / DCFR 核心
+### 通用 CFR+ / DCFR / PDCFR+ 核心
 
 [`lib/gto-cfr.ts`](lib/gto-cfr.ts) 是独立于扑克规则的两人零和、有限树求解引擎，支持：
 
@@ -35,10 +35,13 @@ RangeCraft 不再把“手写范围表 + 启发式频率”称作精确 GTO。�
 - 外部终局效用；
 - CFR+ 的交替 regret matching+，以及修正证明要求的错位线性平均：玩家 0 累积更新后策略、玩家 1 累积更新前策略；
 - 论文默认 `DCFR(α=1.5, β=0, γ=2)`：正/负累计 regret 分别衰减，负 regret 不截断，平均策略按 `t²` 加权；
+- IJCAI 2024 `PDCFR+(α=2.3, γ=5)`：先折扣并截断显式累计 regret，再用最新即时 regret 生成只影响下一轮策略的一步预测；预测不会被重复计入显式累计 regret；每位玩家在自己的交替更新前累计当前 `xᵗ`，平均相位与论文公式及作者代码一致。`2.3/5` 是作者粗网格搜索后用于全部实验的配置，不是对所有博弈的普适定理参数；
 - 确定性重复运行和分段续算；
 - 小博弈的精确 deterministic best-response 枚举。
 
-两条算法都通过了非对称 `2×2` 零和矩阵的逐轮手算测试、分段与一次性求解逐位一致测试，以及 Kuhn Poker 回归：均衡值收敛到 `-1/18`，并独立计算低 exploitability。CFR+ 的平均相位依据 [Revisiting CFR+ and Alternating Updates](https://arxiv.org/abs/1810.11542)；DCFR 更新依据 [Solving Imperfect-Information Games via Discounted Regret Minimization](https://arxiv.org/abs/1809.04040)。自博弈胜率或 bb/100 只用于回归，不再被当作均衡证明。
+三条算法都通过了非对称 `2×2` 零和矩阵的逐轮手算测试、分段与一次性求解逐位一致测试，以及 Kuhn Poker 回归：均衡值收敛到 `-1/18`，并独立计算低 exploitability。CFR+ 的平均相位依据 [Revisiting CFR+ and Alternating Updates](https://arxiv.org/abs/1810.11542)；DCFR 更新依据 [Solving Imperfect-Information Games via Discounted Regret Minimization](https://arxiv.org/abs/1809.04040)；PDCFR+ 的双 regret 状态和折扣预测依据 [Minimizing Weighted Counterfactual Regret with Optimistic Online Mirror Descent](https://arxiv.org/abs/2404.13891) 及其作者发布的 [MIT 参考实现](https://github.com/rpSebastian/PDCFRPlus/tree/d81089530a2a14dc3318984c828393ebcea139ee)。自博弈胜率或 bb/100 只用于回归，不再被当作均衡证明。
+
+PDCFR+ 当前是**离线交叉审计通道**，不是默认实时算法。锁定的公开河牌小树上，它达到低于 `10⁻⁸ pot` 的独立 best-response 误差，但会收敛到与外部 CFR+ 参考不同的另一个近似均衡频率；最大单动作频率差超过 10 个百分点，而参考动作 EV regret 仍低于 `10⁻⁸ pot`。因此“频率是否一模一样”仍用于实现同题复现，不能代替 exploitability/动作 EV 证书，也不能把多均衡中的另一组频率误判为非 GTO。论文在大型 HUNL 子博弈上只报告 PDCFR+ 与 CFR+/PCFR+ 相当、DCFR+ 更快，所以默认 DCFR 暂不切换。
 
 ### 真实 1v1 河牌子博弈
 
@@ -148,6 +151,8 @@ npm run gto:benchmark:river
 相关原始资料：
 
 - [CFR 原始论文（NeurIPS 2007）](https://proceedings.neurips.cc/paper/2007/hash/08d98638c6fcd194a4b1e6992063e944-Abstract.html)
+- [PDCFR+ 原始论文（IJCAI 2024）](https://arxiv.org/abs/2404.13891)
+- [PDCFR+ 作者 MIT 参考实现](https://github.com/rpSebastian/PDCFRPlus/tree/d81089530a2a14dc3318984c828393ebcea139ee)
 - [OpenSpiel（Apache-2.0）](https://github.com/google-deepmind/open_spiel)
 - [PokerBench 数据集（Apache-2.0）](https://huggingface.co/datasets/RZ412/PokerBench)
 - [PioSOLVER Free 产品限制](https://piosolver.com/docs/product_comparison/)

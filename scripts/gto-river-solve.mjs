@@ -7,7 +7,7 @@ import { solveHeadsUpRiver } from "../lib/gto-river.ts";
 
 function usage() {
   return [
-    "RangeCraft heads-up river CFR+/DCFR solver",
+    "RangeCraft heads-up river CFR+/DCFR/PDCFR+ solver",
     "",
     "Usage:",
     "  npm run gto:river -- --input examples/gto-river-node.json [--output solution.json]",
@@ -15,7 +15,7 @@ function usage() {
     "Options:",
     "  --input <file>             JSON river specification (required)",
     "  --output <file>            Write the portable result instead of stdout",
-    "  --algorithm <dcfr|cfr+>    Solver algorithm (default: dcfr)",
+    "  --algorithm <dcfr|cfr+|pdcfr+>  Solver algorithm (default: dcfr)",
     "  --iterations <integer>     Solver iterations (default: 50000)",
     "  --averaging-delay <integer>  CFR+ delayed averaging iterations (default: 100)",
     "  --help                     Show this help",
@@ -49,7 +49,9 @@ function parseArguments(argv) {
     if (argument === "--input") result.input = value;
     else if (argument === "--output") result.output = value;
     else if (argument === "--algorithm") {
-      if (value !== "dcfr" && value !== "cfr+") throw new Error("--algorithm 只能是 dcfr 或 cfr+");
+      if (!["dcfr", "cfr+", "pdcfr+"].includes(value)) {
+        throw new Error("--algorithm 只能是 dcfr、cfr+ 或 pdcfr+");
+      }
       result.algorithm = value;
     }
     else if (argument === "--iterations") result.iterations = parseInteger(value, argument);
@@ -69,14 +71,14 @@ async function main() {
   const inputPath = resolve(options.input);
   const spec = JSON.parse(await readFile(inputPath, "utf8"));
   const startedAt = Date.now();
-  const solution = solveHeadsUpRiver(spec, options.algorithm === "dcfr"
-    ? { algorithm: "dcfr", iterations: options.iterations }
-    : {
+  const solution = solveHeadsUpRiver(spec, options.algorithm === "cfr+"
+    ? {
       algorithm: "cfr+",
       iterations: options.iterations,
       averagingDelay: options.averagingDelay,
       linearAveraging: true,
-    });
+    }
+    : { algorithm: options.algorithm, iterations: options.iterations });
   const portable = {
     schemaVersion: "rangecraft-heads-up-river-solution/v2",
     inputFile: options.input,

@@ -4,10 +4,12 @@ import test from "node:test";
 import {
   CFRPlusSolver,
   DiscountedCFRSolver,
+  PredictiveDiscountedCFRPlusSolver,
   exactExploitability,
   expectedValue,
   solveCFRPlus,
   solveDiscountedCFR,
+  solvePredictiveDiscountedCFRPlus,
 } from "../lib/gto-cfr.ts";
 
 const CARDS = ["J", "Q", "K"];
@@ -222,6 +224,76 @@ test("DCFR rejects non-finite paper parameters", () => {
   assert.throws(
     () => solveDiscountedCFR(kuhnGame(), { iterations: 1, gamma: Number.NaN }),
     /gamma must be finite/,
+  );
+});
+
+test("PDCFR+ applies the paper's transient one-step regret prediction", () => {
+  const first = solvePredictiveDiscountedCFRPlus(asymmetricMatrixGame(), {
+    iterations: 1,
+  });
+  const second = solvePredictiveDiscountedCFRPlus(asymmetricMatrixGame(), {
+    iterations: 2,
+  });
+
+  // Initial play is uniform. Player 0's instantaneous regrets are [0.5, -0.5],
+  // so both its explicit regret [0.5, 0] and its predicted next regret
+  // [0.75, 0] choose row 0. The average still records x^1 before that update,
+  // exactly as equation 224 and the authors' alternating implementation do.
+  assert.deepEqual(
+    first.averageStrategy[0].get("matrix:p0").probabilities,
+    [0.5, 0.5],
+  );
+  assert.deepEqual(
+    first.averageStrategy[1].get("matrix:p1").probabilities,
+    [0.5, 0.5],
+  );
+  assert.deepEqual(first.currentStrategy[0].get("matrix:p0").probabilities, [1, 0]);
+  assert.deepEqual(first.currentStrategy[1].get("matrix:p1").probabilities, [0, 1]);
+  assert.ok(Math.abs(
+    second.currentStrategy[0].get("matrix:p0").probabilities[0]
+      - 0.10191339965646913,
+  ) < 1e-15);
+  assert.deepEqual(first.parameters, { alpha: 2.3, gamma: 5 });
+});
+
+test("PDCFR+ is deterministic, chunk-stable, and converges on Kuhn poker", () => {
+  const oneShot = solvePredictiveDiscountedCFRPlus(kuhnGame(), { iterations: 500 });
+  const repeated = solvePredictiveDiscountedCFRPlus(kuhnGame(), { iterations: 500 });
+  const chunkedSolver = new PredictiveDiscountedCFRPlusSolver(kuhnGame());
+  chunkedSolver.run({ iterations: 137 });
+  const chunked = chunkedSolver.run({ iterations: 363 });
+
+  assert.deepEqual(
+    serializeProfile(oneShot.averageStrategy),
+    serializeProfile(repeated.averageStrategy),
+  );
+  assert.deepEqual(
+    serializeProfile(chunked.averageStrategy),
+    serializeProfile(oneShot.averageStrategy),
+  );
+  assert.ok(Math.abs(oneShot.expectedValue - -1 / 18) < 1e-8);
+  assert.ok(exactExploitability(kuhnGame(), oneShot.averageStrategy).exploitability < 1e-8);
+});
+
+test("PDCFR+ rejects parameters outside the supported paper domain", () => {
+  assert.throws(
+    () => new PredictiveDiscountedCFRPlusSolver(kuhnGame(), { alpha: Number.NaN }),
+    /alpha must be finite/,
+  );
+  assert.throws(
+    () => solvePredictiveDiscountedCFRPlus(kuhnGame(), {
+      iterations: 1,
+      gamma: Number.POSITIVE_INFINITY,
+    }),
+    /gamma must be finite/,
+  );
+  assert.throws(
+    () => new PredictiveDiscountedCFRPlusSolver(kuhnGame(), { alpha: 0 }),
+    /alpha must be positive/,
+  );
+  assert.throws(
+    () => new PredictiveDiscountedCFRPlusSolver(kuhnGame(), { gamma: -1 }),
+    /gamma must be non-negative/,
   );
 });
 

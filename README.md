@@ -27,7 +27,7 @@
 - 翻牌三张按顺序出现，转牌与河牌单张发出，发牌期间暂停行动
 - 本地合成的敲桌、筹码、弃牌、发牌和赢池音效
 - 响应式桌面与移动端界面
-- 2–6 人私人多人桌：只需设置公开昵称，随后可创建房间、用 8 位邀请码入桌、准备与连续对局
+- 2–10 人私人多人桌：只需设置公开昵称，随后可创建房间、用 8 位邀请码入桌、准备与连续对局
 - 服务端权威多人引擎：Web Crypto 洗牌、严格合法动作、全下跑牌、主池/边池、平分和秀牌/盖牌
 - 多人亮牌选择使用 8 秒服务端倒计时，下一手使用全桌统一 4 秒倒计时；赢家离线或玩家未逐一准备都不会永久卡桌
 - 房主可在当前手完整结算后结束整局；全员会看到同一份最终排名、净盈亏、VPIP/PFR、翻后主动频率、摊牌与超时统计，并可保留邀请码重开
@@ -39,11 +39,11 @@
 - `PokerTransport` 保留 polling 与未来 WebSocket 实现的统一契约
 - 为预计算 GTO 数据库或远程求解器提供 V2 安全节点键、精确/回退 provenance 与同步缓存 / 异步加载 Provider 协议
 - RangeCraft Standard v1 固定 100BB、无抽水 cEV、2.5BB 开池和完整离散下注树，并用稳定哈希阻止不同配置误命中
-- 通用两人零和 CFR+ 与 DCFR(1.5,0,2) 核心通过手算递推、Kuhn Poker 已知均衡值和精确 exploitability 回归
+- 通用两人零和 CFR+、DCFR(1.5,0,2) 与论文 PDCFR+(2.3,5) 核心通过手算递推、Kuhn Poker 已知均衡值和精确 exploitability 回归
 - 可离线求解带权范围对范围的真实 1v1 河牌子博弈；实时教练按检查点运行 DCFR，用 scalable best response 报告 NashConv / exploitability，并返回历史最低误差策略
 - 1v1 河牌已有一项固定 commit、同牌面/范围/底池/树的公开独立交叉验证；公开资源、许可边界和精度声明见 [`PUBLIC_GTO_VALIDATION.md`](PUBLIC_GTO_VALIDATION.md)
 
-> 当前牌桌 AI 与实时教练的大多数节点仍使用本地近似 GTO 混合频率策略，并非完整求解器。仓库已经加入可验证的 CFR+/DCFR 与 1v1 河牌求解链，但公开独立交叉验证目前只有一棵 CFR+ 固定河牌小树，尚未覆盖任意 6 人动态节点；未命中解库前，界面中的评分仍是策略匹配度，不是精确 EV 损失。
+> 当前牌桌 AI 与实时教练的大多数节点仍使用本地近似 GTO 混合频率策略，并非完整求解器。仓库已经加入可验证的 CFR+/DCFR/PDCFR+ 与 1v1 河牌求解链，但公开独立交叉验证目前只有一棵 CFR+ 固定河牌小树，尚未覆盖任意完整 6–10 人动态节点；未命中解库前，界面中的评分仍是策略匹配度，不是精确 EV 损失。
 
 ## 两种训练模式
 
@@ -113,7 +113,7 @@ npm run ai:benchmark -- --hands 100000 --seed my-run --stack-bb 200 --equity-ite
 
 完整设计、商业对标边界、1v1 / 1v2 / 翻前实施顺序和验收门槛见 [`GTO_SOLVER_ROADMAP.md`](GTO_SOLVER_ROADMAP.md)；公开求解器、数据集、商业免费版的用途和许可边界见 [`PUBLIC_GTO_VALIDATION.md`](PUBLIC_GTO_VALIDATION.md)。
 
-仓库内置一个小型真实河牌范围节点。命令默认使用论文参数 `DCFR(1.5,0,2)`；也可传 `--algorithm cfr+` 保留原基线：
+仓库内置一个小型真实河牌范围节点。命令默认使用论文参数 `DCFR(1.5,0,2)`；也可传 `--algorithm cfr+` 保留原基线，或用 `--algorithm pdcfr+` 运行 IJCAI 2024 的预测折扣交叉审计通道：
 
 ```bash
 npm run gto:river -- \
@@ -124,6 +124,8 @@ npm run gto:river -- \
 ```
 
 输出会包含覆盖完整牌面/范围/权重/底池/筹码的 `spotId`、规则 `gameSpecId`、河牌树 `treeId`、solver 版本、每个组合在各公开行动线的混合频率，以及通过 best response 计算的树内 exploitability。这个命令用于离线生成和审计策略；完整范围的大规模节点后续应由原生并行求解任务预计算，浏览器只加载策略分片。
+
+PDCFR+ 按作者粗网格搜索后用于全部实验的参数 `α=2.3, γ=5` 折扣早期累计 regret，并只把本轮即时 regret 作为一次性的下一轮预测；它不会被重复写入显式累计 regret。交替更新时，每位玩家在自己的 regret 更新前把当前 `xᵗ` 累入多项式加权平均，与论文公式和作者参考实现的相位一致。默认实时路径仍使用 DCFR：原论文在大型 HUNL 子博弈中只报告 PDCFR+ 与 CFR+/PCFR+ 相当，并没有证明它在扑克上总是更快。无论选择哪种算法，RangeCraft 都以同一棵树上的精确 best response 误差决定是否可用，不以算法名称或频率相似度代替误差证书。
 
 公开独立基线使用 MIT 许可的 [`noambrown/poker_solver`](https://github.com/noambrown/poker_solver) commit `6a10442877ffc8fd28af93e16e279b9bbdd97b2a`。它把同一牌面、具体组合范围、底池、有效后手和下注树交给两套实现，并拒绝不完整或身份不一致的比较：
 

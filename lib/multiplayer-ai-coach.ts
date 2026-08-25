@@ -26,6 +26,7 @@ import {
   formatPokerSizingRoute,
   type PokerSizingContext,
 } from "./poker-sizing.ts";
+import { ONLINE_MAX_PLAYERS } from "./online-poker.ts";
 
 export type MultiplayerCoachCard = {
   rank: string | number;
@@ -149,8 +150,8 @@ function pokerCard(card: MultiplayerCoachCard): PokerCard {
 }
 
 function clockwiseDistance(seat: number, after: number) {
-  const distance = (seat - after + 6) % 6;
-  return distance || 6;
+  const distance = (seat - after + ONLINE_MAX_PLAYERS) % ONLINE_MAX_PLAYERS;
+  return distance || ONLINE_MAX_PLAYERS;
 }
 
 function activeSeatOrder(players: readonly MultiplayerCoachPlayer[], dealerSeat: number) {
@@ -177,8 +178,13 @@ export function multiplayerPreflopPosition(
   const index = order.indexOf(seat);
   if (index <= 0) return "SB";
   if (index === 1) return "BB";
-  const middle: PokerPreflopPosition[] = ["UTG", "HJ", "CO"].slice(-(order.length - 2)) as PokerPreflopPosition[];
-  return middle[index - 2] ?? "CO";
+  if (index === order.length - 1) return "CO";
+  if (index === order.length - 2) return "HJ";
+  // The shared policy currently has a six-max position vocabulary. Extra
+  // full-ring early positions deliberately inherit the tighter UTG baseline
+  // instead of being mislabelled as CO and receiving an unrealistically wide
+  // range. A future full-ring solve pack can split UTG+1/UTG+2/LJ explicitly.
+  return "UTG";
 }
 
 function heroActsLastPostflop(

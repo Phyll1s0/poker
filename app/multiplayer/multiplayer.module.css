@@ -6099,3 +6099,366 @@
     min-height: 32px;
   }
 }
+
+/* Ten-seat rail layout -----------------------------------------------------
+   Live play and hand replay share the same ten fixed points. The room's
+   configured capacity selects the points, so an opponent never jumps to a
+   different side of the table merely because somebody disconnects. */
+.multiplayerPage .tableStage:not(.tableStageEnded) {
+  height: auto;
+  min-height: calc(100svh - 72px);
+  padding: 0 24px 28px;
+  justify-content: flex-start;
+  overflow-x: clip;
+  overflow-y: visible;
+}
+
+.tableViewport {
+  width: 100%;
+  min-height: 700px;
+  margin-top: 76px;
+  padding: 112px 118px 142px;
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.multiplayerPage .tableViewport .pokerTable {
+  width: min(1080px, calc(100vw - 300px), calc((100svh - 280px) * 2.05));
+  min-width: 620px;
+  margin: 0;
+  aspect-ratio: 2.05 / 1;
+  transform: none;
+}
+
+.multiplayerPage .tableControls {
+  width: min(1040px, calc(100% - 48px));
+  margin: 0 auto;
+  position: relative;
+  left: auto;
+  bottom: auto;
+  transform: none;
+}
+
+.multiplayerPage .waitingControls .lobbyPlayers {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.multiplayerPage .pokerTable .seat,
+.multiplayerPage .replayTable .replaySeat {
+  right: auto;
+  bottom: auto;
+  left: var(--seat-x);
+  top: var(--seat-y);
+  scale: 1;
+  transform: translate(-50%, -50%) scale(var(--seat-scale, 1));
+  transform-origin: center;
+}
+
+.multiplayerPage .seat0,
+.multiplayerPage .replaySeat0 { --seat-x: 50%; --seat-y: 104%; }
+.multiplayerPage .seat1,
+.multiplayerPage .replaySeat1 { --seat-x: 21%; --seat-y: 92%; }
+.multiplayerPage .seat2,
+.multiplayerPage .replaySeat2 { --seat-x: 2%; --seat-y: 68%; }
+.multiplayerPage .seat3,
+.multiplayerPage .replaySeat3 { --seat-x: 2%; --seat-y: 32%; }
+.multiplayerPage .seat4,
+.multiplayerPage .replaySeat4 { --seat-x: 21%; --seat-y: 8%; }
+.multiplayerPage .seat5,
+.multiplayerPage .replaySeat5 { --seat-x: 50%; --seat-y: -4%; }
+.multiplayerPage .seat6,
+.multiplayerPage .replaySeat6 { --seat-x: 79%; --seat-y: 8%; }
+.multiplayerPage .seat7,
+.multiplayerPage .replaySeat7 { --seat-x: 98%; --seat-y: 32%; }
+.multiplayerPage .seat8,
+.multiplayerPage .replaySeat8 { --seat-x: 98%; --seat-y: 68%; }
+.multiplayerPage .seat9,
+.multiplayerPage .replaySeat9 { --seat-x: 79%; --seat-y: 92%; }
+
+.multiplayerPage .pokerTable[data-table-size="7"] .seat:not(.seatSelf),
+.multiplayerPage .pokerTable[data-table-size="8"] .seat:not(.seatSelf),
+.multiplayerPage .pokerTable[data-table-size="9"] .seat:not(.seatSelf),
+.multiplayerPage .pokerTable[data-table-size="10"] .seat:not(.seatSelf) {
+  --seat-scale: 0.88;
+}
+
+.multiplayerPage .pokerTable .seat .seatCards {
+  top: -54px;
+  bottom: auto;
+}
+
+.multiplayerPage .pokerTable .seat3 .seatCards,
+.multiplayerPage .pokerTable .seat4 .seatCards,
+.multiplayerPage .pokerTable .seat5 .seatCards,
+.multiplayerPage .pokerTable .seat6 .seatCards,
+.multiplayerPage .pokerTable .seat7 .seatCards {
+  top: auto;
+  bottom: -53px;
+}
+
+.multiplayerPage .pokerTable .seatSelf .seatCards {
+  top: -72px;
+  bottom: auto;
+}
+
+.multiplayerPage .pokerTable .seat .seatClock {
+  top: auto;
+  right: 5px;
+  bottom: -25px;
+}
+
+.multiplayerPage .pokerTable .seat3 .seatClock,
+.multiplayerPage .pokerTable .seat4 .seatClock,
+.multiplayerPage .pokerTable .seat5 .seatClock,
+.multiplayerPage .pokerTable .seat6 .seatClock,
+.multiplayerPage .pokerTable .seat7 .seatClock {
+  top: -27px;
+  bottom: auto;
+}
+
+.multiplayerPage .pokerTable .seat .tableBet {
+  right: auto;
+  bottom: auto;
+  left: 50%;
+  top: 50%;
+  transform: translate(calc(-50% + var(--bet-x, 0px)), calc(-50% + var(--bet-y, 0px)));
+}
+
+.multiplayerPage .pokerTable .seat0 .tableBet { --bet-y: -94px; }
+.multiplayerPage .pokerTable .seat1 .tableBet { --bet-x: 56px; --bet-y: -58px; }
+.multiplayerPage .pokerTable .seat2 .tableBet { --bet-x: 88px; --bet-y: -16px; }
+.multiplayerPage .pokerTable .seat3 .tableBet { --bet-x: 88px; --bet-y: 20px; }
+.multiplayerPage .pokerTable .seat4 .tableBet { --bet-x: 56px; --bet-y: 58px; }
+.multiplayerPage .pokerTable .seat5 .tableBet { --bet-y: 72px; }
+.multiplayerPage .pokerTable .seat6 .tableBet { --bet-x: -56px; --bet-y: 58px; }
+.multiplayerPage .pokerTable .seat7 .tableBet { --bet-x: -88px; --bet-y: 20px; }
+.multiplayerPage .pokerTable .seat8 .tableBet { --bet-x: -88px; --bet-y: -16px; }
+.multiplayerPage .pokerTable .seat9 .tableBet { --bet-x: -56px; --bet-y: -58px; }
+
+.multiplayerPage .seat6 .seatMessageBubble,
+.multiplayerPage .seat7 .seatMessageBubble,
+.multiplayerPage .seat8 .seatMessageBubble,
+.multiplayerPage .seat9 .seatMessageBubble {
+  right: calc(100% + 9px);
+  left: auto;
+  border-radius: 8px 8px 2px 8px;
+}
+
+.multiplayerPage .seat1 .seatMessageBubble,
+.multiplayerPage .seat2 .seatMessageBubble,
+.multiplayerPage .seat3 .seatMessageBubble,
+.multiplayerPage .seat4 .seatMessageBubble {
+  right: auto;
+  left: calc(100% + 9px);
+  border-radius: 8px 8px 8px 2px;
+}
+
+/* Deal cards out from the centre toward all ten visual seats. */
+.multiplayerPage .seat0 .holeDealtCard { --hole-deal-x: 0px; --hole-deal-y: -160px; }
+.multiplayerPage .seat1 .holeDealtCard { --hole-deal-x: 100px; --hole-deal-y: -100px; }
+.multiplayerPage .seat2 .holeDealtCard { --hole-deal-x: 170px; --hole-deal-y: -25px; }
+.multiplayerPage .seat3 .holeDealtCard { --hole-deal-x: 170px; --hole-deal-y: 55px; }
+.multiplayerPage .seat4 .holeDealtCard { --hole-deal-x: 100px; --hole-deal-y: 100px; }
+.multiplayerPage .seat5 .holeDealtCard { --hole-deal-x: 0px; --hole-deal-y: 160px; }
+.multiplayerPage .seat6 .holeDealtCard { --hole-deal-x: -100px; --hole-deal-y: 100px; }
+.multiplayerPage .seat7 .holeDealtCard { --hole-deal-x: -170px; --hole-deal-y: 55px; }
+.multiplayerPage .seat8 .holeDealtCard { --hole-deal-x: -170px; --hole-deal-y: -25px; }
+.multiplayerPage .seat9 .holeDealtCard { --hole-deal-x: -100px; --hole-deal-y: -100px; }
+
+/* Ten-seat hand replay uses the same rail geometry at a compact scale. */
+.replayTableViewport {
+  min-height: 520px;
+  padding: 94px 100px 88px;
+}
+
+.replayTable {
+  width: min(760px, calc(100% - 64px));
+  min-width: 440px;
+  aspect-ratio: 2.05 / 1;
+}
+
+.multiplayerPage .replayTable[data-table-size="7"] .replaySeat,
+.multiplayerPage .replayTable[data-table-size="8"] .replaySeat,
+.multiplayerPage .replayTable[data-table-size="9"] .replaySeat,
+.multiplayerPage .replayTable[data-table-size="10"] .replaySeat {
+  --seat-scale: 0.72;
+}
+
+.multiplayerPage .replayTable .replaySeat .replaySeatCards {
+  top: -43px;
+  bottom: auto;
+}
+
+.multiplayerPage .replayTable .replaySeat3 .replaySeatCards,
+.multiplayerPage .replayTable .replaySeat4 .replaySeatCards,
+.multiplayerPage .replayTable .replaySeat5 .replaySeatCards,
+.multiplayerPage .replayTable .replaySeat6 .replaySeatCards,
+.multiplayerPage .replayTable .replaySeat7 .replaySeatCards {
+  top: 43px;
+}
+
+.multiplayerPage .replayTable .replaySeat .replayActionBubble {
+  top: calc(100% + 7px);
+  bottom: auto;
+}
+
+.multiplayerPage .replayTable .replaySeat3 .replayActionBubble,
+.multiplayerPage .replayTable .replaySeat4 .replayActionBubble,
+.multiplayerPage .replayTable .replaySeat5 .replayActionBubble,
+.multiplayerPage .replayTable .replaySeat6 .replayActionBubble,
+.multiplayerPage .replayTable .replaySeat7 .replayActionBubble {
+  top: auto;
+  bottom: calc(100% + 7px);
+}
+
+@media (max-width: 1279px) and (min-width: 861px) {
+  .tableViewport {
+    min-height: 640px;
+    padding: 108px 78px 140px;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable {
+    width: min(860px, calc(100vw - 180px));
+    min-width: 560px;
+    aspect-ratio: 1.78 / 1;
+  }
+
+  .multiplayerPage .pokerTable[data-table-size="7"] .seat:not(.seatSelf),
+  .multiplayerPage .pokerTable[data-table-size="8"] .seat:not(.seatSelf),
+  .multiplayerPage .pokerTable[data-table-size="9"] .seat:not(.seatSelf),
+  .multiplayerPage .pokerTable[data-table-size="10"] .seat:not(.seatSelf) {
+    --seat-scale: 0.8;
+  }
+}
+
+@media (max-width: 860px) {
+  .multiplayerPage .tableStage:not(.tableStageEnded) {
+    padding: 0 12px 24px;
+  }
+
+  .tableViewport {
+    min-height: 630px;
+    margin-top: 72px;
+    padding: 94px 62px 142px;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable {
+    width: min(720px, calc(100vw - 150px));
+    min-width: 390px;
+    margin: 0;
+    aspect-ratio: 1.62 / 1;
+  }
+
+  .multiplayerPage .pokerTable[data-table-size="7"] .seat:not(.seatSelf),
+  .multiplayerPage .pokerTable[data-table-size="8"] .seat:not(.seatSelf),
+  .multiplayerPage .pokerTable[data-table-size="9"] .seat:not(.seatSelf),
+  .multiplayerPage .pokerTable[data-table-size="10"] .seat:not(.seatSelf) {
+    --seat-scale: 0.72;
+  }
+
+  .multiplayerPage .tableControls {
+    width: calc(100% - 24px);
+  }
+}
+
+@media (max-width: 700px) {
+  .tableViewport {
+    min-height: 610px;
+    margin-top: 66px;
+    padding: 82px 36px 138px;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable {
+    width: min(330px, calc(100vw - 74px));
+    min-width: 0;
+    aspect-ratio: 1.32 / 1;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="7"],
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="8"],
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="9"],
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="10"] {
+    aspect-ratio: 0.92 / 1;
+  }
+
+  .multiplayerPage .pokerTable .seat {
+    --seat-scale: 0.68;
+    min-width: 108px;
+  }
+
+  .multiplayerPage .pokerTable .seatSelf {
+    --seat-scale: 0.86;
+  }
+
+  .multiplayerPage .seat0,
+  .multiplayerPage .replaySeat0 { --seat-x: 50%; --seat-y: 103%; }
+  .multiplayerPage .seat1,
+  .multiplayerPage .replaySeat1 { --seat-x: 22%; --seat-y: 92%; }
+  .multiplayerPage .seat2,
+  .multiplayerPage .replaySeat2 { --seat-x: 7%; --seat-y: 70%; }
+  .multiplayerPage .seat3,
+  .multiplayerPage .replaySeat3 { --seat-x: 7%; --seat-y: 38%; }
+  .multiplayerPage .seat4,
+  .multiplayerPage .replaySeat4 { --seat-x: 23%; --seat-y: 14%; }
+  .multiplayerPage .seat5,
+  .multiplayerPage .replaySeat5 { --seat-x: 50%; --seat-y: -2%; }
+  .multiplayerPage .seat6,
+  .multiplayerPage .replaySeat6 { --seat-x: 77%; --seat-y: 14%; }
+  .multiplayerPage .seat7,
+  .multiplayerPage .replaySeat7 { --seat-x: 93%; --seat-y: 38%; }
+  .multiplayerPage .seat8,
+  .multiplayerPage .replaySeat8 { --seat-x: 93%; --seat-y: 70%; }
+  .multiplayerPage .seat9,
+  .multiplayerPage .replaySeat9 { --seat-x: 78%; --seat-y: 92%; }
+
+  .multiplayerPage .pokerTable[data-table-size="7"] .seat:not(.seatSelf),
+  .multiplayerPage .pokerTable[data-table-size="8"] .seat:not(.seatSelf),
+  .multiplayerPage .pokerTable[data-table-size="9"] .seat:not(.seatSelf),
+  .multiplayerPage .pokerTable[data-table-size="10"] .seat:not(.seatSelf) {
+    --seat-scale: 0.62;
+  }
+
+  .multiplayerPage .pokerTable[data-table-size="7"] .seat:not(.seatSelf) .seatIdentity > span,
+  .multiplayerPage .pokerTable[data-table-size="8"] .seat:not(.seatSelf) .seatIdentity > span,
+  .multiplayerPage .pokerTable[data-table-size="9"] .seat:not(.seatSelf) .seatIdentity > span,
+  .multiplayerPage .pokerTable[data-table-size="10"] .seat:not(.seatSelf) .seatIdentity > span {
+    display: none;
+  }
+
+  .multiplayerPage .pokerTable .seatSelf .seatCards {
+    top: -78px;
+  }
+
+  .multiplayerPage .waitingControls .lobbyPlayers {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .replayTableViewport {
+    min-height: 390px;
+    padding: 76px 42px 72px;
+  }
+
+  .replayTable {
+    width: min(340px, calc(100% - 42px));
+    min-width: 250px;
+    aspect-ratio: 1.2 / 1;
+  }
+
+  .multiplayerPage .replayTable[data-table-size="7"],
+  .multiplayerPage .replayTable[data-table-size="8"],
+  .multiplayerPage .replayTable[data-table-size="9"],
+  .multiplayerPage .replayTable[data-table-size="10"] {
+    aspect-ratio: 0.96 / 1;
+  }
+
+  .multiplayerPage .replayTable .replaySeat {
+    --seat-scale: 0.58;
+  }
+}
+
+.multiplayerPage .tableControlsTransition {
+  grid-template-columns: minmax(0, 1fr);
+}

@@ -57,7 +57,7 @@ export function PokerRulesModal({
         <div className="poker-rule-details">
           <div><span>主池、边池与退回</span><strong>全下金额不同，会按可匹配额度分层。</strong><p>每个边池只有投入到该层且没有弃牌的玩家有资格争夺；弃牌前投入仍是死钱。没人能够跟上的超额筹码会原样退回，不算奖金。</p></div>
           <div><span>加注权</span><strong>完整加注会重新开放行动，不足额全下不一定会。</strong><p>短码全下若没有达到一个完整最小加注量，已经行动过的玩家通常只能跟注或弃牌；多个不足额加注累计达到完整增量后才重新开放。</p></div>
-          <div><span>RangeCraft 牌桌</span><strong>单人 6-MAX；多人 2–6 人，支持现金练习与单桌淘汰</strong><p>浅筹 / 标准 / 深筹只是初始买入深度；“血战鱿鱼”是单人附加训练玩法，不是标准德州扑克规则。</p></div>
+          <div><span>RangeCraft 牌桌</span><strong>单人 6-MAX；多人 2–10 人，支持现金练习与单桌淘汰</strong><p>浅筹 / 标准 / 深筹只是初始买入深度；“血战鱿鱼”是单人附加训练玩法，不是标准德州扑克规则。</p></div>
         </div>
 
         <button className="modal-primary" type="button" onClick={onClose}>{closeLabel}</button>

@@ -22,7 +22,7 @@ import {
   shuffleOnlineDeck,
 } from "../lib/online-poker.ts";
 
-const actors = Array.from({ length: 7 }, (_, index) => ({
+const actors = Array.from({ length: 11 }, (_, index) => ({
   accountId: `user-${index}`,
   displayName: `玩家 ${index}`,
 }));
@@ -99,7 +99,7 @@ function foldUntilSettlement(room, options) {
     assert.notEqual(next.hand?.currentSeat, null, "a live fold line must have an actor");
     next = accepted(act(next, actors[next.hand.currentSeat], "fold", options));
     decisions += 1;
-    assert.ok(decisions <= 6, "an uncontested fold line must settle within the table size");
+    assert.ok(decisions <= next.seats.length, "an uncontested fold line must settle within the table size");
   }
   assert.equal(next.phase, "between_hands");
   assert.ok(next.hand?.result);
@@ -139,15 +139,15 @@ test("bestOnlineHand returns exactly five cards and keeps a board-playing tie on
   );
 });
 
-test("room enforces a 2-6 seat capacity and lobby readiness", () => {
-  assert.throws(() => createOnlineRoom({ roomId: "bad", owner: actors[0], maxPlayers: 1 }), /2 到 6/);
-  assert.throws(() => createOnlineRoom({ roomId: "bad", owner: actors[0], maxPlayers: 7 }), /2 到 6/);
+test("room enforces a 2-10 seat capacity and lobby readiness", () => {
+  assert.throws(() => createOnlineRoom({ roomId: "bad", owner: actors[0], maxPlayers: 1 }), /2 到 10/);
+  assert.throws(() => createOnlineRoom({ roomId: "bad", owner: actors[0], maxPlayers: 11 }), /2 到 10/);
 
   const options = deterministicOptions();
-  let room = createOnlineRoom({ roomId: "six-max", owner: actors[0], maxPlayers: 6 });
-  room = joinPlayers(room, 6, options);
-  assert.deepEqual(room.seats.map((seat) => seat.seat), [0, 1, 2, 3, 4, 5]);
-  const full = command(room, actors[6], { type: "join" }, options);
+  let room = createOnlineRoom({ roomId: "ten-max", owner: actors[0], maxPlayers: 10 });
+  room = joinPlayers(room, 10, options);
+  assert.deepEqual(room.seats.map((seat) => seat.seat), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  const full = command(room, actors[10], { type: "join" }, options);
   rejected(full, "ROOM_FULL");
   assert.equal(full.state, room);
 
@@ -974,6 +974,36 @@ test("three-player table posts blinds left of the dealer and acts after the big 
   assert.equal(room.hand.currentSeat, 0);
 });
 
+test("eight-max and ten-max deal unique holes and keep standard blind/action order", () => {
+  for (const count of [8, 10]) {
+    const { room } = startRoom(count);
+    assert.ok(room.hand);
+    assert.equal(room.hand.dealerSeat, 0);
+    assert.equal(room.hand.smallBlindSeat, 1);
+    assert.equal(room.hand.bigBlindSeat, 2);
+    assert.equal(room.hand.currentSeat, 3);
+    assert.equal(room.hand.players.length, count);
+    const dealt = room.hand.players.flatMap((player) => player.hole);
+    assert.equal(dealt.length, count * 2);
+    assert.equal(new Set(dealt.map((entry) => `${entry.rank}-${entry.suit}`)).size, count * 2);
+  }
+});
+
+test("ten-max dealer and blinds wrap from seat nine back to zero", () => {
+  const options = deterministicOptions();
+  let room = createOnlineRoom({ roomId: "ten-max-wrap", owner: actors[0], maxPlayers: 10 });
+  room = joinPlayers(room, 10, options);
+  room = { ...room, lastDealerSeat: 9 };
+  for (const actor of actors.slice(0, 10)) {
+    room = accepted(command(room, actor, { type: "ready", ready: true }, options));
+  }
+  room = accepted(command(room, actors[0], { type: "start" }, options));
+  assert.equal(room.hand.dealerSeat, 0);
+  assert.equal(room.hand.smallBlindSeat, 1);
+  assert.equal(room.hand.bigBlindSeat, 2);
+  assert.equal(room.hand.currentSeat, 3);
+});
+
 test("a short all-in big blind does not reduce the preflop bring-in", () => {
   const liveAction = startRoom(3, { stacks: [100, 100, 3] });
   assert.equal(liveAction.room.hand.highestBet, 10);
@@ -1003,7 +1033,7 @@ test("a phantom short-BB bring-in disappears when only one funded actor remains"
 });
 
 test("check/call lines complete cleanly at every supported table size", () => {
-  for (let count = 2; count <= 6; count += 1) {
+  for (let count = 2; count <= 10; count += 1) {
     const started = startRoom(count);
     let room = started.room;
     let actions = 0;
@@ -1339,6 +1369,27 @@ test("side pots are paid only to eligible players", () => {
   assert.equal(room.seats.reduce((sum, seat) => sum + seat.stack, 0), 1300);
 });
 
+test("ten-max resolves a full ladder of all-in side pots without losing chips", () => {
+  const stacks = Array.from({ length: 10 }, (_, index) => (index + 1) * 10);
+  const { room: started, options } = startRoom(10, { stacks });
+  let room = started;
+
+  for (let seat = 3; seat < 10; seat += 1) {
+    room = accepted(act(room, actors[seat], "raise", options, stacks[seat]));
+  }
+  for (const seat of [0, 1, 2]) {
+    room = accepted(act(room, actors[seat], "call", options));
+  }
+
+  assert.equal(room.phase, "between_hands");
+  assert.equal(room.hand.community.length, 5);
+  assert.ok(room.hand.players.every((player) => player.wentAllIn));
+  assert.equal(room.hand.result.totalPot, 540);
+  assert.deepEqual(room.hand.result.returns, [{ seat: 9, amount: 10 }]);
+  assert.equal(room.hand.result.payouts.reduce((sum, payout) => sum + payout.amount, 0), 540);
+  assert.equal(room.seats.reduce((sum, seat) => sum + seat.stack, 0), 550);
+});
+
 test("uncontested winner chooses show or muck before the next hand", () => {
   const { room: started, options } = startRoom(2);
   let room = accepted(act(started, actors[0], "fold", options));
@@ -1635,7 +1686,7 @@ test("private peek validates phase, actor, hand and target without charging reje
   rejected(command(room, actors[0], { type: "peek", handId: room.hand.id, targetSeat: 4 }, scenario.options), "PEEK_NOT_ALLOWED");
   rejected(command(room, actors[6], { type: "peek", handId: room.hand.id, targetSeat: 1 }, scenario.options), "NOT_A_MEMBER");
   rejected(command(room, actors[0], { type: "peek", handId: room.hand.id, targetSeat: -1 }, scenario.options), "INVALID_COMMAND");
-  rejected(command(room, actors[0], { type: "peek", handId: room.hand.id, targetSeat: 6 }, scenario.options), "INVALID_COMMAND");
+  rejected(command(room, actors[0], { type: "peek", handId: room.hand.id, targetSeat: 10 }, scenario.options), "INVALID_COMMAND");
   rejected(command(room, actors[0], { type: "peek", handId: room.hand.id, targetSeat: 1.5 }, scenario.options), "INVALID_COMMAND");
   assert.equal(room.revision, revision);
   assert.deepEqual(room.hand.privatePeekedSeatsByAccountId, {});

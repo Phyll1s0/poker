@@ -2,6 +2,7 @@ import {
   applyOnlinePokerCommand,
   bestOnlineHand,
   createOnlineRoom,
+  ONLINE_MAX_PLAYERS,
   projectRoomState,
   type OnlineActor,
   type OnlinePokerCommand,
@@ -251,7 +252,7 @@ export function parseMultiplayerCommand(payload: Record<string, unknown>): Parse
     return { ...base, type, handId, show: payload.show };
   }
   if (type === "peek") {
-    if (!Number.isInteger(payload.targetSeat) || Number(payload.targetSeat) < 0 || Number(payload.targetSeat) >= 6) {
+    if (!Number.isInteger(payload.targetSeat) || Number(payload.targetSeat) < 0 || Number(payload.targetSeat) >= ONLINE_MAX_PLAYERS) {
       throw new MultiplayerGameError(400, "INVALID_COMMAND", "targetSeat 必须是有效座位编号。" );
     }
     return { ...base, type, handId, targetSeat: Number(payload.targetSeat) };

@@ -74,6 +74,30 @@ test("heads-up deal starts at the big blind and returns to the button/small blin
   );
 });
 
+test("deals ten-handed tables across seat nine to zero in two complete rounds", () => {
+  const deal = multiplayerHoleDealTransition(lobby, hand("ten-handed", {
+    dealerSeat: 9,
+    seats: Array.from({ length: 10 }, (_, seat) => seat),
+  }));
+  assert.deepEqual(deal?.seatOrder, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.equal(multiplayerHoleCardDealDelayMs(deal, 0, 0), 0);
+  assert.equal(multiplayerHoleCardDealDelayMs(deal, 9, 0), 9 * MULTIPLAYER_HOLE_DEAL_GAP_MS);
+  assert.equal(multiplayerHoleCardDealDelayMs(deal, 0, 1), 10 * MULTIPLAYER_HOLE_DEAL_GAP_MS);
+  assert.equal(multiplayerHoleCardDealDelayMs(deal, 9, 1), 19 * MULTIPLAYER_HOLE_DEAL_GAP_MS);
+  assert.equal(
+    multiplayerHoleDealDurationMs(deal),
+    19 * MULTIPLAYER_HOLE_DEAL_GAP_MS + MULTIPLAYER_HOLE_CARD_ANIMATION_MS,
+  );
+});
+
+test("keeps eight-handed dealing clockwise when the button is not seat zero", () => {
+  const deal = multiplayerHoleDealTransition(lobby, hand("eight-handed", {
+    dealerSeat: 6,
+    seats: Array.from({ length: 8 }, (_, seat) => seat),
+  }));
+  assert.deepEqual(deal?.seatOrder, [7, 0, 1, 2, 3, 4, 5, 6]);
+});
+
 test("animates a genuinely new hand but never initial hydration or repeated polls", () => {
   assert.equal(multiplayerHoleDealTransition(null, hand()), null);
   assert.equal(multiplayerHoleDealTransition(hand(), hand()), null);

@@ -3,6 +3,7 @@ import {
   ONLINE_DEFAULT_ACTION_TIME_MS,
   ONLINE_DEFAULT_TIME_BANK_MS,
   ONLINE_MAX_ACTION_TIME_MS,
+  ONLINE_MAX_PLAYERS,
   ONLINE_MAX_STARTING_STACK,
   ONLINE_MAX_TIME_BANK_MS,
   ONLINE_MIN_ACTION_TIME_MS,
@@ -168,8 +169,8 @@ export function normalizeRoomName(value: unknown): string {
 
 export function normalizeMaxPlayers(value: unknown): number {
   if (value === undefined || value === null) return 6;
-  if (!Number.isInteger(value) || Number(value) < 2 || Number(value) > 6) {
-    throw new MultiplayerStoreError("INVALID_ROOM", "房间人数需要是 2–6。");
+  if (!Number.isInteger(value) || Number(value) < 2 || Number(value) > ONLINE_MAX_PLAYERS) {
+    throw new MultiplayerStoreError("INVALID_ROOM", `房间人数需要是 2–${ONLINE_MAX_PLAYERS}。`);
   }
   return Number(value);
 }
@@ -448,7 +449,11 @@ export class MultiplayerStore {
 
     const results = await this.database.batch([
       this.database.prepare(`
-        WITH seats(seat) AS (VALUES (0), (1), (2), (3), (4), (5))
+        WITH RECURSIVE seats(seat) AS (
+          SELECT 0
+          UNION ALL
+          SELECT seat + 1 FROM seats WHERE seat + 1 < ?
+        )
         INSERT INTO room_members (room_id, account_id, seat, ready, joined_at)
         SELECT r.id, ?, seats.seat, 0, ?
         FROM rooms r
@@ -468,7 +473,7 @@ export class MultiplayerStore {
         ORDER BY seats.seat
         LIMIT 1
         RETURNING seat
-      `).bind(accountId, now, room.id, now, accountId),
+      `).bind(ONLINE_MAX_PLAYERS, accountId, now, room.id, now, accountId),
       this.database.prepare(`
         UPDATE rooms
         SET revision = revision + 1, updated_at = ?

@@ -1,5 +1,5 @@
 export const ONLINE_MIN_PLAYERS = 2;
-export const ONLINE_MAX_PLAYERS = 6;
+export const ONLINE_MAX_PLAYERS = 10;
 export const ONLINE_SMALL_BLIND = 5;
 export const ONLINE_BIG_BLIND = 10;
 export const ONLINE_STARTING_STACK = ONLINE_BIG_BLIND * 100;

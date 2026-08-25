@@ -1,3 +1,5 @@
+import { ONLINE_MAX_PLAYERS } from "./online-poker.ts";
+
 export const MULTIPLAYER_HOLE_DEAL_GAP_MS = 140;
 export const MULTIPLAYER_HOLE_CARD_ANIMATION_MS = 460;
 
@@ -17,8 +19,8 @@ export type MultiplayerHoleDeal = {
 
 function clockwiseAfterDealer(seats: readonly number[], dealerSeat: number) {
   return [...new Set(seats)].sort((left, right) => {
-    const leftDistance = (left - dealerSeat + 6) % 6 || 6;
-    const rightDistance = (right - dealerSeat + 6) % 6 || 6;
+    const leftDistance = (left - dealerSeat + ONLINE_MAX_PLAYERS) % ONLINE_MAX_PLAYERS || ONLINE_MAX_PLAYERS;
+    const rightDistance = (right - dealerSeat + ONLINE_MAX_PLAYERS) % ONLINE_MAX_PLAYERS || ONLINE_MAX_PLAYERS;
     return leftDistance - rightDistance;
   });
 }
@@ -40,7 +42,7 @@ export function multiplayerHoleDealTransition(
   ) return null;
 
   const seatOrder = clockwiseAfterDealer(
-    next.seats.filter((seat) => Number.isInteger(seat) && seat >= 0 && seat < 6),
+    next.seats.filter((seat) => Number.isInteger(seat) && seat >= 0 && seat < ONLINE_MAX_PLAYERS),
     next.dealerSeat,
   );
   if (seatOrder.length < 2) return null;

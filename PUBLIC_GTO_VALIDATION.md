@@ -41,6 +41,7 @@ npm run gto:benchmark:river
 | 资源 | 许可或访问边界 | 对 RangeCraft 的合法用途 | 不能据此声称什么 |
 | --- | --- | --- | --- |
 | [`noambrown/poker_solver`](https://github.com/noambrown/poker_solver) | [MIT](https://github.com/noambrown/poker_solver/blob/6a10442877ffc8fd28af93e16e279b9bbdd97b2a/LICENSE)；使用、修改和分发时保留版权与许可 | 当前实际采用的两人河牌同题基线；固定 commit、保存原始输出哈希和生成命令 | 一项小树通过不等于所有 HUNL 或六人局通过 |
+| [`rpSebastian/PDCFRPlus`](https://github.com/rpSebastian/PDCFRPlus/tree/d81089530a2a14dc3318984c828393ebcea139ee) | [MIT](https://github.com/rpSebastian/PDCFRPlus/blob/d81089530a2a14dc3318984c828393ebcea139ee/LICENSE)；IJCAI 2024 论文作者代码 | 核对 PDCFR+ 的显式/预测 regret 递推、交替更新相位、作者粗网格实验参数与小博弈结果 | `2.3/5` 不是普适定理参数；作者实验也未证明它在大型扑克上总快于 DCFR，更不提供可直接导入的商业全树策略 |
 | [OpenSpiel](https://github.com/google-deepmind/open_spiel) | Apache-2.0 | 核对 CFR/CFR+、best response、exploitability，以及 Kuhn/Leduc 等小博弈；也可作为 Universal Poker 的研究框架 | 它不是可直接下载的完整现金桌 GTO 策略库；把引擎接上 NLHE 规则也不等于已把巨大游戏求完 |
 | [PokerBench](https://huggingface.co/datasets/RZ412/PokerBench) | 数据集页面标记 Apache-2.0 | 用大量 solver 标注的单点动作做宽泛的决策常识、解析和 UI 回归 | 数据主要给出场景与“最佳动作”，缺少完整混合频率、所有动作 EV、严格树身份与 exploitability，不能作为同题数值证明 |
 | [PioSOLVER Free](https://piosolver.com/docs/product_comparison/) | 专有免费评估版，只能求两个示例翻牌；[官方条款](https://piosolver.com/docs/licensing/)禁止分发二进制和把结果做成按需服务 | 在其允许的示例牌面和条款内做人工、同配置抽样比较 | 不是开源代码或可再分发的数据集，也不能覆盖任意牌面 |
@@ -65,8 +66,8 @@ GTO 是一套**指定博弈的均衡策略**，不是只由两张手牌决定的
 
 ## 当前精度声明
 
-- **两人通用 CFR+ / DCFR 核心**：CFR+ 已改为修正论文证明的交替错位平均；`DCFR(1.5,0,2)` 分别衰减正负 regret、保留负 regret 并按 `t²` 平均。两者均通过非对称矩阵逐轮手算、Kuhn 已知值，以及与 CFR 更新逻辑分离的穷举 best response 测试。
-- **两人河牌**：实时单挑河牌默认分段运行 DCFR，并保存各检查点的 best-response exploitability，最终返回历史最低误差检查点。实验级结果不接管原提示；训练级结果只接管提示；只有较低误差级别才用于局部 solver EV 评分。公开独立同题交叉验证仍只有上面这一项 CFR+ fixture；它提高了对共同河牌模型与 CFR+ 实现正确性的信心，但样本数仍是 1，不能自动替 DCFR 的所有扑克节点完成外部验证。
+- **两人通用 CFR+ / DCFR / PDCFR+ 核心**：CFR+ 已改为修正论文证明的交替错位平均；`DCFR(1.5,0,2)` 分别衰减正负 regret、保留负 regret 并按 `t²` 平均；`PDCFR+(2.3,5)` 按 IJCAI 2024 公式使用折扣后的显式 regret 与一次性预测 regret。三者均通过非对称矩阵逐轮手算、Kuhn 已知值，以及与 CFR 更新逻辑分离的穷举 best response 测试。PDCFR+ 只作为离线交叉审计，不因算法更新自动取代扑克默认 DCFR。
+- **两人河牌**：实时单挑河牌默认分段运行 DCFR，并保存各检查点的 best-response exploitability，最终返回历史最低误差检查点。实验级结果不接管原提示；训练级结果只接管提示；只有较低误差级别才用于局部 solver EV 评分。PDCFR+ 在锁定公开小树上也达到低于 `10⁻⁸ pot` 的重算误差，但它收敛到另一组低 regret 频率，不能借用 CFR+ fixture 的“逐频率实现一致”结论。公开独立同题交叉验证仍只有上面这一项 CFR+ fixture；样本数仍是 1，不能自动替 DCFR/PDCFR+ 的所有扑克节点完成外部验证。
 - **三人河牌**：仍是实验功能。`10% pot` 是 3 个代表组合求解、5 个代表组合跨分辨率重算时的准入门槛；`3% pot` 只是更高稳定性的经验评分门槛。三人博弈也不享有两人零和 CFR 的同等收敛保证。市场没有统一的“商业阈值”；作为量级参照，GTO Wizard 的[三人局公开基准](https://blog.gtowizard.com/gto_wizard_ai_3_way_benchmarks/)报告其测试河牌低于 `0.1% pot` Nash distance。数字阈值表面上相差约 100/30 倍，但双方测试树和 `3%` 的稳定性指标并不相同，不能把它解释成精度倍数；RangeCraft 尚未计入全部范围抽象误差，不能称为精确 GTO。
 - **牌桌大多数实时决策**：未命中解库时仍由本地范围/权益/阻断牌近似模型提供提示，必须显示为“近似”，不能展示伪造的 solver EV loss。
 

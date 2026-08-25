@@ -89,6 +89,29 @@ export interface DiscountedCFRResult<Action extends string>
   parameters: Readonly<DiscountedCFRParameters>;
 }
 
+export interface PredictiveDiscountedCFRPlusParameters {
+  /** Polynomial exponent used to discount past clipped regrets. */
+  alpha: number;
+  /** Polynomial exponent used to weight the average strategy. */
+  gamma: number;
+}
+
+export interface PredictiveDiscountedCFRPlusRunOptions {
+  /** Number of complete alternating player updates. */
+  iterations: number;
+}
+
+export interface SolvePredictiveDiscountedCFRPlusOptions
+  extends PredictiveDiscountedCFRPlusRunOptions {
+  alpha?: number;
+  gamma?: number;
+}
+
+export interface PredictiveDiscountedCFRPlusResult<Action extends string>
+  extends CFRPlusResult<Action> {
+  parameters: Readonly<PredictiveDiscountedCFRPlusParameters>;
+}
+
 export interface ExactExploitabilityOptions {
   /** Safety limit for deterministic best-response policies per player. */
   maxPoliciesPerPlayer?: number;
@@ -123,6 +146,12 @@ interface InformationNode<Action extends string> {
   strategySum: Float64Array;
 }
 
+interface PredictiveInformationNode<Action extends string>
+  extends InformationNode<Action> {
+  /** Clipped explicit regret plus the latest one-step regret prediction. */
+  predictedRegrets: Float64Array;
+}
+
 interface ReachProbabilities {
   player0: number;
   player1: number;
@@ -133,6 +162,8 @@ const PROBABILITY_TOLERANCE = 1e-9;
 const DEFAULT_MAX_DEPTH = 512;
 export const DEFAULT_DCFR_PARAMETERS: Readonly<DiscountedCFRParameters> =
   Object.freeze({ alpha: 1.5, beta: 0, gamma: 2 });
+export const DEFAULT_PDCFR_PLUS_PARAMETERS: Readonly<PredictiveDiscountedCFRPlusParameters> =
+  Object.freeze({ alpha: 2.3, gamma: 5 });
 
 function playerReach(reach: ReachProbabilities, player: CFRPlayer): number {
   return player === 0 ? reach.player0 : reach.player1;
@@ -671,6 +702,268 @@ export class DiscountedCFRSolver<State, Action extends string> {
   }
 }
 
+function pdcfrPlusDiscount(iteration: number, alpha: number): number {
+  if (iteration <= 0) return 0;
+  const powered = iteration ** alpha;
+  if (powered === Number.POSITIVE_INFINITY) return 1;
+  return powered / (powered + 1);
+}
+
+function pdcfrPlusParameter(
+  value: number,
+  label: "alpha" | "gamma",
+): number {
+  finiteDCFRParameter(value, label);
+  const valid = label === "alpha" ? value > 0 : value >= 0;
+  if (!valid) {
+    throw new RangeError(
+      `PDCFR+ ${label} must be ${label === "alpha" ? "positive" : "non-negative"}; got ${value}.`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Stateful Predictive Discounted CFR+ (PDCFR+) trainer.
+ *
+ * This follows Xu et al. (IJCAI 2024): explicit regret is discounted before
+ * adding and clipping the current instantaneous regret. The next strategy uses
+ * a second, transient copy of that same instantaneous regret as a one-step
+ * prediction. The prediction affects the next strategy but is never folded
+ * into the explicit cumulative regret twice.
+ *
+ * We retain the paper authors' deterministic alternating update order. Each
+ * player contributes its current x^t strategy to the polynomial average
+ * immediately before that player's own regret update, matching the authors'
+ * reference implementation. Exact best-response exploitability must still be
+ * used to decide whether any poker result is accurate enough to publish; the
+ * paper reports that PDCFR+ is not uniformly faster than DCFR on large poker
+ * subgames.
+ */
+export class PredictiveDiscountedCFRPlusSolver<State, Action extends string> {
+  readonly #game: TabularZeroSumGame<State, Action>;
+  readonly #nodes = new Map<string, PredictiveInformationNode<Action>>();
+  readonly #parameters: Readonly<PredictiveDiscountedCFRPlusParameters>;
+  #iterations = 0;
+
+  constructor(
+    game: TabularZeroSumGame<State, Action>,
+    parameters: Partial<PredictiveDiscountedCFRPlusParameters> = {},
+  ) {
+    this.#game = game;
+    this.#parameters = Object.freeze({
+      alpha: pdcfrPlusParameter(
+        parameters.alpha ?? DEFAULT_PDCFR_PLUS_PARAMETERS.alpha,
+        "alpha",
+      ),
+      gamma: pdcfrPlusParameter(
+        parameters.gamma ?? DEFAULT_PDCFR_PLUS_PARAMETERS.gamma,
+        "gamma",
+      ),
+    });
+  }
+
+  get iterations(): number {
+    return this.#iterations;
+  }
+
+  get parameters(): Readonly<PredictiveDiscountedCFRPlusParameters> {
+    return this.#parameters;
+  }
+
+  run(
+    options: PredictiveDiscountedCFRPlusRunOptions,
+  ): PredictiveDiscountedCFRPlusResult<Action> {
+    validateIterations(options.iterations, "iterations");
+    for (let localIteration = 0; localIteration < options.iterations; localIteration += 1) {
+      const iteration = this.#iterations + 1;
+      const iterationWeight = iteration ** this.#parameters.gamma;
+      assertFinite(iterationWeight, "PDCFR+ average-strategy iteration weight");
+      // Equation 224 averages x^t. The authors' alternating implementation
+      // accumulates each player's current strategy before updating that same
+      // player's regret and next strategy.
+      this.#updatePlayer(0, iteration, 0, iterationWeight);
+      this.#updatePlayer(1, iteration, 1, iterationWeight);
+      this.#iterations = iteration;
+    }
+
+    const averageStrategy = this.averageStrategy();
+    return {
+      iterations: this.#iterations,
+      parameters: this.#parameters,
+      averageStrategy,
+      currentStrategy: this.currentStrategy(),
+      expectedValue: expectedValue(this.#game, averageStrategy),
+    };
+  }
+
+  averageStrategy(): CFRStrategyProfile<Action> {
+    return this.#exportStrategy(true);
+  }
+
+  currentStrategy(): CFRStrategyProfile<Action> {
+    return this.#exportStrategy(false);
+  }
+
+  #node(
+    player: CFRPlayer,
+    informationSet: string,
+    actions: readonly Action[],
+  ): PredictiveInformationNode<Action> {
+    if (actions.length === 0) {
+      throw new Error(`Information set "${informationSet}" has no legal actions.`);
+    }
+    const key = nodeKey(player, informationSet);
+    const existing = this.#nodes.get(key);
+    if (existing) {
+      assertSameOrderedActions(existing.actions, actions, informationSet);
+      return existing;
+    }
+    const node: PredictiveInformationNode<Action> = {
+      player,
+      informationSet,
+      actions: [...actions],
+      regrets: new Float64Array(actions.length),
+      predictedRegrets: new Float64Array(actions.length),
+      strategySum: new Float64Array(actions.length),
+    };
+    this.#nodes.set(key, node);
+    return node;
+  }
+
+  #updatePlayer(
+    traverser: CFRPlayer,
+    iteration: number,
+    averagePlayer: CFRPlayer,
+    iterationWeight: number,
+  ): void {
+    const strategySnapshot = new Map<string, readonly number[]>();
+    const regretDeltas = new Map<string, Float64Array>();
+    const averaged = new Set<string>();
+
+    const traverse = (
+      state: State,
+      reach: ReachProbabilities,
+      depth: number,
+    ): number => {
+      if (depth > DEFAULT_MAX_DEPTH) {
+        throw new Error(`Game tree exceeded maximum depth ${DEFAULT_MAX_DEPTH}.`);
+      }
+      const actor = this.#game.currentActor(state);
+      if (actor === "terminal") {
+        const utility0 = this.#game.terminalUtility(state);
+        assertFinite(utility0, "Terminal utility");
+        return traverser === 0 ? utility0 : -utility0;
+      }
+      if (actor === "chance") {
+        const outcomes = this.#game.chanceOutcomes(state);
+        validateChanceOutcomes(outcomes);
+        let value = 0;
+        for (const outcome of outcomes) {
+          value += outcome.probability * traverse(
+            this.#game.nextState(state, outcome.action),
+            { ...reach, chance: reach.chance * outcome.probability },
+            depth + 1,
+          );
+        }
+        return value;
+      }
+
+      const actions = this.#game.actions(state);
+      const informationSet = this.#game.informationSet(state, actor);
+      const node = this.#node(actor, informationSet, actions);
+      const key = nodeKey(actor, informationSet);
+      let strategy = strategySnapshot.get(key);
+      if (!strategy) {
+        strategy = regretMatching(node.predictedRegrets);
+        strategySnapshot.set(key, strategy);
+      }
+
+      if (actor === averagePlayer && !averaged.has(key)) {
+        averaged.add(key);
+        const weight = iterationWeight * playerReach(reach, actor);
+        for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
+          node.strategySum[actionIndex] += weight * strategy[actionIndex];
+        }
+      }
+
+      const actionValues = new Array<number>(actions.length);
+      let nodeValue = 0;
+      for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
+        const actionValue = traverse(
+          this.#game.nextState(state, actions[actionIndex]),
+          withPlayerReach(reach, actor, strategy[actionIndex]),
+          depth + 1,
+        );
+        actionValues[actionIndex] = actionValue;
+        nodeValue += strategy[actionIndex] * actionValue;
+      }
+
+      if (actor === traverser) {
+        const counterfactualReach =
+          reach.chance * (traverser === 0 ? reach.player1 : reach.player0);
+        let delta = regretDeltas.get(key);
+        if (!delta) {
+          delta = new Float64Array(actions.length);
+          regretDeltas.set(key, delta);
+        }
+        for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
+          delta[actionIndex] +=
+            counterfactualReach * (actionValues[actionIndex] - nodeValue);
+        }
+      }
+      return nodeValue;
+    };
+
+    traverse(
+      this.#game.initialState,
+      { player0: 1, player1: 1, chance: 1 },
+      0,
+    );
+
+    const previousDiscount = pdcfrPlusDiscount(iteration - 1, this.#parameters.alpha);
+    const predictionDiscount = pdcfrPlusDiscount(iteration, this.#parameters.alpha);
+    for (const [key, delta] of regretDeltas) {
+      const node = this.#nodes.get(key);
+      if (!node) throw new Error(`Missing PDCFR+ node for regret update "${key}".`);
+      for (let actionIndex = 0; actionIndex < delta.length; actionIndex += 1) {
+        const explicitRegret = Math.max(
+          0,
+          node.regrets[actionIndex] * previousDiscount + delta[actionIndex],
+        );
+        node.regrets[actionIndex] = explicitRegret;
+        node.predictedRegrets[actionIndex] = Math.max(
+          0,
+          explicitRegret * predictionDiscount + delta[actionIndex],
+        );
+      }
+    }
+  }
+
+  #exportStrategy(average: boolean): CFRStrategyProfile<Action> {
+    const players: [Map<string, CFRStrategyEntry<Action>>, Map<string, CFRStrategyEntry<Action>>] = [
+      new Map(),
+      new Map(),
+    ];
+    for (const node of this.#nodes.values()) {
+      let probabilities: number[];
+      if (average) {
+        const total = node.strategySum.reduce((sum, value) => sum + value, 0);
+        probabilities = total > 0
+          ? Array.from(node.strategySum, (value) => value / total)
+          : regretMatching(node.predictedRegrets);
+      } else {
+        probabilities = regretMatching(node.predictedRegrets);
+      }
+      players[node.player].set(node.informationSet, {
+        actions: [...node.actions],
+        probabilities,
+      });
+    }
+    return players;
+  }
+}
+
 /** Solve a game in one deterministic CFR+ run. */
 export function solveCFRPlus<State, Action extends string>(
   game: TabularZeroSumGame<State, Action>,
@@ -685,6 +978,15 @@ export function solveDiscountedCFR<State, Action extends string>(
   options: SolveDiscountedCFROptions,
 ): DiscountedCFRResult<Action> {
   const solver = new DiscountedCFRSolver(game, options);
+  return solver.run({ iterations: options.iterations });
+}
+
+/** Solve a game in one deterministic PDCFR+ run. */
+export function solvePredictiveDiscountedCFRPlus<State, Action extends string>(
+  game: TabularZeroSumGame<State, Action>,
+  options: SolvePredictiveDiscountedCFRPlusOptions,
+): PredictiveDiscountedCFRPlusResult<Action> {
+  const solver = new PredictiveDiscountedCFRPlusSolver(game, options);
   return solver.run({ iterations: options.iterations });
 }
 

@@ -33,7 +33,7 @@ export default async function MultiplayerPage() {
         </nav>
 
         <section className={styles.authCard}>
-          <p className={styles.eyebrow}>PRIVATE TABLES · 2–6 PLAYERS</p>
+          <p className={styles.eyebrow}>PRIVATE TABLES · 2–10 PLAYERS</p>
           <h1>先确认身份，再坐上牌桌</h1>
           <p className={styles.authLead}>
             多人牌局需要登录来保存昵称、筹码和房间身份。RangeCraft 不保存密码，也不会把你的邮箱展示给其他玩家。

@@ -1,7 +1,9 @@
 import {
   CFRPlusSolver,
   DEFAULT_DCFR_PARAMETERS,
+  DEFAULT_PDCFR_PLUS_PARAMETERS,
   DiscountedCFRSolver,
+  PredictiveDiscountedCFRPlusSolver,
   exactExploitability as exactSmallGameExploitability,
   expectedValue,
   solveCFRPlus,
@@ -9,6 +11,7 @@ import {
   type CFRStrategyEntry,
   type CFRStrategyProfile,
   type DiscountedCFRParameters,
+  type PredictiveDiscountedCFRPlusParameters,
   type TabularZeroSumGame,
 } from "./gto-cfr.ts";
 import {
@@ -111,7 +114,7 @@ export type HeadsUpRiverExploitability = Readonly<{
   exploitabilityPotFraction: number;
 }>;
 
-export type HeadsUpRiverSolverAlgorithm = "cfr+" | "dcfr";
+export type HeadsUpRiverSolverAlgorithm = "cfr+" | "dcfr" | "pdcfr+";
 
 export type HeadsUpRiverConvergenceCheckpoint = Readonly<{
   iterations: number;
@@ -132,17 +135,27 @@ export type HeadsUpRiverConvergence = Readonly<{
 }>;
 
 export type HeadsUpRiverSolution = Readonly<{
-  solverVersion: "rangecraft-cfr+/0.2.0" | "rangecraft-dcfr/0.2.0";
+  solverVersion:
+    | "rangecraft-cfr+/0.2.0"
+    | "rangecraft-dcfr/0.2.0"
+    | "rangecraft-pdcfr+/0.1.0";
   resultId: string;
   algorithm: HeadsUpRiverSolverAlgorithm;
   solverParameters: Readonly<{
     updateSchedule: "alternating-player-0-first";
-    regretUpdateOrder: "add-then-rm+-clip" | "add-then-sign-discount";
-    averagingSchedule: "alternating-staggered-linear" | "paper-polynomial";
+    regretUpdateOrder:
+      | "add-then-rm+-clip"
+      | "add-then-sign-discount"
+      | "discount-add-clip-then-predict";
+    averagingSchedule:
+      | "alternating-staggered-linear"
+      | "paper-polynomial"
+      | "alternating-paper-polynomial";
     numericPrecision: "float64";
     averagingDelay?: number;
     linearAveraging?: boolean;
     dcfr?: Readonly<DiscountedCFRParameters>;
+    pdcfrPlus?: Readonly<PredictiveDiscountedCFRPlusParameters>;
   }>;
   spotId: string;
   gameSpecId: string;
@@ -173,6 +186,12 @@ export type SolveHeadsUpRiverOptions =
     iterations: number;
     alpha?: number;
     beta?: number;
+    gamma?: number;
+  }>
+  | Readonly<{
+    algorithm: "pdcfr+";
+    iterations: number;
+    alpha?: number;
     gamma?: number;
   }>;
 
@@ -986,7 +1005,9 @@ function completeUniformRiverProfile(
 }
 
 function solverVersion(algorithm: HeadsUpRiverSolverAlgorithm): HeadsUpRiverSolution["solverVersion"] {
-  return algorithm === "dcfr" ? "rangecraft-dcfr/0.2.0" : "rangecraft-cfr+/0.2.0";
+  if (algorithm === "dcfr") return "rangecraft-dcfr/0.2.0";
+  if (algorithm === "pdcfr+") return "rangecraft-pdcfr+/0.1.0";
+  return "rangecraft-cfr+/0.2.0";
 }
 
 function buildHeadsUpRiverSolution(
@@ -1008,6 +1029,9 @@ function buildHeadsUpRiverSolution(
     ...solverParameters,
     ...(solverParameters.dcfr
       ? { dcfr: Object.freeze({ ...solverParameters.dcfr }) }
+      : {}),
+    ...(solverParameters.pdcfrPlus
+      ? { pdcfrPlus: Object.freeze({ ...solverParameters.pdcfrPlus }) }
       : {}),
   });
   const resultId = `rc-hu-river-result-v1-${stableGtoHash({
@@ -1079,6 +1103,42 @@ export function solveHeadsUpRiver(
         averagingSchedule: "paper-polynomial" as const,
         numericPrecision: "float64" as const,
         dcfr: solver.parameters,
+      }),
+      solved.iterations,
+      profile,
+      convergence,
+    );
+  }
+
+  if (algorithm === "pdcfr+") {
+    const solver = new PredictiveDiscountedCFRPlusSolver(model.game, options);
+    const solved = solver.run({ iterations: options.iterations });
+    const profile = solved.iterations === 0
+      ? completeUniformRiverProfile(model)
+      : solved.averageStrategy;
+    const exploitability = model.exploitability(profile);
+    const convergence = Object.freeze({
+      mode: "fixed" as const,
+      consecutiveTargetCheckpoints: 0,
+      trainedIterations: solved.iterations,
+      selectedIterations: solved.iterations,
+      stopReason: "fixed-iterations" as const,
+      checkpoints: Object.freeze([Object.freeze({
+        iterations: solved.iterations,
+        exploitabilityBb: exploitability.exploitabilityBb,
+        exploitabilityPotFraction: exploitability.exploitabilityPotFraction,
+        targetMet: false,
+      })]),
+    });
+    return buildHeadsUpRiverSolution(
+      model,
+      algorithm,
+      Object.freeze({
+        updateSchedule: "alternating-player-0-first" as const,
+        regretUpdateOrder: "discount-add-clip-then-predict" as const,
+        averagingSchedule: "alternating-paper-polynomial" as const,
+        numericPrecision: "float64" as const,
+        pdcfrPlus: solver.parameters,
       }),
       solved.iterations,
       profile,
@@ -1173,9 +1233,16 @@ export function solveHeadsUpRiverAdaptive(
     beta: options.beta ?? DEFAULT_DCFR_PARAMETERS.beta,
     gamma: options.gamma ?? DEFAULT_DCFR_PARAMETERS.gamma,
   });
+  const pdcfrPlusParameters = Object.freeze({
+    alpha: options.alpha ?? DEFAULT_PDCFR_PLUS_PARAMETERS.alpha,
+    gamma: options.gamma ?? DEFAULT_PDCFR_PLUS_PARAMETERS.gamma,
+  });
   const cfrPlusSolver = algorithm === "cfr+" ? new CFRPlusSolver(model.game) : null;
   const dcfrSolver = algorithm === "dcfr"
     ? new DiscountedCFRSolver(model.game, dcfrParameters)
+    : null;
+  const pdcfrPlusSolver = algorithm === "pdcfr+"
+    ? new PredictiveDiscountedCFRPlusSolver(model.game, pdcfrPlusParameters)
     : null;
   const checkpoints: HeadsUpRiverConvergenceCheckpoint[] = [];
   let trainedIterations = 0;
@@ -1196,7 +1263,9 @@ export function solveHeadsUpRiverAdaptive(
         averagingDelay,
         linearAveraging,
       })
-      : dcfrSolver!.run({ iterations: additionalIterations });
+      : dcfrSolver
+        ? dcfrSolver.run({ iterations: additionalIterations })
+        : pdcfrPlusSolver!.run({ iterations: additionalIterations });
     trainedIterations = solved.iterations;
     const audit = model.exploitability(solved.averageStrategy);
     const profileIsAveraged = algorithm !== "cfr+"
@@ -1246,6 +1315,14 @@ export function solveHeadsUpRiverAdaptive(
         numericPrecision: "float64" as const,
         dcfr: dcfrSolver!.parameters,
       })
+      : algorithm === "pdcfr+"
+        ? Object.freeze({
+          updateSchedule: "alternating-player-0-first" as const,
+          regretUpdateOrder: "discount-add-clip-then-predict" as const,
+          averagingSchedule: "alternating-paper-polynomial" as const,
+          numericPrecision: "float64" as const,
+          pdcfrPlus: pdcfrPlusSolver!.parameters,
+        })
       : Object.freeze({
         updateSchedule: "alternating-player-0-first" as const,
         regretUpdateOrder: "add-then-rm+-clip" as const,
