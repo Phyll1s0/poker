@@ -21,6 +21,7 @@ import {
   multiplayerAudioTransition,
   type MultiplayerAudioFrame,
 } from "../../lib/multiplayer-audio-events";
+import { multiplayerReactionAudioCues } from "../../lib/multiplayer-reaction-audio";
 import {
   analyzeMultiplayerDecision,
   type MultiplayerAiAnalysis,
@@ -28,6 +29,7 @@ import {
 import { formatPokerFrequency } from "../../lib/poker-frequency";
 import {
   isPokerAudioEnabled,
+  playPokerReactionSound,
   playPokerSound,
   setPokerAudioEnabled,
   unlockPokerAudio,
@@ -36,9 +38,9 @@ import { orderFiveCardHandForDisplay } from "../../lib/poker-evaluator";
 import {
   MULTIPLAYER_CHAT_MAX_LENGTH,
   MULTIPLAYER_CHAT_REACTION_CATALOG,
-  compareMultiplayerChatMessageIds,
   getMultiplayerChatReaction,
   mergeMultiplayerChatMessages,
+  multiplayerChatPollWindow,
   type MultiplayerChatKind,
   type MultiplayerChatMessage,
   type MultiplayerChatReaction,
@@ -1275,7 +1277,7 @@ function ChatDock({
             <span>QUICK REACTIONS</span>
             <strong id="quick-reaction-title">快捷表情</strong>
           </div>
-          <small>发送后会在座位旁显示 5 秒</small>
+          <small>座位旁显示 5 秒 · 轻提示音跟随音效开关</small>
         </header>
         <div className={styles.quickReactions} aria-label="快捷表情">
           {MULTIPLAYER_CHAT_REACTION_CATALOG.map((reaction, index) => (
@@ -1746,6 +1748,9 @@ export default function MultiplayerClient({
   const chatOpenRef = useRef(false);
   const chatRoomIdRef = useRef<string | null>(null);
   const chatCursorRef = useRef<string | null>(null);
+  const chatHydratedRef = useRef(false);
+  const playedReactionIdsRef = useRef<Set<string>>(new Set());
+  const pendingLocalReactionRef = useRef(false);
   const chatSendingRef = useRef(false);
   const chatPinnedRef = useRef(true);
   const viewerSeatRef = useRef<number | null>(null);
@@ -1833,6 +1838,9 @@ export default function MultiplayerClient({
     lastAudioFrame.current = null;
     chatRoomIdRef.current = null;
     chatCursorRef.current = null;
+    chatHydratedRef.current = false;
+    playedReactionIdsRef.current.clear();
+    pendingLocalReactionRef.current = false;
     chatOpenRef.current = false;
     chatSendingRef.current = false;
     chatPinnedRef.current = true;
@@ -1866,26 +1874,69 @@ export default function MultiplayerClient({
     return () => window.clearTimeout(timeout);
   }, [holeDeal]);
 
-  const mergeRoomMessages = useCallback((roomId: string, incoming: MultiplayerChatMessage[]) => {
+  const mergeRoomMessages = useCallback((
+    roomId: string,
+    incoming: MultiplayerChatMessage[],
+    source: "poll" | "confirmed-local" = "poll",
+  ) => {
     if (viewedRoomId.current !== roomId || leavingRef.current) return;
     const roomChanged = chatRoomIdRef.current !== roomId;
-    const previousCursor = roomChanged ? null : chatCursorRef.current;
-    const freshMessages = previousCursor === null
-      ? []
-      : incoming.filter((message) => compareMultiplayerChatMessageIds(message.id, previousCursor) > 0);
-    const unreadMessages = freshMessages.filter((message) => message.seat !== viewerSeatRef.current);
-    const newestIncoming = incoming.at(-1)?.id ?? null;
 
     if (roomChanged) {
       chatRoomIdRef.current = roomId;
       chatCursorRef.current = null;
+      chatHydratedRef.current = false;
+      playedReactionIdsRef.current.clear();
       setUnreadChatCount(0);
     }
-    if (
-      newestIncoming
-      && (chatCursorRef.current === null || compareMultiplayerChatMessageIds(newestIncoming, chatCursorRef.current) > 0)
-    ) {
-      chatCursorRef.current = newestIncoming;
+
+    const pollWindow = source === "poll"
+      ? multiplayerChatPollWindow(
+          chatCursorRef.current,
+          chatHydratedRef.current,
+          incoming,
+        )
+      : null;
+    const unreadMessages = pollWindow?.freshMessages.filter(
+      (message) => message.seat !== viewerSeatRef.current,
+    ) ?? [];
+    const pendingOwnReaction = (message: MultiplayerChatMessage) => (
+      pendingLocalReactionRef.current
+      && message.seat === viewerSeatRef.current
+      && message.kind === "reaction"
+    );
+    const reactionCues = source === "confirmed-local"
+      ? multiplayerReactionAudioCues("0", incoming)
+      : pollWindow?.initialHydration
+        ? []
+        : multiplayerReactionAudioCues(pollWindow?.previousCursor ?? null, incoming);
+    const unplayedCues = reactionCues.filter((cue) => {
+      if (playedReactionIdsRef.current.has(cue.messageId)) return false;
+      const message = incoming.find((entry) => entry.id === cue.messageId);
+      return !message || !pendingOwnReaction(message) || source === "confirmed-local";
+    });
+
+    if (pollWindow?.initialHydration) {
+      incoming.forEach((message) => {
+        if (
+          message.kind === "reaction"
+          && getMultiplayerChatReaction(message.content)
+          && !pendingOwnReaction(message)
+        ) {
+          playedReactionIdsRef.current.add(message.id);
+        }
+      });
+    }
+    unplayedCues.forEach((cue) => playedReactionIdsRef.current.add(cue.messageId));
+    while (playedReactionIdsRef.current.size > 100) {
+      const oldestId = playedReactionIdsRef.current.values().next().value;
+      if (typeof oldestId !== "string") break;
+      playedReactionIdsRef.current.delete(oldestId);
+    }
+
+    if (pollWindow) {
+      chatCursorRef.current = pollWindow.nextCursor;
+      chatHydratedRef.current = true;
     }
     setChatMessages((current) => mergeMultiplayerChatMessages(roomChanged ? [] : current, incoming));
     if (
@@ -1894,6 +1945,20 @@ export default function MultiplayerClient({
       && unreadMessages.length > 0
     ) {
       setUnreadChatCount((current) => Math.min(99, current + unreadMessages.length));
+    }
+    if (soundOnRef.current && unplayedCues.length) {
+      void unlockPokerAudio().then((ready) => {
+        if (
+          !ready
+          || !soundOnRef.current
+          || leavingRef.current
+          || viewedRoomId.current !== roomId
+        ) return;
+        const resumedAt = Date.now();
+        unplayedCues
+          .filter((cue) => resumedAt + cue.delaySeconds * 1_000 <= cue.expiresAt)
+          .forEach((cue) => playPokerReactionSound(cue.tone, cue.delaySeconds));
+      }).catch(() => undefined);
     }
   }, []);
 
@@ -1943,6 +2008,9 @@ export default function MultiplayerClient({
       leavingRef.current = false;
       chatRoomIdRef.current = roomId;
       chatCursorRef.current = null;
+      chatHydratedRef.current = false;
+      playedReactionIdsRef.current.clear();
+      pendingLocalReactionRef.current = false;
       chatOpenRef.current = false;
       chatSendingRef.current = false;
       chatPinnedRef.current = true;
@@ -2166,6 +2234,7 @@ export default function MultiplayerClient({
       && !leavingRef.current
     );
     chatSendingRef.current = true;
+    pendingLocalReactionRef.current = kind === "reaction";
     setChatSending(true);
     setChatError(null);
     try {
@@ -2176,7 +2245,7 @@ export default function MultiplayerClient({
         content,
       });
       if (viewIsCurrent()) {
-        mergeRoomMessages(roomId, [body.message]);
+        mergeRoomMessages(roomId, [body.message], "confirmed-local");
       }
       return viewIsCurrent();
     } catch (reason) {
@@ -2187,6 +2256,7 @@ export default function MultiplayerClient({
     } finally {
       if (viewIsCurrent()) {
         chatSendingRef.current = false;
+        pendingLocalReactionRef.current = false;
         setChatSending(false);
       }
     }
@@ -2201,6 +2271,7 @@ export default function MultiplayerClient({
   }, [chatDraft, sendChatContent]);
 
   const sendChatReaction = useCallback(async (reaction: MultiplayerChatReaction) => {
+    if (soundOnRef.current) void unlockPokerAudio().catch(() => undefined);
     await sendChatContent("reaction", reaction);
   }, [sendChatContent]);
 

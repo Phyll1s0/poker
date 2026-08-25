@@ -1,3 +1,5 @@
+import type { MultiplayerChatReactionTone } from "./multiplayer-chat.ts";
+
 export type PokerSound = "check" | "call" | "raise" | "fold" | "deal" | "win";
 
 let audioContext: AudioContext | null = null;
@@ -140,5 +142,37 @@ export function playPokerSound(sound: PokerSound, delaySeconds = 0) {
   } else if (sound === "win") {
     [523, 659, 784].forEach((frequency, index) => tone(context, at + index * 0.09, frequency, frequency * 0.98, 0.22, 0.2, "sine"));
     [0.03, 0.08, 0.14, 0.2].forEach((offset, index) => chipClick(context, at + offset, 0.32 - index * 0.035));
+  }
+}
+
+/** Short, low-volume table-talk cues that share the main poker sound toggle. */
+export function playPokerReactionSound(
+  reactionTone: MultiplayerChatReactionTone,
+  delaySeconds = 0,
+) {
+  if (!pokerAudioEnabled) return;
+  const context = getAudioContext();
+  if (!context || context.state !== "running") return;
+  const at = context.currentTime + Math.max(0, delaySeconds);
+
+  if (reactionTone === "praise") {
+    tone(context, at, 392, 392, 0.16, 0.1, "sine");
+    tone(context, at + 0.085, 523, 520, 0.18, 0.11, "sine");
+  } else if (reactionTone === "lucky") {
+    [523, 659, 784].forEach((frequency, index) => {
+      tone(context, at + index * 0.055, frequency, frequency * 1.015, 0.12, 0.085, "triangle");
+    });
+  } else if (reactionTone === "frustrated") {
+    tone(context, at, 330, 235, 0.22, 0.09, "triangle");
+    tone(context, at + 0.075, 247, 185, 0.2, 0.055, "sine");
+  } else if (reactionTone === "taunt") {
+    tone(context, at, 165, 138, 0.1, 0.1, "triangle");
+    tone(context, at + 0.13, 185, 150, 0.11, 0.085, "triangle");
+  } else if (reactionTone === "surprised") {
+    tone(context, at, 360, 720, 0.15, 0.09, "sine");
+    tone(context, at + 0.075, 620, 830, 0.13, 0.065, "triangle");
+  } else {
+    woodenKnock(context, at, 0.14);
+    tone(context, at + 0.12, 235, 205, 0.11, 0.055, "sine");
   }
 }

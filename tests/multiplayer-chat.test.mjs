@@ -9,6 +9,7 @@ import {
   compareMultiplayerChatMessageIds,
   getMultiplayerChatReaction,
   mergeMultiplayerChatMessages,
+  multiplayerChatPollWindow,
   normalizeMultiplayerChatMessage,
 } from "../lib/multiplayer-chat.ts";
 
@@ -92,6 +93,28 @@ test("message merging is decimal-id ordered, idempotent, and bounded", () => {
   assert.equal(new Set(merged.map((entry) => entry.id)).size, merged.length);
 });
 
+test("only poll responses advance the high-water cursor, preserving interleaved remote messages", () => {
+  const initial = multiplayerChatPollWindow(null, false, [message(10)]);
+  assert.deepEqual(initial, {
+    previousCursor: null,
+    nextCursor: "10",
+    freshMessages: [],
+    initialHydration: true,
+  });
+
+  // A send-message response for local id 12 is merged optimistically by the
+  // client, but deliberately never enters this poll-only transition. The next
+  // poll can therefore still deliver remote id 11 as well as local id 12.
+  const nextPoll = multiplayerChatPollWindow(initial.nextCursor, true, [message(12), message(11)]);
+  assert.equal(nextPoll.previousCursor, "10");
+  assert.equal(nextPoll.nextCursor, "12");
+  assert.deepEqual(nextPoll.freshMessages.map(({ id }) => id), ["12", "11"]);
+
+  const repeat = multiplayerChatPollWindow(nextPoll.nextCursor, true, [message(11), message(12)]);
+  assert.equal(repeat.nextCursor, "12");
+  assert.deepEqual(repeat.freshMessages, []);
+});
+
 test("hosted chat is isolated from poker revision and protects server-owned identity", async () => {
   const [edge, migration, client, adapter] = await Promise.all([
     readFile(new URL("../supabase/functions/poker-api/index.ts", import.meta.url), "utf8"),
@@ -118,11 +141,20 @@ test("hosted chat is isolated from poker revision and protects server-owned iden
   assert.match(migration, /order by stale\.id desc[\s\S]*?offset 200/i);
   assert.match(client, /role="log"/);
   assert.match(client, /MULTIPLAYER_CHAT_REACTION_CATALOG\.map/);
+  assert.match(client, /轻提示音跟随音效开关/);
   assert.match(client, /getMultiplayerChatReaction/);
   assert.match(client, /tableMessage\.kind === "reaction"[\s\S]*?<ReactionContent/);
   assert.match(client, /message\.kind === "reaction"[\s\S]*?<ReactionContent/);
   assert.match(client, /document\.visibilityState === "hidden"/);
   assert.match(client, /chatSendingRef/);
+  assert.match(client, /chatHydratedRef/);
+  assert.match(client, /playedReactionIdsRef/);
+  assert.match(client, /multiplayerChatPollWindow/);
+  assert.match(client, /multiplayerReactionAudioCues/);
+  assert.match(client, /mergeRoomMessages\(roomId, \[body\.message\], "confirmed-local"\)/);
+  assert.match(client, /resumedAt \+ cue\.delaySeconds \* 1_000 <= cue\.expiresAt/);
+  assert.match(client, /\.forEach\(\(cue\) => playPokerReactionSound\(cue\.tone, cue\.delaySeconds\)\)/);
+  assert.match(client, /viewedRoomId\.current !== roomId/);
   assert.match(adapter, /action: "room-messages"/);
   assert.match(adapter, /action: "send-message"/);
 });

@@ -112,6 +112,47 @@ export function compareMultiplayerChatMessageIds(left: string, right: string): n
   return normalizedLeft.localeCompare(normalizedRight);
 }
 
+export type MultiplayerChatPollWindow = Readonly<{
+  previousCursor: string | null;
+  nextCursor: string | null;
+  freshMessages: readonly MultiplayerChatMessage[];
+  initialHydration: boolean;
+}>;
+
+/**
+ * Computes the high-water mark for a server poll. Send-message responses must
+ * never pass through this helper: only a poll is allowed to advance the poll
+ * cursor, otherwise an out-of-order local response can skip a remote message.
+ */
+export function multiplayerChatPollWindow(
+  currentCursor: string | null,
+  hydrated: boolean,
+  incoming: readonly MultiplayerChatMessage[],
+): MultiplayerChatPollWindow {
+  const previousCursor = hydrated ? currentCursor ?? "0" : null;
+  const freshMessages = previousCursor === null
+    ? []
+    : incoming.filter((message) => (
+        compareMultiplayerChatMessageIds(message.id, previousCursor) > 0
+      ));
+  const newestIncoming = incoming.reduce<string | null>((newest, message) => (
+    newest === null || compareMultiplayerChatMessageIds(message.id, newest) > 0
+      ? message.id
+      : newest
+  ), null);
+  const nextCursor = newestIncoming !== null
+    && (currentCursor === null || compareMultiplayerChatMessageIds(newestIncoming, currentCursor) > 0)
+    ? newestIncoming
+    : currentCursor;
+
+  return Object.freeze({
+    previousCursor,
+    nextCursor,
+    freshMessages: Object.freeze(freshMessages),
+    initialHydration: !hydrated,
+  });
+}
+
 export function mergeMultiplayerChatMessages(
   current: readonly MultiplayerChatMessage[],
   incoming: readonly MultiplayerChatMessage[],

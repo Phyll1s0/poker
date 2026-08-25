@@ -332,6 +332,13 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /multiplayerAudioTransition\(lastAudioFrame\.current, nextAudioFrame\)/);
   assert.match(multiplayerClient, /lastAudioFrame\.current = nextAudioFrame/);
   assert.match(multiplayerClient, /audioCues\.forEach\(\(cue\) => playPokerSound\(cue\.sound, cue\.delaySeconds\)\)/);
+  assert.match(multiplayerClient, /playPokerReactionSound\(cue\.tone, cue\.delaySeconds\)/);
+  assert.match(pokerAudio, /export function playPokerReactionSound/);
+  assert.match(pokerAudio, /reactionTone === "praise"/);
+  assert.match(pokerAudio, /reactionTone === "lucky"/);
+  assert.match(pokerAudio, /reactionTone === "frustrated"/);
+  assert.match(pokerAudio, /reactionTone === "taunt"/);
+  assert.match(pokerAudio, /reactionTone === "surprised"/);
   assert.match(multiplayerClient, /setPokerAudioEnabled\(next\)/);
   assert.match(multiplayerClient, /styles\.navSoundToggle/);
   assert.match(multiplayerClient, /aria-label=\{soundOn \? "关闭牌桌音效" : "开启牌桌音效"\}/);
