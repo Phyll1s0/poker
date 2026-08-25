@@ -2623,7 +2623,7 @@ export default function MultiplayerClient({
   ]);
 
   useEffect(() => {
-    if (!isMyTurn || !game || busy) return;
+    if (!isMyTurn || !game || busy || rulesOpen) return;
     const handleTableShortcut = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (event.repeat || target?.closest("input, select, textarea, button, [contenteditable='true']")) return;
@@ -2641,7 +2641,7 @@ export default function MultiplayerClient({
     };
     window.addEventListener("keydown", handleTableShortcut);
     return () => window.removeEventListener("keydown", handleTableShortcut);
-  }, [busy, canRaise, game, isMyTurn, legal?.fold, passiveAction, raiseIsValid, raiseTo, sendCommand]);
+  }, [busy, canRaise, game, isMyTurn, legal?.fold, passiveAction, raiseIsValid, raiseTo, rulesOpen, sendCommand]);
 
   const pendingShowPlayer = pendingShowSeat === null
     ? null

@@ -3040,7 +3040,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (historyOpen) return;
+      if (historyOpen || rulesOpen) return;
       const targetTag = (event.target as HTMLElement)?.tagName;
       if (targetTag === "INPUT" || targetTag === "SELECT") return;
       const key = event.key.toLowerCase();
@@ -3057,7 +3057,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [game, dealing, isHumanTurn, toCall, raiseDisabled, handleAction, startNextHand, mode, historyOpen]);
+  }, [game, dealing, isHumanTurn, toCall, raiseDisabled, handleAction, startNextHand, mode, historyOpen, rulesOpen]);
 
   if (!game || !human) {
     return (
