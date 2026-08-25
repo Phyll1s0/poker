@@ -102,6 +102,15 @@ type AppendRoomMessageResult = {
   conflict?: unknown;
 };
 
+type ReadMemberRoomResult = {
+  rateLimited?: unknown;
+  room?: unknown;
+};
+
+type PollMemberRoomResult = ReadMemberRoomResult & {
+  unchanged?: unknown;
+};
+
 type ClientCard = {
   rank: string;
   suit: "♠" | "♥" | "♦" | "♣";
@@ -169,6 +178,10 @@ function corsHeaders(request: Request): HeadersInit {
 
 function jsonResponse(request: Request, body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders(request) });
+}
+
+function emptyResponse(request: Request): Response {
+  return new Response(null, { status: 204, headers: corsHeaders(request) });
 }
 
 function fail(request: Request, error: unknown): Response {
@@ -580,6 +593,58 @@ async function memberRoom(roomId: string, guestId: string): Promise<RoomRow> {
   return data as RoomRow;
 }
 
+async function rateLimitedMemberRoom(
+  roomId: string,
+  guestId: string,
+  rateKey: string,
+  limit: number,
+  windowSeconds: number,
+): Promise<RoomRow> {
+  if (!UUID_PATTERN.test(roomId)) throw new ApiError(404, "ROOM_NOT_FOUND", "没有找到这个房间。");
+  const { data, error } = await database.rpc("poker_read_member_room", {
+    p_room_id: roomId,
+    p_guest_id: guestId,
+    p_rate_key: rateKey,
+    p_rate_limit: limit,
+    p_rate_window_seconds: windowSeconds,
+  });
+  if (error) databaseFailure(error, "无法读取牌桌。");
+  const result = (data ?? {}) as ReadMemberRoomResult;
+  if (result.rateLimited === true) {
+    throw new ApiError(429, "RATE_LIMITED", "操作太频繁，请稍后再试。");
+  }
+  if (!result.room || typeof result.room !== "object" || Array.isArray(result.room)) {
+    throw new ApiError(404, "ROOM_NOT_FOUND", "没有找到这个房间。");
+  }
+  return result.room as RoomRow;
+}
+
+async function rateLimitedRoomPoll(
+  roomId: string,
+  guestId: string,
+  afterRevision: number | null,
+): Promise<RoomRow | null> {
+  if (!UUID_PATTERN.test(roomId)) throw new ApiError(404, "ROOM_NOT_FOUND", "没有找到这个房间。");
+  const { data, error } = await database.rpc("poker_poll_member_room", {
+    p_room_id: roomId,
+    p_guest_id: guestId,
+    p_rate_key: `state:${guestId}`,
+    p_rate_limit: 360,
+    p_rate_window_seconds: 60,
+    p_after_revision: afterRevision,
+  });
+  if (error) databaseFailure(error, "无法读取牌桌。");
+  const result = (data ?? {}) as PollMemberRoomResult;
+  if (result.rateLimited === true) {
+    throw new ApiError(429, "RATE_LIMITED", "操作太频繁，请稍后再试。");
+  }
+  if (result.unchanged === true) return null;
+  if (!result.room || typeof result.room !== "object" || Array.isArray(result.room)) {
+    throw new ApiError(404, "ROOM_NOT_FOUND", "没有找到这个房间。");
+  }
+  return result.room as RoomRow;
+}
+
 function publicRoomMessage(row: RoomMessageRow): MultiplayerChatMessage {
   const createdAt = Date.parse(row.created_at);
   if (
@@ -883,8 +948,7 @@ function engineStatus(code: OnlinePokerErrorCode): number {
 async function applyCommand(guest: GuestRow, payload: JsonObject) {
   const roomId = requiredString(payload.roomId, "roomId", 64);
   const command = parseCommand(payload);
-  await consumeRateLimit(`command:${guest.id}`, 240, 60);
-  const room = await memberRoom(roomId, guest.id);
+  const room = await rateLimitedMemberRoom(roomId, guest.id, `command:${guest.id}`, 240, 60);
   const state = room.state as OnlineRoomState;
   const actor: OnlineActor = { accountId: guest.id, displayName: guest.handle };
   const result = applyOnlinePokerCommand(state, actor, command);
@@ -941,8 +1005,20 @@ Deno.serve(async (request: Request) => {
     if (action === "create-room") return jsonResponse(request, { room: await createRoom(guest, payload) }, 201);
     if (action === "join-room") return jsonResponse(request, { room: await joinRoom(guest, payload) });
     if (action === "room-state") {
-      await consumeRateLimit(`state:${guest.id}`, 180, 60);
-      const room = await memberRoom(requiredString(payload.roomId, "roomId", 64), guest.id);
+      const roomId = requiredString(payload.roomId, "roomId", 64);
+      let afterRevision: number | null = null;
+      if (payload.afterRevision !== undefined) {
+        if (
+          typeof payload.afterRevision !== "number"
+          || !Number.isSafeInteger(payload.afterRevision)
+          || payload.afterRevision < 0
+        ) {
+          throw new ApiError(400, "INVALID_REVISION", "afterRevision 必须是非负整数。");
+        }
+        afterRevision = payload.afterRevision;
+      }
+      const room = await rateLimitedRoomPoll(roomId, guest.id, afterRevision);
+      if (!room) return emptyResponse(request);
       return jsonResponse(request, makeSnapshot(room, room.state as OnlineRoomState, guest.id));
     }
     if (action === "room-messages") {

@@ -53,6 +53,11 @@ import {
   type MultiplayerChatReactionTone,
   type MultiplayerChatSnapshot,
 } from "../../lib/multiplayer-chat";
+import {
+  multiplayerRoomPollDelay,
+  multiplayerRoomPollWait,
+  withMultiplayerRoomRequestTimeout,
+} from "../../lib/multiplayer-sync";
 import { PokerRulesModal } from "../PokerRulesModal";
 import styles from "./multiplayer.module.css";
 
@@ -339,6 +344,7 @@ function apiErrorMessage(body: ApiErrorBody, fallback: string) {
 }
 
 async function readJson<T>(response: Response): Promise<T> {
+  if (response.status === 204) return null as T;
   const body = (await response.json().catch(() => ({}))) as T & ApiErrorBody;
   if (!response.ok) {
     throw new Error(apiErrorMessage(body, `请求失败（${response.status}）`));
@@ -387,7 +393,10 @@ const legacyRequest: MultiplayerRequest = async <T,>(
     method = "POST";
     body = payload;
   } else if (operation === "getRoom") {
-    url = `/api/rooms/${encodeURIComponent(String(payload.roomId ?? ""))}/state`;
+    const afterRevision = Number.isSafeInteger(payload.afterRevision) && Number(payload.afterRevision) >= 0
+      ? `?after=${encodeURIComponent(String(payload.afterRevision))}`
+      : "";
+    url = `/api/rooms/${encodeURIComponent(String(payload.roomId ?? ""))}/state${afterRevision}`;
   } else if (operation === "getMessages") {
     const roomId = encodeURIComponent(String(payload.roomId ?? ""));
     const after = typeof payload.afterMessageId === "string" && payload.afterMessageId
@@ -403,7 +412,7 @@ const legacyRequest: MultiplayerRequest = async <T,>(
     method = "POST";
     body = payload.command as Record<string, unknown>;
   }
-  return readJson<T>(await fetch(url, {
+  const fetchRequest = (signal?: AbortSignal) => fetch(url, {
     method,
     cache: "no-store",
     headers: {
@@ -411,7 +420,12 @@ const legacyRequest: MultiplayerRequest = async <T,>(
       ...(body ? { "content-type": "application/json" } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
-  }));
+    ...(signal ? { signal } : {}),
+  });
+  const response = operation === "getRoom"
+    ? await withMultiplayerRoomRequestTimeout((signal) => fetchRequest(signal))
+    : await fetchRequest();
+  return readJson<T>(response);
 };
 
 function CardView({
@@ -1823,6 +1837,8 @@ export default function MultiplayerClient({
   const viewerSeatRef = useRef<number | null>(null);
   const aiAssistBusyRef = useRef(false);
   const aiAssistButtonRef = useRef<HTMLButtonElement | null>(null);
+  const roomRefreshInFlightRef = useRef(false);
+  const roomRefreshPendingRef = useRef(false);
 
   const acceptSnapshot = useCallback((next: RoomSnapshot) => {
     viewerSeatRef.current = next.table.viewerSeat;
@@ -2118,7 +2134,13 @@ export default function MultiplayerClient({
     }
     const generation = roomViewGeneration.current;
     try {
-      const next = await request<RoomSnapshot>("getRoom", { roomId });
+      const next = await request<RoomSnapshot | null>("getRoom", {
+        roomId,
+        ...(quiet && latestRevision.current >= 0
+          ? { afterRevision: latestRevision.current }
+          : {}),
+      });
+      if (!next) return;
       if (
         generation !== roomViewGeneration.current
         || viewedRoomId.current !== roomId
@@ -2131,6 +2153,28 @@ export default function MultiplayerClient({
       if (!quiet) setError(reason instanceof Error ? reason.message : "无法读取牌桌。请稍后重试。");
     }
   }, [acceptSnapshot, request]);
+
+  const refreshRoom = useCallback(async (roomId: string) => {
+    if (viewedRoomId.current !== roomId || leavingRef.current) return;
+    if (roomRefreshInFlightRef.current) {
+      roomRefreshPendingRef.current = true;
+      return;
+    }
+
+    roomRefreshInFlightRef.current = true;
+    try {
+      do {
+        roomRefreshPendingRef.current = false;
+        await loadRoom(roomId, true);
+      } while (
+        roomRefreshPendingRef.current
+        && viewedRoomId.current === roomId
+        && !leavingRef.current
+      );
+    } finally {
+      roomRefreshInFlightRef.current = false;
+    }
+  }, [loadRoom]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadAccount(), 0);
@@ -2153,18 +2197,51 @@ export default function MultiplayerClient({
   useEffect(() => {
     if (!snapshot?.room.id) return;
     const roomId = snapshot.room.id;
+    const handActive = snapshot.room.status === "playing";
     let cancelled = false;
     let timer: number | null = null;
-    const poll = async () => {
-      await loadRoom(roomId, true);
-      if (!cancelled) timer = window.setTimeout(() => void poll(), 1200);
+    const schedule = (requestElapsedMs = 0) => {
+      if (cancelled) return;
+      if (timer !== null) window.clearTimeout(timer);
+      const visible = document.visibilityState === "visible";
+      const wait = multiplayerRoomPollWait({
+        visible,
+        realtimeConnected: false,
+        handActive,
+        requestElapsedMs,
+      });
+      timer = window.setTimeout(() => void poll(), wait);
     };
-    timer = window.setTimeout(() => void poll(), 1200);
+    const poll = async () => {
+      if (cancelled) return;
+      if (document.visibilityState !== "visible") {
+        schedule();
+        return;
+      }
+      const startedAt = performance.now();
+      await refreshRoom(roomId);
+      schedule(performance.now() - startedAt);
+    };
+    const handleVisibility = () => {
+      if (timer !== null) window.clearTimeout(timer);
+      if (document.visibilityState === "visible") {
+        void poll();
+      } else {
+        schedule();
+      }
+    };
+
+    timer = window.setTimeout(
+      () => void poll(),
+      multiplayerRoomPollDelay({ visible: true, realtimeConnected: false, handActive }),
+    );
+    document.addEventListener("visibilitychange", handleVisibility);
     return () => {
       cancelled = true;
       if (timer !== null) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [loadRoom, snapshot?.room.id]);
+  }, [refreshRoom, snapshot?.room.id, snapshot?.room.status]);
 
   useEffect(() => {
     const roomId = snapshot?.room.id;

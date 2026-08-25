@@ -2,8 +2,9 @@ import MultiplayerClient, {
   type MultiplayerOperation,
   type MultiplayerRequest,
 } from "../app/multiplayer/MultiplayerClient";
+import { withMultiplayerRoomRequestTimeout } from "../lib/multiplayer-sync";
 
-const API_URL = "https://mnzkqcccrdfathidprfm.supabase.co/functions/v1/poker-api";
+const API_URL = "https://mnzkqcccrdfathidprfm.supabase.co/functions/v1/poker-api?forceFunctionRegion=ap-southeast-2";
 const TOKEN_KEY = "rangecraft.multiplayer.guest-token.v1";
 
 type ApiErrorBody = {
@@ -68,17 +69,22 @@ const request: MultiplayerRequest = async <T,>(
 
   let response: Response;
   try {
-    response = await fetch(API_URL, {
+    const fetchRequest = (signal?: AbortSignal) => fetch(API_URL, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(token ? { authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(edgeAction(operation, payload)),
+      ...(signal ? { signal } : {}),
     });
+    response = operation === "getRoom"
+      ? await withMultiplayerRoomRequestTimeout((signal) => fetchRequest(signal))
+      : await fetchRequest();
   } catch {
     throw new Error("无法连接在线牌桌服务。若已开启代理，请将 *.supabase.co 设为直连后重试。");
   }
+  if (response.status === 204) return null as T;
   const body = (await response.json().catch(() => ({}))) as T & ApiErrorBody & { token?: string };
   if (!response.ok) {
     if (response.status === 401) clearToken();
