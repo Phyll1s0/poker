@@ -12,6 +12,8 @@ export const ONLINE_DEFAULT_TIME_BANK_MS = 100_000;
 export const ONLINE_MAX_TIME_BANK_MS = 600_000;
 export const ONLINE_AI_ASSIST_LIMITS = [0, 5, 10] as const;
 export const ONLINE_DEFAULT_AI_ASSIST_LIMIT = 5;
+/** A successful AI assist extends the current server-authoritative turn. */
+export const ONLINE_AI_ASSIST_TIME_BONUS_MS = 10_000;
 /** Bounded replay window so a long-running room cannot grow state forever. */
 export const ONLINE_COMMAND_RECEIPT_LIMIT = 2_048;
 /** Enough public action history for clients that briefly miss several polls. */
@@ -80,6 +82,8 @@ export type OnlineHandPlayerState = {
   preflopRaised: boolean;
   sawFlop: boolean;
   wentAllIn: boolean;
+  /** Server-private guard: one paid AI assist per action sequence. */
+  lastAiAssistActionSeq: number | null;
 };
 
 type OnlineFullRaiseRecord = {
@@ -523,6 +527,7 @@ export type OnlinePublicRoomState = {
   actionTimeMs: number;
   initialTimeBankMs: number;
   aiAssistLimit: OnlineAiAssistLimit;
+  aiAssistTimeBonusMs: number;
   timeBankUnitMs: number;
   viewerSeat: number | null;
   seats: OnlinePublicSeat[];
@@ -992,6 +997,12 @@ function normalizeStoredRoom(room: OnlineRoomState): void {
     player.preflopRaised = player.preflopRaised === true;
     player.sawFlop = player.sawFlop === true;
     player.wentAllIn = player.wentAllIn === true;
+    player.lastAiAssistActionSeq = typeof player.lastAiAssistActionSeq === "number"
+      && Number.isInteger(player.lastAiAssistActionSeq)
+      && player.lastAiAssistActionSeq >= 0
+      && player.lastAiAssistActionSeq <= room.hand!.actionSeq
+      ? player.lastAiAssistActionSeq
+      : null;
   });
   if (bootstrapActiveLegacyHand && room.hand && !room.hand.result) {
     room.hand.players.forEach((player) => {
@@ -1483,6 +1494,7 @@ function beginHand(room: OnlineRoomState, options: OnlineEngineOptions): void {
       preflopRaised: false,
       sawFlop: false,
       wentAllIn: false,
+      lastAiAssistActionSeq: null,
     };
   });
 
@@ -2453,9 +2465,17 @@ export function applyOnlinePokerCommand(
       return fail(room, "AI_ASSIST_DISABLED", "当前座位没有可供分析的私有底牌");
     }
     if (next.aiAssistLimit === 0) return fail(room, "AI_ASSIST_DISABLED", "本房间未启用 AI 辅助");
+    // Reopening or recomputing the same decision is free. Treat a distinct
+    // command id as a semantic duplicate too, so refreshes and multiple tabs
+    // cannot turn a finite coaching allowance into an unlimited time bank.
+    if (player.lastAiAssistActionSeq === hand.actionSeq) {
+      return { ok: true, state: room, resultRevision: room.revision, duplicate: true };
+    }
     if (member.aiAssistsRemaining <= 0) return fail(room, "AI_ASSIST_EMPTY", "本局 AI 辅助次数已经用完");
     member.aiAssistsRemaining -= 1;
     ensureSessionPlayer(next, member).aiAssistsUsed += 1;
+    player.lastAiAssistActionSeq = hand.actionSeq;
+    hand.actionDeadlineAt = (hand.actionDeadlineAt ?? commandNow) + ONLINE_AI_ASSIST_TIME_BONUS_MS;
   } else if (command.type === "timeout") {
     const hand = next.hand;
     if (!hand || hand.id !== command.handId) {
@@ -2847,6 +2867,7 @@ export function projectRoomState(room: OnlineRoomState, viewerAccountId: string 
     actionTimeMs,
     initialTimeBankMs,
     aiAssistLimit,
+    aiAssistTimeBonusMs: ONLINE_AI_ASSIST_TIME_BONUS_MS,
     timeBankUnitMs: actionTimeMs,
     viewerSeat,
     seats: publicSeats,

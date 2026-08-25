@@ -275,6 +275,7 @@ type RoomSnapshot = {
     initialTimeBankMs: number;
     timeBankUnitMs: number;
     aiAssistLimit: number;
+    aiAssistTimeBonusMs: number;
     finishRequested: boolean;
     sessionReport: SessionReport | null;
     handHistory: HandHistoryEntry[];
@@ -1532,19 +1533,34 @@ function formatAnalysisPercent(value: number) {
 
 function AiAssistAnalysisPanel({
   analysis,
+  bonusSeconds,
   onClose,
 }: {
   analysis: MultiplayerAiAnalysis;
+  bonusSeconds: number;
   onClose: () => void;
 }) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
   return (
-    <article className={styles.aiAnalysisPanel} aria-live="polite">
+    <article id="multiplayer-ai-analysis" className={styles.aiAnalysisPanel} aria-live="polite">
       <header className={styles.aiAnalysisHeader}>
         <div>
           <span>AI ASSIST · 本次决策近似分析</span>
           <strong>{analysis.recommendedLabel}</strong>
         </div>
-        <button type="button" onClick={onClose} aria-label="关闭 AI 辅助分析">×</button>
+        <button type="button" onClick={onClose} aria-label="关闭 AI 辅助分析">
+          <span aria-hidden="true">×</span>
+          <b>关闭分析</b>
+        </button>
       </header>
 
       <p className={styles.aiAnalysisSummary}>{analysis.summary}</p>
@@ -1595,7 +1611,7 @@ function AiAssistAnalysisPanel({
         {analysis.factors.map((factor) => <li key={factor}>{factor}</li>)}
       </ul>
       <footer className={styles.aiAnalysisSource}>
-        <strong>已消耗 1 次 AI 辅助；行动倒计时仍在继续。</strong>
+        <strong>已消耗 1 次 AI 辅助；本次行动时间已自动增加 {bonusSeconds} 秒。</strong>
         <span>{analysis.sourceNote}</span>
       </footer>
     </article>
@@ -1779,6 +1795,7 @@ export default function MultiplayerClient({
   const [tableHintOpen, setTableHintOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<MultiplayerAiAnalysis | null>(null);
+  const [aiAnalysisOpen, setAiAnalysisOpen] = useState(false);
   const [lastAiAssistedDecisionId, setLastAiAssistedDecisionId] = useState<string | null>(null);
   const [aiAssistBusy, setAiAssistBusy] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -1805,6 +1822,7 @@ export default function MultiplayerClient({
   const chatPinnedRef = useRef(true);
   const viewerSeatRef = useRef<number | null>(null);
   const aiAssistBusyRef = useRef(false);
+  const aiAssistButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const acceptSnapshot = useCallback((next: RoomSnapshot) => {
     viewerSeatRef.current = next.table.viewerSeat;
@@ -1909,6 +1927,7 @@ export default function MultiplayerClient({
     aiAssistBusyRef.current = false;
     setAiAssistBusy(false);
     setAiAnalysis(null);
+    setAiAnalysisOpen(false);
     setLastAiAssistedDecisionId(null);
     setSnapshot(null);
   }, []);
@@ -2092,6 +2111,7 @@ export default function MultiplayerClient({
       aiAssistBusyRef.current = false;
       setAiAssistBusy(false);
       setAiAnalysis(null);
+      setAiAnalysisOpen(false);
       setLastAiAssistedDecisionId(null);
     } else if (viewedRoomId.current !== roomId) {
       return;
@@ -2557,6 +2577,14 @@ export default function MultiplayerClient({
     : null;
   const hasAiAssistedCurrentDecision = aiDecisionId !== null
     && lastAiAssistedDecisionId === aiDecisionId;
+  const hasCachedAiAnalysis = hasAiAssistedCurrentDecision
+    && aiAnalysis?.decisionId === aiDecisionId;
+  const aiAssistBonusSeconds = Math.max(0, Math.round((snapshot?.table.aiAssistTimeBonusMs ?? 10_000) / 1_000));
+
+  const closeAiAnalysis = useCallback(() => {
+    setAiAnalysisOpen(false);
+    window.requestAnimationFrame(() => aiAssistButtonRef.current?.focus());
+  }, []);
   const seatChatMessages = useMemo(() => {
     const recent = new Map<number, MultiplayerChatMessage>();
     for (const message of chatMessages) {
@@ -2569,6 +2597,10 @@ export default function MultiplayerClient({
   }, [chatMessages, clockNow, snapshot?.players]);
 
   const requestAiAssist = useCallback(async () => {
+    if (aiDecisionId && aiAnalysis?.decisionId === aiDecisionId) {
+      setAiAnalysisOpen(true);
+      return;
+    }
     if (
       !snapshot
       || !game
@@ -2610,13 +2642,15 @@ export default function MultiplayerClient({
       if (!succeeded) return;
       setLastAiAssistedDecisionId(aiDecisionId);
       setAiAnalysis(analysis);
+      setAiAnalysisOpen(true);
+      setNotice(`AI 分析已完成，本次行动时间增加 ${aiAssistBonusSeconds} 秒。`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "AI 辅助分析失败，本次不会扣除次数。");
     } finally {
       aiAssistBusyRef.current = false;
       setAiAssistBusy(false);
     }
-  }, [aiDecisionId, game, isMyTurn, lastAiAssistedDecisionId, legal, selfPlayer, sendCommand, snapshot]);
+  }, [aiAnalysis, aiAssistBonusSeconds, aiDecisionId, game, isMyTurn, lastAiAssistedDecisionId, legal, selfPlayer, sendCommand, snapshot]);
 
   useEffect(() => {
     const hasRunningClock = phase === "playing"
@@ -2778,7 +2812,7 @@ export default function MultiplayerClient({
           raiseLine,
           selfPlayer?.timeBankMs ? `时间库还剩 ${Math.ceil(selfPlayer.timeBankMs / 1_000)}s，可主动使用时间牌。` : "当前没有可用时间牌。",
           snapshot.table.aiAssistLimit > 0
-            ? `AI 辅助还剩 ${selfPlayer?.aiAssistsRemaining ?? 0}/${snapshot.table.aiAssistLimit} 次；分析不会暂停行动倒计时。`
+            ? `AI 辅助还剩 ${selfPlayer?.aiAssistsRemaining ?? 0}/${snapshot.table.aiAssistLimit} 次；成功分析会自动增加 ${aiAssistBonusSeconds} 秒。`
             : "本桌没有开启 AI 辅助。",
         ],
       };
@@ -3221,13 +3255,16 @@ export default function MultiplayerClient({
                       )}
                       {snapshot.table.aiAssistLimit > 0 && (
                         <button
+                          ref={aiAssistButtonRef}
                           className={styles.aiAssistButton}
                           type="button"
-                          disabled={busy || aiAssistBusy || hasAiAssistedCurrentDecision || selfPlayer.aiAssistsRemaining <= 0 || actionMillisecondsLeft === 0}
+                          disabled={busy || aiAssistBusy || (!hasCachedAiAnalysis && (selfPlayer.aiAssistsRemaining <= 0 || actionMillisecondsLeft === 0))}
                           onClick={() => void requestAiAssist()}
+                          aria-expanded={hasCachedAiAnalysis && aiAnalysisOpen}
+                          aria-controls="multiplayer-ai-analysis"
                         >
-                          <strong>{aiAssistBusy ? "正在分析…" : hasAiAssistedCurrentDecision ? "本次已分析" : "AI 辅助 · 分析本次"}</strong>
-                          <small>本局剩余 {selfPlayer.aiAssistsRemaining}/{snapshot.table.aiAssistLimit} 次 · 不暂停计时</small>
+                          <strong>{aiAssistBusy ? "正在分析…" : hasCachedAiAnalysis ? "重新查看 AI 分析" : "AI 辅助 · 分析本次"}</strong>
+                          <small>{hasCachedAiAnalysis ? "本次已使用 · 再次查看不扣次数" : `本局剩余 ${selfPlayer.aiAssistsRemaining}/${snapshot.table.aiAssistLimit} 次 · 分析后 +${aiAssistBonusSeconds}s`}</small>
                         </button>
                       )}
                     </div>
@@ -3317,8 +3354,12 @@ export default function MultiplayerClient({
                         <strong>{isMyTurn ? "当前没有可用的加注路线" : `等待 ${actingPlayer?.handle ?? "牌桌"}`}</strong>
                       </div>
                     )}
-                    {aiAnalysis && aiAnalysis.decisionId === aiDecisionId && (
-                      <AiAssistAnalysisPanel analysis={aiAnalysis} onClose={() => setAiAnalysis(null)} />
+                    {aiAnalysisOpen && aiAnalysis && aiAnalysis.decisionId === aiDecisionId && (
+                      <AiAssistAnalysisPanel
+                        analysis={aiAnalysis}
+                        bonusSeconds={aiAssistBonusSeconds}
+                        onClose={closeAiAnalysis}
+                      />
                     )}
                   </>
                 )}

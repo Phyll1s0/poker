@@ -435,9 +435,13 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /每人整局 AI 辅助/);
   assert.match(multiplayerClient, /AI_ASSIST_OPTIONS/);
   assert.match(multiplayerClient, /type: "use-ai-assist"/);
-  assert.match(multiplayerClient, /本局剩余 \{selfPlayer\.aiAssistsRemaining\}/);
+  assert.match(multiplayerClient, /本局剩余 \$\{selfPlayer\.aiAssistsRemaining\}/);
   assert.match(multiplayerClient, /AI ASSIST · 本次决策近似分析/);
-  assert.match(multiplayerClient, /行动倒计时仍在继续/);
+  assert.match(multiplayerClient, /本次行动时间已自动增加 \{bonusSeconds\} 秒/);
+  assert.match(multiplayerClient, /重新查看 AI 分析/);
+  assert.match(multiplayerClient, /再次查看不扣次数/);
+  assert.match(multiplayerClient, /关闭 AI 辅助分析/);
+  assert.match(multiplayerClient, /setAiAnalysisOpen\(false\)/);
   assert.match(multiplayerClient, /analyzeMultiplayerDecision/);
   assert.match(multiplayerClient, /type: "timeout"/);
   assert.match(multiplayerClient, /player\.streetCommitted > 0/);

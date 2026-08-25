@@ -6,6 +6,7 @@ import {
   ONLINE_COMMAND_RECEIPT_LIMIT,
   ONLINE_DEFAULT_ACTION_TIME_MS,
   ONLINE_DEFAULT_AI_ASSIST_LIMIT,
+  ONLINE_AI_ASSIST_TIME_BONUS_MS,
   ONLINE_HAND_HISTORY_LIMIT,
   ONLINE_NEXT_HAND_DELAY_MS,
   ONLINE_PRIVATE_PEEK_LIMIT,
@@ -288,6 +289,7 @@ test("room settings control stacks, mode, action clock and per-player time banks
   const publicState = projectRoomState(room, actors[0].accountId);
   assert.equal(publicState.actionTimeMs, 10_000);
   assert.equal(publicState.timeBankUnitMs, 10_000);
+  assert.equal(publicState.aiAssistTimeBonusMs, 10_000);
   assert.equal(publicState.seats[1].timeBankMs, 100_000);
 });
 
@@ -345,7 +347,7 @@ test("AI assist configuration accepts only 0, 5 or 10 and initializes every join
   assert.equal(defaultRoom.seats[0].aiAssistsRemaining, 5);
 });
 
-test("AI assist consumption is authoritative, idempotent and invisible to hand actions and clocks", () => {
+test("AI assist grants ten authoritative seconds once per decision without becoming a hand action", () => {
   const { room: started, options } = startRoom(2, {
     roomOptions: { aiAssistLimit: 5 },
   });
@@ -368,7 +370,7 @@ test("AI assist consumption is authoritative, idempotent and invisible to hand a
   assert.equal(room.seats[0].aiAssistsRemaining, 4);
   assert.equal(room.session.players.find((player) => player.seat === 0).aiAssistsUsed, 1);
   assert.equal(room.hand.actionStartedAt, actionStartedAt);
-  assert.equal(room.hand.actionDeadlineAt, deadline);
+  assert.equal(room.hand.actionDeadlineAt, deadline + ONLINE_AI_ASSIST_TIME_BONUS_MS);
   assert.equal(room.hand.actionSeq, actionSeq);
   assert.deepEqual(room.hand.recentActions, recentActions);
   assert.deepEqual(room.hand.actionHistory, actionHistory);
@@ -379,6 +381,7 @@ test("AI assist consumption is authoritative, idempotent and invisible to hand a
   assert.equal(duplicate.state.revision, room.revision);
   assert.equal(duplicate.state.seats[0].aiAssistsRemaining, 4);
   assert.equal(duplicate.state.session.players.find((player) => player.seat === 0).aiAssistsUsed, 1);
+  assert.equal(duplicate.state.hand.actionDeadlineAt, deadline + ONLINE_AI_ASSIST_TIME_BONUS_MS);
 
   rejected(applyOnlinePokerCommand(room, actors[0], {
     ...payload,
@@ -386,18 +389,28 @@ test("AI assist consumption is authoritative, idempotent and invisible to hand a
   }, options), "COMMAND_ID_CONFLICT");
 
   room = JSON.parse(JSON.stringify(room));
-  for (let remaining = 3; remaining >= 0; remaining -= 1) {
-    room = accepted(command(room, actors[0], {
-      type: "use-ai-assist",
-      handId: room.hand.id,
-    }, options));
-    assert.equal(room.seats[0].aiAssistsRemaining, remaining);
-  }
-  assert.equal(room.session.players.find((player) => player.seat === 0).aiAssistsUsed, 5);
-  const empty = command(room, actors[0], { type: "use-ai-assist", handId: room.hand.id }, options);
-  rejected(empty, "AI_ASSIST_EMPTY");
-  assert.equal(empty.state, room);
-  assert.equal(empty.state.revision, room.revision);
+  const semanticDuplicate = command(room, actors[0], {
+    type: "use-ai-assist",
+    handId: room.hand.id,
+  }, options);
+  assert.equal(semanticDuplicate.ok, true);
+  assert.equal(semanticDuplicate.duplicate, true);
+  assert.equal(semanticDuplicate.state.revision, room.revision);
+  assert.equal(semanticDuplicate.state.seats[0].aiAssistsRemaining, 4);
+  assert.equal(semanticDuplicate.state.hand.actionDeadlineAt, deadline + ONLINE_AI_ASSIST_TIME_BONUS_MS);
+
+  room = accepted(act(room, actors[0], "call", options));
+  room = accepted(act(room, actors[1], "check", options));
+  room = accepted(act(room, actors[1], "check", options));
+  assert.equal(room.hand.currentSeat, 0);
+  const nextDecisionDeadline = room.hand.actionDeadlineAt;
+  room = accepted(command(room, actors[0], {
+    type: "use-ai-assist",
+    handId: room.hand.id,
+  }, options));
+  assert.equal(room.seats[0].aiAssistsRemaining, 3);
+  assert.equal(room.session.players.find((player) => player.seat === 0).aiAssistsUsed, 2);
+  assert.equal(room.hand.actionDeadlineAt, nextDecisionDeadline + ONLINE_AI_ASSIST_TIME_BONUS_MS);
 });
 
 test("AI assist rejects invalid phase, hand, actor, deadline, disabled rooms and missing private cards", () => {
@@ -438,6 +451,16 @@ test("AI assist rejects invalid phase, hand, actor, deadline, disabled rooms and
     type: "use-ai-assist",
     handId: disabled.room.hand.id,
   }, disabled.options), "AI_ASSIST_DISABLED");
+
+  const exhausted = JSON.parse(JSON.stringify(enabled.room));
+  exhausted.seats.find((seat) => seat.seat === exhausted.hand.currentSeat).aiAssistsRemaining = 0;
+  enabled.options.now = () => 1_000_000;
+  const exhaustedDeadline = exhausted.hand.actionDeadlineAt;
+  rejected(command(exhausted, actors[0], {
+    type: "use-ai-assist",
+    handId: exhausted.hand.id,
+  }, enabled.options), "AI_ASSIST_EMPTY");
+  assert.equal(exhausted.hand.actionDeadlineAt, exhaustedDeadline);
 });
 
 test("AI assist allowances persist across hands, appear in the final report and reset only on restart", () => {

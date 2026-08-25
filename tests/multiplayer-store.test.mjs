@@ -603,6 +603,7 @@ test("D1 room state executes commands and never projects another player's hole c
       requestId: "start-owner-0001",
       expectedRevision: guestView.room.revision,
     }));
+    const deadlineBeforeAiAssist = ownerView.game.actionDeadlineAt;
     ownerView = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
       type: "use-ai-assist",
       handId: ownerView.table.hand.id,
@@ -614,6 +615,17 @@ test("D1 room state executes commands and never projects another player's hole c
     assert.equal(ownerView.table.viewerSeat, 0);
     assert.equal(ownerView.table.seats[0].aiAssistsRemaining, 4);
     assert.equal(ownerView.players[0].aiAssistsRemaining, 4);
+    assert.equal(ownerView.game.actionDeadlineAt, deadlineBeforeAiAssist + 10_000);
+    const revisionAfterAiAssist = ownerView.room.revision;
+    ownerView = await service.applyCommand(room.id, owner.id, parseMultiplayerCommand({
+      type: "use-ai-assist",
+      handId: ownerView.table.hand.id,
+      requestId: "assist-owner-same-decision-0002",
+      expectedRevision: ownerView.room.revision,
+    }));
+    assert.equal(ownerView.room.revision, revisionAfterAiAssist);
+    assert.equal(ownerView.players[0].aiAssistsRemaining, 4);
+    assert.equal(ownerView.game.actionDeadlineAt, deadlineBeforeAiAssist + 10_000);
     assert.ok(ownerView.table.seats[0].holeCards);
     assert.equal(ownerView.table.seats[1].holeCards, null);
     const ownerPayload = JSON.stringify(ownerView);
