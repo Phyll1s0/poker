@@ -141,7 +141,7 @@ test("hosted chat is isolated from poker revision and protects server-owned iden
   assert.match(migration, /order by stale\.id desc[\s\S]*?offset 200/i);
   assert.match(client, /role="log"/);
   assert.match(client, /MULTIPLAYER_CHAT_REACTION_CATALOG\.map/);
-  assert.match(client, /轻提示音跟随音效开关/);
+  assert.match(client, /搞怪短语音跟随牌桌音效/);
   assert.match(client, /getMultiplayerChatReaction/);
   assert.match(client, /tableMessage\.kind === "reaction"[\s\S]*?<ReactionContent/);
   assert.match(client, /message\.kind === "reaction"[\s\S]*?<ReactionContent/);
@@ -153,7 +153,7 @@ test("hosted chat is isolated from poker revision and protects server-owned iden
   assert.match(client, /multiplayerReactionAudioCues/);
   assert.match(client, /mergeRoomMessages\(roomId, \[body\.message\], "confirmed-local"\)/);
   assert.match(client, /resumedAt \+ cue\.delaySeconds \* 1_000 <= cue\.expiresAt/);
-  assert.match(client, /\.forEach\(\(cue\) => playPokerReactionSound\(cue\.tone, cue\.delaySeconds\)\)/);
+  assert.match(client, /playPokerReactionSound\([\s\S]*?cue\.tone,[\s\S]*?cue\.delaySeconds,[\s\S]*?cue\.messageId,[\s\S]*?cue\.expiresAt/);
   assert.match(client, /viewedRoomId\.current !== roomId/);
   assert.match(adapter, /action: "room-messages"/);
   assert.match(adapter, /action: "send-message"/);

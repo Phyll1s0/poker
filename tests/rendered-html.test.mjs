@@ -372,8 +372,12 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(multiplayerClient, /multiplayerAudioTransition\(lastAudioFrame\.current, nextAudioFrame\)/);
   assert.match(multiplayerClient, /lastAudioFrame\.current = nextAudioFrame/);
   assert.match(multiplayerClient, /audioCues\.forEach\(\(cue\) => playPokerSound\(cue\.sound, cue\.delaySeconds\)\)/);
-  assert.match(multiplayerClient, /playPokerReactionSound\(cue\.tone, cue\.delaySeconds\)/);
+  assert.match(multiplayerClient, /playPokerReactionSound\([\s\S]*?cue\.tone,[\s\S]*?cue\.delaySeconds,[\s\S]*?cue\.messageId,[\s\S]*?cue\.expiresAt/);
   assert.match(pokerAudio, /export function playPokerReactionSound/);
+  assert.match(pokerAudio, /SpeechSynthesisUtterance/);
+  assert.match(pokerAudio, /export function stopPokerReactionVoice/);
+  assert.match(pokerAudio, /only the newest reaction speak/);
+  assert.match(pokerAudio, /if \(!enabled\) stopPokerReactionVoice\(\)/);
   assert.match(pokerAudio, /reactionTone === "praise"/);
   assert.match(pokerAudio, /reactionTone === "lucky"/);
   assert.match(pokerAudio, /reactionTone === "frustrated"/);
@@ -381,7 +385,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(pokerAudio, /reactionTone === "surprised"/);
   assert.match(multiplayerClient, /setPokerAudioEnabled\(next\)/);
   assert.match(multiplayerClient, /styles\.navSoundToggle/);
-  assert.match(multiplayerClient, /aria-label=\{soundOn \? "关闭牌桌音效" : "开启牌桌音效"\}/);
+  assert.match(multiplayerClient, /aria-label=\{soundOn \? "关闭牌桌音效与表情语音" : "开启牌桌音效与表情语音"\}/);
   assert.match(multiplayerClient, /const \[rulesOpen, setRulesOpen\] = useState\(false\)/);
   assert.match(multiplayerClient, /className=\{styles\.navHelpButton\}/);
   assert.match(multiplayerClient, /aria-label="查看德州扑克规则"/);

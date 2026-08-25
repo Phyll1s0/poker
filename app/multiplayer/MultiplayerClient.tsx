@@ -37,6 +37,7 @@ import {
   playPokerReactionSound,
   playPokerSound,
   setPokerAudioEnabled,
+  stopPokerReactionVoice,
   unlockPokerAudio,
 } from "../../lib/poker-audio";
 import { orderFiveCardHandForDisplay } from "../../lib/poker-evaluator";
@@ -1326,7 +1327,7 @@ function ChatDock({
             <span>QUICK REACTIONS</span>
             <strong id="quick-reaction-title">快捷表情</strong>
           </div>
-          <small>座位旁显示 5 秒 · 轻提示音跟随音效开关</small>
+          <small>座位旁显示 5 秒 · 搞怪短语音跟随牌桌音效</small>
         </header>
         <div className={styles.quickReactions} aria-label="快捷表情">
           {MULTIPLAYER_CHAT_REACTION_CATALOG.map((reaction, index) => (
@@ -1882,6 +1883,7 @@ export default function MultiplayerClient({
   }, []);
 
   const clearActiveRoomSnapshot = useCallback(() => {
+    stopPokerReactionVoice();
     lastBoardFrame.current = null;
     lastHoleFrame.current = null;
     lastAudioFrame.current = null;
@@ -2006,7 +2008,12 @@ export default function MultiplayerClient({
         const resumedAt = Date.now();
         unplayedCues
           .filter((cue) => resumedAt + cue.delaySeconds * 1_000 <= cue.expiresAt)
-          .forEach((cue) => playPokerReactionSound(cue.tone, cue.delaySeconds));
+          .forEach((cue) => playPokerReactionSound(
+            cue.tone,
+            cue.delaySeconds,
+            cue.messageId,
+            cue.expiresAt,
+          ));
       }).catch(() => undefined);
     }
   }, []);
@@ -2121,6 +2128,8 @@ export default function MultiplayerClient({
     };
   }, [soundOn]);
 
+  useEffect(() => () => stopPokerReactionVoice(), []);
+
   useEffect(() => {
     if (!snapshot?.room.id) return;
     const roomId = snapshot.room.id;
@@ -2168,7 +2177,11 @@ export default function MultiplayerClient({
       }
     };
     const handleVisibility = () => {
-      if (document.visibilityState !== "visible" || running) return;
+      if (document.visibilityState !== "visible") {
+        stopPokerReactionVoice();
+        return;
+      }
+      if (running) return;
       if (timer !== null) window.clearTimeout(timer);
       void poll();
     };
@@ -2809,8 +2822,8 @@ export default function MultiplayerClient({
             type="button"
             onClick={toggleSound}
             aria-pressed={soundOn}
-            aria-label={soundOn ? "关闭牌桌音效" : "开启牌桌音效"}
-            title={soundOn ? "关闭牌桌音效" : "开启牌桌音效"}
+            aria-label={soundOn ? "关闭牌桌音效与表情语音" : "开启牌桌音效与表情语音"}
+            title={soundOn ? "关闭牌桌音效与表情语音" : "开启牌桌音效与表情语音"}
           >
             <span>{soundOn ? "♪" : "—"}</span><b>音效</b><small>{soundOn ? "ON" : "OFF"}</small>
           </button>
