@@ -39,11 +39,11 @@
 - `PokerTransport` 保留 polling 与未来 WebSocket 实现的统一契约
 - 为预计算 GTO 数据库或远程求解器提供 V2 安全节点键、精确/回退 provenance 与同步缓存 / 异步加载 Provider 协议
 - RangeCraft Standard v1 固定 100BB、无抽水 cEV、2.5BB 开池和完整离散下注树，并用稳定哈希阻止不同配置误命中
-- 通用两人零和 CFR+ 核心通过 Kuhn Poker 已知均衡值和精确 exploitability 回归
-- 可离线求解带权范围对范围的真实 1v1 河牌子博弈，并用 scalable best response 报告 NashConv / exploitability
+- 通用两人零和 CFR+ 与 DCFR(1.5,0,2) 核心通过手算递推、Kuhn Poker 已知均衡值和精确 exploitability 回归
+- 可离线求解带权范围对范围的真实 1v1 河牌子博弈；实时教练按检查点运行 DCFR，用 scalable best response 报告 NashConv / exploitability，并返回历史最低误差策略
 - 1v1 河牌已有一项固定 commit、同牌面/范围/底池/树的公开独立交叉验证；公开资源、许可边界和精度声明见 [`PUBLIC_GTO_VALIDATION.md`](PUBLIC_GTO_VALIDATION.md)
 
-> 当前牌桌 AI 与实时教练仍主要使用本地近似 GTO 混合频率策略，并非完整求解器。仓库已经加入可验证的 CFR+ 与 1v1 河牌求解链，但公开独立交叉验证目前只有一棵固定河牌小树，尚未覆盖任意 6 人动态节点；未命中解库前，界面中的评分仍是策略匹配度，不是精确 EV 损失。
+> 当前牌桌 AI 与实时教练的大多数节点仍使用本地近似 GTO 混合频率策略，并非完整求解器。仓库已经加入可验证的 CFR+/DCFR 与 1v1 河牌求解链，但公开独立交叉验证目前只有一棵 CFR+ 固定河牌小树，尚未覆盖任意 6 人动态节点；未命中解库前，界面中的评分仍是策略匹配度，不是精确 EV 损失。
 
 ## 两种训练模式
 
@@ -113,11 +113,12 @@ npm run ai:benchmark -- --hands 100000 --seed my-run --stack-bb 200 --equity-ite
 
 完整设计、商业对标边界、1v1 / 1v2 / 翻前实施顺序和验收门槛见 [`GTO_SOLVER_ROADMAP.md`](GTO_SOLVER_ROADMAP.md)；公开求解器、数据集、商业免费版的用途和许可边界见 [`PUBLIC_GTO_VALIDATION.md`](PUBLIC_GTO_VALIDATION.md)。
 
-仓库内置一个小型真实河牌范围节点，可直接运行 CFR+：
+仓库内置一个小型真实河牌范围节点。命令默认使用论文参数 `DCFR(1.5,0,2)`；也可传 `--algorithm cfr+` 保留原基线：
 
 ```bash
 npm run gto:river -- \
   --input examples/gto-river-node.json \
+  --algorithm dcfr \
   --iterations 50000 \
   --output river-solution.json
 ```
@@ -147,6 +148,6 @@ npm run gto:benchmark:river
 
 [`lib/poker-strategy.ts`](lib/poker-strategy.ts) 保留 V1 兼容接口，并新增 V2 完整配置、稳定节点键、合法尺寸、动作 EV、误差/许可来源与精确/回退判别联合。筹码、抽水、树、尺度或行动线只要不同就不会误命中同一解；玩家重连 ID 改变但位置和局面相同则不会产生假 miss。
 
-[`lib/gto-standard.ts`](lib/gto-standard.ts) 锁定首个可复现牌局/下注树规范与策略结果 schema；[`lib/gto-cfr.ts`](lib/gto-cfr.ts) 提供通用 CFR+ 核心；[`lib/gto-river.ts`](lib/gto-river.ts) 将该核心接到真实德州扑克河牌范围子博弈。
+[`lib/gto-standard.ts`](lib/gto-standard.ts) 锁定首个可复现牌局/下注树规范与策略结果 schema；[`lib/gto-cfr.ts`](lib/gto-cfr.ts) 提供论文相位的 CFR+ 与 `DCFR(α,β,γ)` 核心；[`lib/gto-river.ts`](lib/gto-river.ts) 将它们接到真实德州扑克河牌范围子博弈，并提供带连续误差门和 best-checkpoint 选择的自适应求解。
 
 [`lib/gto-benchmark.ts`](lib/gto-benchmark.ts) 只比较用户合法提供、且 `gameSpecId/treeId` 完全相同的参考结果，报告 reach 覆盖率、频率 total variation、最大单动作误差和参考动作 EV 下的 regret；它不会联网或抓取商业策略数据。仓库内第一项公开 reference 的可信来源、原始输入/输出、SHA-256、生成命令与阈值保存在 [`benchmarks/external/noambrown-river-v1/`](benchmarks/external/noambrown-river-v1/)。

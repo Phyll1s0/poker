@@ -1,7 +1,7 @@
 import {
   headsUpRiverActionEvEntry,
   headsUpRiverStrategyEntry,
-  solveHeadsUpRiver,
+  solveHeadsUpRiverAdaptive,
   type HeadsUpRiverAction,
   type HeadsUpRiverPlayer,
   type HeadsUpRiverSolution,
@@ -42,8 +42,15 @@ export type RiverCoachAction = Readonly<{
 
 export type RiverCoachResult = Readonly<{
   status: "solved";
-  source: "internal-cfr+-reduced-river";
+  source: "internal-dcfr-reduced-river";
   scope: "heads-up-river-fixed-tree-representative-ranges";
+  acceptedForGuidance: boolean;
+  acceptedForScoring: boolean;
+  solverVersion: HeadsUpRiverSolution["solverVersion"];
+  resultId: string;
+  algorithm: HeadsUpRiverSolution["algorithm"];
+  solverParameters: HeadsUpRiverSolution["solverParameters"];
+  convergence: HeadsUpRiverSolution["convergence"];
   spotId: string;
   heroPlayer: HeadsUpRiverPlayer;
   heroHolding: string;
@@ -56,6 +63,15 @@ export type RiverCoachResult = Readonly<{
   exploitabilityPotFraction: number;
   accuracyLevel: HeadsUpRiverSolution["accuracyLevel"];
 }>;
+
+export function headsUpRiverCoachAdmission(
+  accuracyLevel: HeadsUpRiverSolution["accuracyLevel"],
+): Readonly<{ acceptedForGuidance: boolean; acceptedForScoring: boolean }> {
+  return Object.freeze({
+    acceptedForGuidance: accuracyLevel !== "experimental",
+    acceptedForScoring: accuracyLevel === "commercial-target",
+  });
+}
 
 const LONG_SUIT: Readonly<Record<string, StrategyCard["suit"]>> = Object.freeze({
   "♠": "spades",
@@ -346,7 +362,7 @@ function publicAction(action: HeadsUpRiverAction): Pick<RiverCoachAction, "actio
 
 /**
  * Solves the exact reduced river game represented by the supplied public
- * ranges and action tree. It is a real CFR+ solve, but deliberately does not
+ * ranges and action tree. It is a real checkpointed DCFR solve, but deliberately does not
  * claim that eight representative combos equal the full commercial game.
  */
 export function solveRiverCoachDecision(request: RiverCoachRequest): RiverCoachResult {
@@ -376,7 +392,7 @@ export function solveRiverCoachDecision(request: RiverCoachRequest): RiverCoachR
   );
   const publicNode = publicHistoryAndTree(request);
   const iterations = Math.max(100, Math.min(10_000, Math.round(request.iterations ?? 800)));
-  const solution = solveHeadsUpRiver({
+  const solution = solveHeadsUpRiverAdaptive({
     board: Object.freeze(request.board.map(toStrategyCard)) as readonly [
       StrategyCard,
       StrategyCard,
@@ -390,9 +406,12 @@ export function solveRiverCoachDecision(request: RiverCoachRequest): RiverCoachR
     effectiveStackBb,
     bettingTree: publicNode.bettingTree,
   }, {
-    iterations,
-    averagingDelay: Math.min(100, Math.max(20, Math.floor(iterations * 0.08))),
-    linearAveraging: true,
+    algorithm: "dcfr",
+    maxIterations: iterations,
+    checkpointInterval: Math.min(100, iterations),
+    minimumIterations: Math.min(200, iterations),
+    targetExploitabilityPotFraction: 0.0024,
+    requiredConsecutiveTargetCheckpoints: 3,
   });
   const heroHolding = riverCoachHoldingKey(request.heroCards);
   const strategy = headsUpRiverStrategyEntry(solution, request.heroPlayer, heroHolding, publicNode.history);
@@ -405,10 +424,17 @@ export function solveRiverCoachDecision(request: RiverCoachRequest): RiverCoachR
     frequency: strategy.probabilities[index],
     evBb: evByAction.get(solverAction) ?? 0,
   })));
+  const admission = headsUpRiverCoachAdmission(solution.accuracyLevel);
   return Object.freeze({
     status: "solved",
-    source: "internal-cfr+-reduced-river",
+    source: "internal-dcfr-reduced-river",
     scope: "heads-up-river-fixed-tree-representative-ranges",
+    ...admission,
+    solverVersion: solution.solverVersion,
+    resultId: solution.resultId,
+    algorithm: solution.algorithm,
+    solverParameters: solution.solverParameters,
+    convergence: solution.convergence,
     spotId: solution.spotId,
     heroPlayer: request.heroPlayer,
     heroHolding,

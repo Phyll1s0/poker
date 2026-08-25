@@ -7,6 +7,7 @@ import {
   headsUpRiverActionEvEntry,
   headsUpRiverStrategyEntry,
   solveHeadsUpRiver,
+  solveHeadsUpRiverAdaptive,
 } from "../lib/gto-river.ts";
 import { RANGECRAFT_STANDARD_V1 } from "../lib/gto-standard.ts";
 
@@ -105,12 +106,23 @@ test("real river CFR+ converges and its scalable best response matches exact tin
   const exact = exactTinyRiverExploitability(model, solution.averageStrategy);
 
   assert.ok(solution.exploitability.exploitabilityPotFraction < 0.005, JSON.stringify(solution.exploitability));
+  assert.ok(solution.exploitability.oopDeviationGainBb >= 0);
+  assert.ok(solution.exploitability.ipDeviationGainBb >= 0);
+  assert.ok(Math.abs(
+    solution.exploitability.nashConvBb
+      - solution.exploitability.oopDeviationGainBb
+      - solution.exploitability.ipDeviationGainBb,
+  ) < 1e-12);
   assert.ok(Math.abs(solution.exploitability.profileValueBb - exact.profileValue) < 1e-10);
   assert.ok(Math.abs(solution.exploitability.oopBestResponseValueBb - exact.player0BestResponseValue) < 1e-10);
   assert.ok(
     Math.abs(solution.exploitability.ipBestResponseValueForOopBb - exact.player1BestResponseValueForPlayer0) < 1e-10,
   );
   assert.equal(solution.source, "internal-solver");
+  assert.equal(solution.algorithm, "cfr+");
+  assert.equal(solution.solverParameters.updateSchedule, "alternating-player-0-first");
+  assert.equal(solution.solverParameters.regretUpdateOrder, "add-then-rm+-clip");
+  assert.match(solution.resultId, /^rc-hu-river-result-v1-/);
   assert.match(solution.spotId, /^rc-hu-river-spot-v1-/);
   assert.match(solution.gameSpecId, /^rc-hu-river-game-v1-/);
   assert.match(solution.treeId, /^rc-hu-river-tree-v1-/);
@@ -137,6 +149,69 @@ test("real river CFR+ converges and its scalable best response matches exact tin
     /只读结果/,
   );
   assert.equal(solution.averageStrategy[0].has("injected"), false);
+});
+
+test("river DCFR exposes paper parameters and converges on the same audited tree", () => {
+  const solution = solveHeadsUpRiver(riverSpec(), {
+    algorithm: "dcfr",
+    iterations: 500,
+  });
+
+  assert.equal(solution.algorithm, "dcfr");
+  assert.equal(solution.solverVersion, "rangecraft-dcfr/0.2.0");
+  assert.equal(solution.solverParameters.averagingSchedule, "paper-polynomial");
+  assert.equal(solution.solverParameters.regretUpdateOrder, "add-then-sign-discount");
+  assert.equal(solution.solverParameters.numericPrecision, "float64");
+  assert.deepEqual(solution.solverParameters.dcfr, { alpha: 1.5, beta: 0, gamma: 2 });
+  assert.ok(solution.exploitability.exploitabilityPotFraction < 0.005);
+  assert.equal(solution.convergence.mode, "fixed");
+  assert.equal(solution.convergence.checkpoints.length, 1);
+});
+
+test("adaptive river DCFR requires repeated audited passes and returns its best checkpoint", () => {
+  const options = {
+    algorithm: "dcfr",
+    maxIterations: 600,
+    checkpointInterval: 100,
+    minimumIterations: 100,
+    targetExploitabilityPotFraction: 0.005,
+    requiredConsecutiveTargetCheckpoints: 2,
+  };
+  const first = solveHeadsUpRiverAdaptive(riverSpec(), options);
+  const second = solveHeadsUpRiverAdaptive(riverSpec(), options);
+  const minimumObserved = Math.min(
+    ...first.convergence.checkpoints.map((checkpoint) => checkpoint.exploitabilityPotFraction),
+  );
+
+  assert.equal(first.convergence.mode, "adaptive");
+  assert.equal(first.convergence.stopReason, "target-stable");
+  assert.ok(first.convergence.consecutiveTargetCheckpoints >= 2);
+  assert.ok(first.convergence.trainedIterations <= 600);
+  assert.ok(first.iterations <= first.convergence.trainedIterations);
+  assert.ok(Math.abs(first.exploitability.exploitabilityPotFraction - minimumObserved) < 1e-15);
+  assert.deepEqual(first.convergence, second.convergence);
+  assert.deepEqual(first.strategies, second.strategies);
+  assert.ok(Object.isFrozen(first.convergence));
+  assert.ok(Object.isFrozen(first.convergence.checkpoints));
+});
+
+test("adaptive CFR+ cannot pass its target before delayed averaging starts", () => {
+  const solution = solveHeadsUpRiverAdaptive(riverSpec(), {
+    algorithm: "cfr+",
+    maxIterations: 100,
+    checkpointInterval: 10,
+    minimumIterations: 10,
+    targetExploitabilityPotFraction: 100,
+    requiredConsecutiveTargetCheckpoints: 1,
+    averagingDelay: 99,
+    linearAveraging: true,
+  });
+
+  assert.equal(solution.convergence.stopReason, "target-stable");
+  assert.equal(solution.convergence.trainedIterations, 100);
+  assert.equal(solution.convergence.selectedIterations, 100);
+  assert.equal(solution.convergence.checkpoints.at(-2).targetMet, false);
+  assert.equal(solution.convergence.checkpoints.at(-1).targetMet, true);
 });
 
 test("river solution reports immutable acting-player counterfactual action EVs", () => {
@@ -323,5 +398,9 @@ test("river solver rejects card collisions, duplicate combos and impossible rang
   assert.throws(
     () => immutable.exploitability(profileWithIllegalAction),
     /合法动作|legal actions/,
+  );
+  assert.throws(
+    () => immutable.exploitability([new Map(), new Map()]),
+    /missing information set|缺少信息集/,
   );
 });

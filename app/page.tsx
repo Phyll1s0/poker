@@ -1563,8 +1563,20 @@ function applySolvedRiverAdvice(
     })
     .join(" · ");
   const threeWay = isThreeWayRiverResult(result);
-  const accepted = !threeWay || result.acceptedForGuidance;
+  const accepted = result.acceptedForGuidance;
   if (!accepted) {
+    if (!threeWay) {
+      const errorPercent = result.exploitabilityPotFraction * 100;
+      return {
+        ...base,
+        note: `${base.note} 单挑河牌 DCFR 实验结果为：${mix}；固定树可剥削度约 ${errorPercent.toFixed(2)}% 底池，仍属实验级，未达到训练提示准入线，因此不覆盖原提示或正式评分。`,
+        strategySource: `${base.strategySource}；单挑河牌 DCFR 未通过误差准入门，未接管`,
+        riverSolver: result,
+        riverSolverAccepted: false,
+        riverSolverGradingAccepted: false,
+        riverSolverFallback: base,
+      };
+    }
     const nashConvPercent = result.nashConvPotFraction * 100;
     const targetPercent = result.targetNashConvPotFraction * 100;
     const quickNash = result.quickNashConvPotFraction === null
@@ -1587,7 +1599,20 @@ function applySolvedRiverAdvice(
     ? `已用每家 ${result.quickRepresentativeCombos?.oop ?? 3}→${result.representativeCombos.oop} 个代表组合交叉求解当前三人河牌节点；核心 CFR+ 在浏览器支持时运行于独立线程，过程可取消。相对最高动作 EV：${evLine}。高分辨率 NashConv ${(result.nashConvPotFraction * 100).toFixed(1)}%，跨分辨率动作 regret 差 ${((result.actionRegretDriftPotFraction ?? 0) * 100).toFixed(1)}%，分别达到 ≤${(result.targetNashConvPotFraction * 100).toFixed(0)}% 与 ≤${(result.targetActionRegretDriftPotFraction * 100).toFixed(0)}% 的实验提示门槛；频率 TV ${((result.frequencyTotalVariation ?? 0) * 100).toFixed(1)}% 仅作诊断，不把近似无差异动作的频率变化误判为错误。${result.acceptedForScoring ? `同时达到 ≤${(result.scoringTargetPotFraction * 100).toFixed(0)}% 的较高稳定性评分门槛，可用于实验动作 EV 评分。` : `尚未达到 ≤${(result.scoringTargetPotFraction * 100).toFixed(0)}% 的较高稳定性评分门槛，因此只接管提示，评分仍采用公开范围启发式。`}固定树仍为单次下注且不含再加注，不是商业全树 GTO。`
     : (() => {
         const errorPercent = result.exploitabilityPotFraction * 100;
-        return `已在当前单挑河牌节点运行 ${result.iterations} 轮 CFR+：底池、有效筹码、完整河牌行动线和合法尺寸均进入求解。相对最高动作 EV：${evLine}。固定树可剥削度约 ${errorPercent < 0.01 ? errorPercent.toFixed(3) : errorPercent.toFixed(2)}% 底池。这是双方各 ${result.representativeCombos.oop} 个等质量代表组合的缩减范围解，是真实求解器结果，但不冒充商业全组合、全尺寸解。`;
+        const parameters = result.solverParameters.dcfr;
+        const algorithm = parameters
+          ? `DCFR(${parameters.alpha}, ${parameters.beta}, ${parameters.gamma})`
+          : "CFR+";
+        const checkpoint = result.convergence.selectedIterations === result.convergence.trainedIterations
+          ? `${result.iterations} 轮`
+          : `训练 ${result.convergence.trainedIterations} 轮、采用其中 ${result.iterations} 轮的最低误差检查点`;
+        const stability = result.convergence.stopReason === "target-stable"
+          ? `连续 ${result.convergence.consecutiveTargetCheckpoints} 次通过误差门槛`
+          : "已到本次迭代上限";
+        const admission = result.acceptedForScoring
+          ? "已达到正式局部 EV 评分门槛"
+          : "只达到训练提示门槛，正式评分仍采用公开范围启发式";
+        return `已在当前单挑河牌节点用 ${algorithm} ${checkpoint}：底池、有效筹码、完整河牌行动线和合法尺寸均进入求解；${stability}。相对最高动作 EV：${evLine}。固定树可剥削度约 ${errorPercent < 0.01 ? errorPercent.toFixed(3) : errorPercent.toFixed(2)}% 底池；${admission}。这是双方各 ${result.representativeCombos.oop} 个等质量代表组合的缩减范围解，是真实求解器结果，但不冒充商业全组合、全尺寸解。`;
       })();
   return {
     ...base,
@@ -1603,10 +1628,10 @@ function applySolvedRiverAdvice(
     recommendedLabel,
     strategySource: threeWay
       ? `三人河牌 CFR+ 近似 · 固定单次下注树 · ${result.representativeCombos.oop}×${result.representativeCombos.middle}×${result.representativeCombos.ip} 代表范围 · cEV/无抽水 · 非精确 GTO`
-      : `CFR+ 局部求解 · 单挑河牌 · ${result.representativeCombos.oop}×${result.representativeCombos.ip} 代表范围 · cEV/无抽水`,
+      : `DCFR(1.5,0,2) 自适应局部求解 · 单挑河牌 · ${result.representativeCombos.oop}×${result.representativeCombos.ip} 代表范围 · 独立 best-response 审计 · cEV/无抽水`,
     riverSolver: result,
     riverSolverAccepted: true,
-    riverSolverGradingAccepted: !threeWay || result.acceptedForScoring,
+    riverSolverGradingAccepted: result.acceptedForScoring,
     riverSolverFallback: base,
   };
 }
@@ -1630,6 +1655,11 @@ type RiverDeepSolveControl = Readonly<{
   iterations?: number;
   quickIterations?: number | null;
   targetMet?: boolean;
+  headsUpExploitabilityPotFraction?: number;
+  headsUpTargetExploitabilityPotFraction?: number;
+  headsUpTrainedIterations?: number;
+  headsUpSelectedIterations?: number;
+  headsUpStopReason?: "target-stable" | "iteration-limit" | "fixed-iterations";
   onSolve: () => void;
 }>;
 
@@ -1698,9 +1728,9 @@ function AiDecisionHint({
                     {riverDeepSolve.mode === "three-way" ? (
                       <div><b>可进行三人河牌多分辨率分析</b><span>先用快速代表范围求解，再用更高分辨率重算并检查稳定性；同时检查固定树 NashConv 与动作 regret 漂移。</span></div>
                     ) : (
-                      <div><b>可进行河牌深度求解</b><span>单挑河牌可用真实 CFR+ 重新计算频率、尺寸和动作 EV；求解实现已通过一项公开 MIT 独立同题基线。</span></div>
+                      <div><b>可进行河牌深度求解</b><span>单挑河牌使用论文默认 DCFR(1.5,0,2)，分段计算并用独立 best response 检查每个检查点；原 CFR+ 公开基线继续保留作对照。</span></div>
                     )}
-                    <button type="button" onClick={riverDeepSolve.onSolve}>{riverDeepSolve.mode === "three-way" ? "运行三人 CFR+ 近似" : "运行 CFR+ 深度分析"}</button>
+                    <button type="button" onClick={riverDeepSolve.onSolve}>{riverDeepSolve.mode === "three-way" ? "运行三人 CFR+ 近似" : "运行 DCFR 深度分析"}</button>
                   </>
                 )}
                 {riverDeepSolve.status === "running" && (
@@ -1717,7 +1747,7 @@ function AiDecisionHint({
                         : "未覆盖原提示或正式评分。"}</span>
                     </div>
                   ) : (
-                    <div><b>CFR+ 结果已锁定</b><span>本决策现已按局部求解频率与动作 EV 进行提示和评分；公开基线验证的是求解实现，不代表这个具体牌面已与商业数据库逐节点对照。</span></div>
+                    <div><b>DCFR 检查点结果已锁定</b><span>训练 {riverDeepSolve.headsUpTrainedIterations ?? "—"} 轮，采用 {riverDeepSolve.headsUpSelectedIterations ?? "—"} 轮检查点；固定树可剥削度 {((riverDeepSolve.headsUpExploitabilityPotFraction ?? 0) * 100).toFixed(3)}%，{riverDeepSolve.headsUpStopReason === "target-stable" ? "已连续通过内部误差门槛" : "在迭代上限内选择历史最低误差"}。这不代表该牌面已与商业数据库逐节点对照。</span></div>
                   )
                 )}
                 {riverDeepSolve.status === "error" && (
@@ -2123,7 +2153,7 @@ const LANDING_GUIDE_ITEMS = [
     index: "04",
     eyebrow: "STRATEGY BOUNDARY",
     title: "完整 GTO 的边界",
-    text: "已加入经过均衡值与可利用度验证的 CFR+ 核心和真实 1v1 河牌子博弈；牌桌未命中已求解节点时仍明确使用本地近似，不把六人动态策略冒充精确解。",
+    text: "已加入论文相位的 CFR+、DCFR(1.5,0,2) 和真实 1v1 河牌子博弈，并用独立 best response 审计误差；牌桌未命中已求解节点时仍明确使用本地近似，不把六人动态策略冒充精确解。",
   },
   {
     index: "05",
@@ -2566,6 +2596,9 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
     const threeWayResult = currentRiverSolve?.result && isThreeWayRiverResult(currentRiverSolve.result)
       ? currentRiverSolve.result
       : null;
+    const headsUpResult = currentRiverSolve?.result && !isThreeWayRiverResult(currentRiverSolve.result)
+      ? currentRiverSolve.result
+      : null;
     return {
       eligible: true,
       mode: riverCoachPlan.mode,
@@ -2585,6 +2618,12 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
       iterations: threeWayResult?.iterations,
       quickIterations: threeWayResult?.quickIterations,
       targetMet: threeWayResult?.targetMet,
+      headsUpExploitabilityPotFraction: headsUpResult?.exploitabilityPotFraction,
+      headsUpTargetExploitabilityPotFraction:
+        headsUpResult?.convergence.targetExploitabilityPotFraction,
+      headsUpTrainedIterations: headsUpResult?.convergence.trainedIterations,
+      headsUpSelectedIterations: headsUpResult?.convergence.selectedIterations,
+      headsUpStopReason: headsUpResult?.convergence.stopReason,
       onSolve: runRiverDeepSolve,
     };
   }, [riverCoachPlan, currentRiverSolve, runRiverDeepSolve]);
@@ -2827,6 +2866,8 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
         solverDetails = `三人多分辨率结果已通过 ≤${(riverSolver.targetNashConvPotFraction * 100).toFixed(0)}% 实验提示门槛，但未通过 ≤${(riverSolver.scoringTargetPotFraction * 100).toFixed(0)}% 较高稳定性评分门槛；提示采用高分辨率混合，分数仍使用公开范围启发式。`;
       } else if (threeWay && !solvedAdvice.riverSolverAccepted) {
         solverDetails = `三人快速/复核 NashConv 与跨分辨率动作 regret 没有同时达到 ≤${(riverSolver.targetNashConvPotFraction * 100).toFixed(0)}% 实验提示门槛；本次仍按公开范围启发式提示与评分。`;
+      } else if (!threeWay && solvedAdvice.riverSolverAccepted && !solvedAdvice.riverSolverGradingAccepted) {
+        solverDetails = `单挑固定树结果已达到训练提示门槛，但可剥削度尚未进入正式局部 EV 评分级别；提示采用 DCFR 混合，分数仍使用公开范围启发式。`;
       } else if (threeWay && !selectedRoute) {
         solverDetails = "你的动作不在当前单次下注固定树中，因此没有把中心化动作效用映射成 EV 损失；该动作需要保留到更完整的含加注树复盘。";
       }
@@ -3423,7 +3464,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                         : "求解已达门槛，但你的动作不在固定树中，因此没有按求解器 EV 损失评分。"}`
                     : feedback.solverEvLossBb === null
                       ? "分数表示与当前公开策略频率的匹配程度，不是求解器计算的 EV 损失。"
-                      : `分数以局部 CFR+ 动作 EV 损失 ${feedback.solverEvLossBb.toFixed(2)} BB 为主；固定树可剥削度约 ${((feedback.solverExploitabilityPotFraction ?? 0) * 100).toFixed(3)}% 底池。`}</p>
+                      : `分数以局部求解器动作 EV 损失 ${feedback.solverEvLossBb.toFixed(2)} BB 为主；固定树可剥削度约 ${((feedback.solverExploitabilityPotFraction ?? 0) * 100).toFixed(3)}% 底池。`}</p>
                 </section>
               ) : (
                 <section className="last-decision empty-decision"><span>完成第一个决策后，这里会出现即时反馈。</span></section>
@@ -3545,7 +3586,7 @@ function SoloTrainer({ onExit }: { onExit: () => void }) {
                         <small>对行动范围估算权益 {Math.round(item.equity * 100)}% / 直接赔率 {Math.round(item.potOdds * 100)}% / 权益实现参考线 {Math.round(item.realizationThreshold * 100)}% · 权益实现估算 {Math.round(item.equityRealization * 100)}% · 有效筹码 {item.effectiveStackBb.toFixed(1)} BB / SPR {item.spr.toFixed(1)}{item.solverKind === "three-way-approximation"
                           ? ` · 三人 ${item.solverRepresentativeCombos} · NashConv ${((item.solverQuickNashConvPotFraction ?? 0) * 100).toFixed(1)}%/${((item.solverNashConvPotFraction ?? 0) * 100).toFixed(1)}% · regret 稳定差 ${((item.solverActionRegretDriftPotFraction ?? 0) * 100).toFixed(1)}%${!item.solverTargetMet ? " · 未接管提示或评分" : !item.solverAcceptedForScoring ? " · 仅接管提示" : item.solverEvLossBb === null ? " · 树外动作无 EV 评分" : ` · 相对最高动作 EV 损失 ${item.solverEvLossBb.toFixed(2)} BB`}`
                           : item.solverEvLossBb !== null
-                            ? ` · CFR+ 动作 EV 损失 ${item.solverEvLossBb.toFixed(2)} BB · 固定树可剥削度 ${((item.solverExploitabilityPotFraction ?? 0) * 100).toFixed(3)}%`
+                            ? ` · 局部求解器动作 EV 损失 ${item.solverEvLossBb.toFixed(2)} BB · 固定树可剥削度 ${((item.solverExploitabilityPotFraction ?? 0) * 100).toFixed(3)}%`
                             : item.callEv === null ? "" : ` · 跟注 EV 代理 ${item.callEv >= 0 ? "+" : ""}${Math.round(item.callEv)}`} · 来源：{item.strategySource}。{item.note}</small>
                       )}
                     </div>

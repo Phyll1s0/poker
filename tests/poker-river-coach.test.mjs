@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  headsUpRiverCoachAdmission,
   representativeRiverRange,
   riverCoachHoldingKey,
   solveRiverCoachDecision,
@@ -24,6 +25,21 @@ const publicWeight = (hole) => {
   return (0.2 + high / 14) * pair * suited;
 };
 
+test("heads-up river admission separates experimental hints from formal EV scoring", () => {
+  assert.deepEqual(headsUpRiverCoachAdmission("experimental"), {
+    acceptedForGuidance: false,
+    acceptedForScoring: false,
+  });
+  assert.deepEqual(headsUpRiverCoachAdmission("training"), {
+    acceptedForGuidance: true,
+    acceptedForScoring: false,
+  });
+  assert.deepEqual(headsUpRiverCoachAdmission("commercial-target"), {
+    acceptedForGuidance: true,
+    acceptedForScoring: true,
+  });
+});
+
 test("representative public ranges retain the pinned hero holding without reading a villain hand", () => {
   const range = representativeRiverRange(BOARD, SUITS, publicWeight, 8, HERO);
 
@@ -34,7 +50,7 @@ test("representative public ranges retain the pinned hero holding without readin
   assert.ok(Object.isFrozen(range));
 });
 
-test("river coach solves the current reduced CFR+ node and exposes frequencies plus action EV", () => {
+test("river coach solves the current reduced DCFR node and exposes frequencies plus action EV", () => {
   const result = solveRiverCoachDecision({
     board: BOARD,
     suits: SUITS,
@@ -50,7 +66,17 @@ test("river coach solves the current reduced CFR+ node and exposes frequencies p
     iterations: 300,
   });
 
-  assert.equal(result.source, "internal-cfr+-reduced-river");
+  assert.equal(result.source, "internal-dcfr-reduced-river");
+  assert.equal(result.algorithm, "dcfr");
+  assert.equal(result.solverVersion, "rangecraft-dcfr/0.2.0");
+  assert.deepEqual(result.solverParameters.dcfr, { alpha: 1.5, beta: 0, gamma: 2 });
+  assert.equal(result.convergence.mode, "adaptive");
+  assert.ok(result.convergence.checkpoints.length >= 1);
+  assert.ok(
+    result.exploitabilityPotFraction
+      <= Math.min(...result.convergence.checkpoints.map((checkpoint) => checkpoint.exploitabilityPotFraction))
+        + 1e-15,
+  );
   assert.equal(result.history, "root");
   assert.equal(result.heroHolding, "AsAd");
   assert.ok(result.actions.some((action) => action.action === "check"));
@@ -58,6 +84,10 @@ test("river coach solves the current reduced CFR+ node and exposes frequencies p
   assert.ok(Math.abs(result.actions.reduce((sum, action) => sum + action.frequency, 0) - 1) < 1e-12);
   assert.ok(result.actions.every((action) => Number.isFinite(action.evBb)));
   assert.ok(Number.isFinite(result.exploitabilityPotFraction));
+  assert.deepEqual(
+    { acceptedForGuidance: result.acceptedForGuidance, acceptedForScoring: result.acceptedForScoring },
+    headsUpRiverCoachAdmission(result.accuracyLevel),
+  );
   assert.ok(Object.isFrozen(result));
   assert.ok(Object.isFrozen(result.actions));
 });

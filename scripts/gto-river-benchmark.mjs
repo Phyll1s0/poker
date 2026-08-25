@@ -62,6 +62,7 @@ async function main() {
   );
   const startedAt = Date.now();
   const solution = solveHeadsUpRiver(fixture.spec, {
+    algorithm: "cfr+",
     iterations: options.iterations,
     averagingDelay: Math.min(100, Math.max(0, options.iterations - 1)),
     linearAveraging: true,

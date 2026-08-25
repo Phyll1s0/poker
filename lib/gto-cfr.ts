@@ -64,11 +64,43 @@ export interface CFRPlusResult<Action extends string> {
   expectedValue: number;
 }
 
+export interface DiscountedCFRParameters {
+  /** Exponent used to discount accumulated positive regrets. */
+  alpha: number;
+  /** Exponent used to discount accumulated negative regrets. */
+  beta: number;
+  /** Polynomial weight applied to iteration t in the average strategy. */
+  gamma: number;
+}
+
+export interface DiscountedCFRRunOptions {
+  /** Number of complete alternating player updates. */
+  iterations: number;
+}
+
+export interface SolveDiscountedCFROptions extends DiscountedCFRRunOptions {
+  alpha?: number;
+  beta?: number;
+  gamma?: number;
+}
+
+export interface DiscountedCFRResult<Action extends string>
+  extends CFRPlusResult<Action> {
+  parameters: Readonly<DiscountedCFRParameters>;
+}
+
 export interface ExactExploitabilityOptions {
   /** Safety limit for deterministic best-response policies per player. */
   maxPoliciesPerPlayer?: number;
   /** Safety limit while enumerating the full game tree. */
   maxTreeNodes?: number;
+  /** Missing information sets are errors by default in formal audits. */
+  missingInformationSets?: "error" | "uniform";
+}
+
+export interface StrategyEvaluationOptions {
+  /** Expected-value convenience defaults to uniform for backwards compatibility. */
+  missingInformationSets?: "error" | "uniform";
 }
 
 export interface ExactExploitabilityResult {
@@ -99,6 +131,8 @@ interface ReachProbabilities {
 
 const PROBABILITY_TOLERANCE = 1e-9;
 const DEFAULT_MAX_DEPTH = 512;
+export const DEFAULT_DCFR_PARAMETERS: Readonly<DiscountedCFRParameters> =
+  Object.freeze({ alpha: 1.5, beta: 0, gamma: 2 });
 
 function playerReach(reach: ReachProbabilities, player: CFRPlayer): number {
   return player === 0 ? reach.player0 : reach.player1;
@@ -217,13 +251,14 @@ export class CFRPlusSolver<State, Action extends string> {
 
     for (let localIteration = 0; localIteration < options.iterations; localIteration += 1) {
       const iteration = this.#iterations + 1;
-      this.#updateRegrets(0);
-      this.#updateRegrets(1);
-
-      if (iteration > averagingDelay) {
-        const weight = linearAveraging ? iteration - averagingDelay : 1;
-        this.#accumulateAverageStrategy(weight);
-      }
+      const averageWeight = iteration > averagingDelay
+        ? linearAveraging ? iteration - averagingDelay : 1
+        : 0;
+      // The proved alternating CFR+ average is staggered: player 1's old
+      // strategy is captured in player 0's pass, then player 0's newly updated
+      // strategy is captured in player 1's pass.
+      this.#updateRegrets(0, averageWeight > 0 ? 1 : null, averageWeight);
+      this.#updateRegrets(1, averageWeight > 0 ? 0 : null, averageWeight);
       this.#iterations = iteration;
     }
 
@@ -269,9 +304,14 @@ export class CFRPlusSolver<State, Action extends string> {
     return node;
   }
 
-  #updateRegrets(traverser: CFRPlayer): void {
+  #updateRegrets(
+    traverser: CFRPlayer,
+    averagePlayer: CFRPlayer | null,
+    iterationWeight: number,
+  ): void {
     const strategySnapshot = new Map<string, readonly number[]>();
     const regretDeltas = new Map<string, Float64Array>();
+    const averaged = new Set<string>();
 
     const traverse = (
       state: State,
@@ -311,6 +351,14 @@ export class CFRPlusSolver<State, Action extends string> {
       if (!strategy) {
         strategy = regretMatching(node.regrets);
         strategySnapshot.set(key, strategy);
+      }
+
+      if (actor === averagePlayer && !averaged.has(key)) {
+        averaged.add(key);
+        const weight = iterationWeight * playerReach(reach, actor);
+        for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
+          node.strategySum[actionIndex] += weight * strategy[actionIndex];
+        }
       }
 
       const actionValues = new Array<number>(actions.length);
@@ -359,59 +407,6 @@ export class CFRPlusSolver<State, Action extends string> {
     }
   }
 
-  #accumulateAverageStrategy(iterationWeight: number): void {
-    const seen = new Set<string>();
-    const traverse = (
-      state: State,
-      reach: ReachProbabilities,
-      depth: number,
-    ): void => {
-      if (depth > DEFAULT_MAX_DEPTH) {
-        throw new Error(`Game tree exceeded maximum depth ${DEFAULT_MAX_DEPTH}.`);
-      }
-      const actor = this.#game.currentActor(state);
-      if (actor === "terminal") return;
-      if (actor === "chance") {
-        const outcomes = this.#game.chanceOutcomes(state);
-        validateChanceOutcomes(outcomes);
-        for (const outcome of outcomes) {
-          traverse(
-            this.#game.nextState(state, outcome.action),
-            { ...reach, chance: reach.chance * outcome.probability },
-            depth + 1,
-          );
-        }
-        return;
-      }
-
-      const actions = this.#game.actions(state);
-      const informationSet = this.#game.informationSet(state, actor);
-      const node = this.#node(actor, informationSet, actions);
-      const key = nodeKey(actor, informationSet);
-      const strategy = regretMatching(node.regrets);
-      if (!seen.has(key)) {
-        seen.add(key);
-        const weight = iterationWeight * playerReach(reach, actor);
-        for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
-          node.strategySum[actionIndex] += weight * strategy[actionIndex];
-        }
-      }
-      for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
-        traverse(
-          this.#game.nextState(state, actions[actionIndex]),
-          withPlayerReach(reach, actor, strategy[actionIndex]),
-          depth + 1,
-        );
-      }
-    };
-
-    traverse(
-      this.#game.initialState,
-      { player0: 1, player1: 1, chance: 1 },
-      0,
-    );
-  }
-
   #exportStrategy(average: boolean): CFRStrategyProfile<Action> {
     const players: [Map<string, CFRStrategyEntry<Action>>, Map<string, CFRStrategyEntry<Action>>] = [
       new Map(),
@@ -437,6 +432,245 @@ export class CFRPlusSolver<State, Action extends string> {
   }
 }
 
+function finiteDCFRParameter(value: number, label: string): number {
+  if (!Number.isFinite(value)) {
+    throw new RangeError(`${label} must be finite; got ${value}.`);
+  }
+  return value;
+}
+
+function dcfrDiscount(iteration: number, exponent: number): number {
+  if (iteration === 1 || exponent === 0) return 0.5;
+  const powered = iteration ** exponent;
+  if (powered === Number.POSITIVE_INFINITY) return 1;
+  return powered / (powered + 1);
+}
+
+/**
+ * Deterministic alternating-update DCFR.
+ *
+ * The update follows Brown and Sandholm's DCFR(alpha, beta, gamma): after
+ * adding the current counterfactual regret, positive and negative accumulated
+ * regrets receive their respective iteration discounts. The average strategy
+ * gives iteration t weight t^gamma, which is normalization-equivalent to
+ * repeatedly discounting earlier average-strategy contributions by
+ * (t / (t + 1))^gamma.
+ */
+export class DiscountedCFRSolver<State, Action extends string> {
+  readonly #game: TabularZeroSumGame<State, Action>;
+  readonly #nodes = new Map<string, InformationNode<Action>>();
+  readonly #parameters: Readonly<DiscountedCFRParameters>;
+  #iterations = 0;
+
+  constructor(
+    game: TabularZeroSumGame<State, Action>,
+    parameters: Partial<DiscountedCFRParameters> = {},
+  ) {
+    this.#game = game;
+    this.#parameters = Object.freeze({
+      alpha: finiteDCFRParameter(
+        parameters.alpha ?? DEFAULT_DCFR_PARAMETERS.alpha,
+        "alpha",
+      ),
+      beta: finiteDCFRParameter(
+        parameters.beta ?? DEFAULT_DCFR_PARAMETERS.beta,
+        "beta",
+      ),
+      gamma: finiteDCFRParameter(
+        parameters.gamma ?? DEFAULT_DCFR_PARAMETERS.gamma,
+        "gamma",
+      ),
+    });
+  }
+
+  get iterations(): number {
+    return this.#iterations;
+  }
+
+  get parameters(): Readonly<DiscountedCFRParameters> {
+    return this.#parameters;
+  }
+
+  run(options: DiscountedCFRRunOptions): DiscountedCFRResult<Action> {
+    validateIterations(options.iterations, "iterations");
+    for (let localIteration = 0; localIteration < options.iterations; localIteration += 1) {
+      const iteration = this.#iterations + 1;
+      const iterationWeight = iteration ** this.#parameters.gamma;
+      assertFinite(iterationWeight, "DCFR average-strategy iteration weight");
+      this.#updatePlayer(0, iteration, iterationWeight);
+      this.#updatePlayer(1, iteration, iterationWeight);
+      this.#iterations = iteration;
+    }
+
+    const averageStrategy = this.averageStrategy();
+    return {
+      iterations: this.#iterations,
+      parameters: this.#parameters,
+      averageStrategy,
+      currentStrategy: this.currentStrategy(),
+      expectedValue: expectedValue(this.#game, averageStrategy),
+    };
+  }
+
+  averageStrategy(): CFRStrategyProfile<Action> {
+    return this.#exportStrategy(true);
+  }
+
+  currentStrategy(): CFRStrategyProfile<Action> {
+    return this.#exportStrategy(false);
+  }
+
+  #node(
+    player: CFRPlayer,
+    informationSet: string,
+    actions: readonly Action[],
+  ): InformationNode<Action> {
+    if (actions.length === 0) {
+      throw new Error(`Information set "${informationSet}" has no legal actions.`);
+    }
+    const key = nodeKey(player, informationSet);
+    const existing = this.#nodes.get(key);
+    if (existing) {
+      assertSameOrderedActions(existing.actions, actions, informationSet);
+      return existing;
+    }
+    const node: InformationNode<Action> = {
+      player,
+      informationSet,
+      actions: [...actions],
+      regrets: new Float64Array(actions.length),
+      strategySum: new Float64Array(actions.length),
+    };
+    this.#nodes.set(key, node);
+    return node;
+  }
+
+  #updatePlayer(
+    traverser: CFRPlayer,
+    iteration: number,
+    iterationWeight: number,
+  ): void {
+    const strategySnapshot = new Map<string, readonly number[]>();
+    const regretDeltas = new Map<string, Float64Array>();
+    const averaged = new Set<string>();
+
+    const traverse = (
+      state: State,
+      reach: ReachProbabilities,
+      depth: number,
+    ): number => {
+      if (depth > DEFAULT_MAX_DEPTH) {
+        throw new Error(`Game tree exceeded maximum depth ${DEFAULT_MAX_DEPTH}.`);
+      }
+      const actor = this.#game.currentActor(state);
+      if (actor === "terminal") {
+        const utility0 = this.#game.terminalUtility(state);
+        assertFinite(utility0, "Terminal utility");
+        return traverser === 0 ? utility0 : -utility0;
+      }
+      if (actor === "chance") {
+        const outcomes = this.#game.chanceOutcomes(state);
+        validateChanceOutcomes(outcomes);
+        let value = 0;
+        for (const outcome of outcomes) {
+          value += outcome.probability * traverse(
+            this.#game.nextState(state, outcome.action),
+            { ...reach, chance: reach.chance * outcome.probability },
+            depth + 1,
+          );
+        }
+        return value;
+      }
+
+      const actions = this.#game.actions(state);
+      const informationSet = this.#game.informationSet(state, actor);
+      const node = this.#node(actor, informationSet, actions);
+      const key = nodeKey(actor, informationSet);
+      let strategy = strategySnapshot.get(key);
+      if (!strategy) {
+        strategy = regretMatching(node.regrets);
+        strategySnapshot.set(key, strategy);
+      }
+
+      if (actor === traverser && !averaged.has(key)) {
+        averaged.add(key);
+        const weight = iterationWeight * playerReach(reach, actor);
+        for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
+          node.strategySum[actionIndex] += weight * strategy[actionIndex];
+        }
+      }
+
+      const actionValues = new Array<number>(actions.length);
+      let nodeValue = 0;
+      for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
+        const actionValue = traverse(
+          this.#game.nextState(state, actions[actionIndex]),
+          withPlayerReach(reach, actor, strategy[actionIndex]),
+          depth + 1,
+        );
+        actionValues[actionIndex] = actionValue;
+        nodeValue += strategy[actionIndex] * actionValue;
+      }
+
+      if (actor === traverser) {
+        const counterfactualReach =
+          reach.chance * (traverser === 0 ? reach.player1 : reach.player0);
+        let delta = regretDeltas.get(key);
+        if (!delta) {
+          delta = new Float64Array(actions.length);
+          regretDeltas.set(key, delta);
+        }
+        for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
+          delta[actionIndex] +=
+            counterfactualReach * (actionValues[actionIndex] - nodeValue);
+        }
+      }
+      return nodeValue;
+    };
+
+    traverse(
+      this.#game.initialState,
+      { player0: 1, player1: 1, chance: 1 },
+      0,
+    );
+
+    for (const [key, delta] of regretDeltas) {
+      const node = this.#nodes.get(key);
+      if (!node) throw new Error(`Missing DCFR node for regret update "${key}".`);
+      for (let actionIndex = 0; actionIndex < delta.length; actionIndex += 1) {
+        const accumulated = node.regrets[actionIndex] + delta[actionIndex];
+        const exponent = accumulated >= 0
+          ? this.#parameters.alpha
+          : this.#parameters.beta;
+        node.regrets[actionIndex] = accumulated * dcfrDiscount(iteration, exponent);
+      }
+    }
+  }
+
+  #exportStrategy(average: boolean): CFRStrategyProfile<Action> {
+    const players: [Map<string, CFRStrategyEntry<Action>>, Map<string, CFRStrategyEntry<Action>>] = [
+      new Map(),
+      new Map(),
+    ];
+    for (const node of this.#nodes.values()) {
+      let probabilities: number[];
+      if (average) {
+        const total = node.strategySum.reduce((sum, value) => sum + value, 0);
+        probabilities = total > 0
+          ? Array.from(node.strategySum, (value) => value / total)
+          : regretMatching(node.regrets);
+      } else {
+        probabilities = regretMatching(node.regrets);
+      }
+      players[node.player].set(node.informationSet, {
+        actions: [...node.actions],
+        probabilities,
+      });
+    }
+    return players;
+  }
+}
+
 /** Solve a game in one deterministic CFR+ run. */
 export function solveCFRPlus<State, Action extends string>(
   game: TabularZeroSumGame<State, Action>,
@@ -445,14 +679,27 @@ export function solveCFRPlus<State, Action extends string>(
   return new CFRPlusSolver(game).run(options);
 }
 
+/** Solve a game in one deterministic DCFR(alpha, beta, gamma) run. */
+export function solveDiscountedCFR<State, Action extends string>(
+  game: TabularZeroSumGame<State, Action>,
+  options: SolveDiscountedCFROptions,
+): DiscountedCFRResult<Action> {
+  const solver = new DiscountedCFRSolver(game, options);
+  return solver.run({ iterations: options.iterations });
+}
+
 function strategyProbabilities<Action extends string>(
   profile: CFRStrategyProfile<Action>,
   player: CFRPlayer,
   informationSet: string,
   actions: readonly Action[],
+  missingInformationSets: "error" | "uniform" = "uniform",
 ): readonly number[] {
   const entry = profile[player].get(informationSet);
-  if (!entry) return uniform(actions.length);
+  if (!entry) {
+    if (missingInformationSets === "uniform") return uniform(actions.length);
+    throw new Error(`Strategy is missing information set "${informationSet}".`);
+  }
 
   if (entry.actions.length !== entry.probabilities.length) {
     throw new Error(`Strategy at "${informationSet}" has mismatched action/probability lengths.`);
@@ -492,7 +739,9 @@ function strategyProbabilities<Action extends string>(
 export function expectedValue<State, Action extends string>(
   game: TabularZeroSumGame<State, Action>,
   profile: CFRStrategyProfile<Action>,
+  options: StrategyEvaluationOptions = {},
 ): number {
+  const missingInformationSets = options.missingInformationSets ?? "uniform";
   const traverse = (state: State, depth: number): number => {
     if (depth > DEFAULT_MAX_DEPTH) {
       throw new Error(`Game tree exceeded maximum depth ${DEFAULT_MAX_DEPTH}.`);
@@ -514,7 +763,13 @@ export function expectedValue<State, Action extends string>(
     }
     const actions = game.actions(state);
     const informationSet = game.informationSet(state, actor);
-    const probabilities = strategyProbabilities(profile, actor, informationSet, actions);
+    const probabilities = strategyProbabilities(
+      profile,
+      actor,
+      informationSet,
+      actions,
+      missingInformationSets,
+    );
     let value = 0;
     for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
       value +=
@@ -597,6 +852,7 @@ export function exactExploitability<State, Action extends string>(
 ): ExactExploitabilityResult {
   const maxPolicies = options.maxPoliciesPerPlayer ?? 1_000_000;
   const maxTreeNodes = options.maxTreeNodes ?? 1_000_000;
+  const missingInformationSets = options.missingInformationSets ?? "error";
   validateIterations(maxPolicies, "maxPoliciesPerPlayer");
   validateIterations(maxTreeNodes, "maxTreeNodes");
   if (maxPolicies === 0 || maxTreeNodes === 0) {
@@ -642,7 +898,13 @@ export function exactExploitability<State, Action extends string>(
         }
         return evaluate(game.nextState(state, action), depth + 1);
       }
-      const probabilities = strategyProbabilities(profile, actor, informationSet, actions);
+      const probabilities = strategyProbabilities(
+        profile,
+        actor,
+        informationSet,
+        actions,
+        missingInformationSets,
+      );
       let value = 0;
       for (let index = 0; index < actions.length; index += 1) {
         value += probabilities[index] * evaluate(game.nextState(state, actions[index]), depth + 1);
@@ -668,7 +930,7 @@ export function exactExploitability<State, Action extends string>(
     return best;
   };
 
-  const profileValue = expectedValue(game, profile);
+  const profileValue = expectedValue(game, profile, { missingInformationSets });
   const player0BestResponseValue = responseValue(0);
   const player1BestResponseValueForPlayer0 = responseValue(1);
   const nashConv = player0BestResponseValue - player1BestResponseValueForPlayer0;

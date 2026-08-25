@@ -1,10 +1,14 @@
 import {
+  CFRPlusSolver,
+  DEFAULT_DCFR_PARAMETERS,
+  DiscountedCFRSolver,
   exactExploitability as exactSmallGameExploitability,
   expectedValue,
   solveCFRPlus,
   type CFRPlayer,
   type CFRStrategyEntry,
   type CFRStrategyProfile,
+  type DiscountedCFRParameters,
   type TabularZeroSumGame,
 } from "./gto-cfr.ts";
 import {
@@ -100,13 +104,46 @@ export type HeadsUpRiverExploitability = Readonly<{
   profileValueBb: number;
   oopBestResponseValueBb: number;
   ipBestResponseValueForOopBb: number;
+  oopDeviationGainBb: number;
+  ipDeviationGainBb: number;
   nashConvBb: number;
   exploitabilityBb: number;
   exploitabilityPotFraction: number;
 }>;
 
+export type HeadsUpRiverSolverAlgorithm = "cfr+" | "dcfr";
+
+export type HeadsUpRiverConvergenceCheckpoint = Readonly<{
+  iterations: number;
+  exploitabilityBb: number;
+  exploitabilityPotFraction: number;
+  targetMet: boolean;
+}>;
+
+export type HeadsUpRiverConvergence = Readonly<{
+  mode: "fixed" | "adaptive";
+  targetExploitabilityPotFraction?: number;
+  requiredConsecutiveTargetCheckpoints?: number;
+  consecutiveTargetCheckpoints: number;
+  trainedIterations: number;
+  selectedIterations: number;
+  stopReason: "fixed-iterations" | "target-stable" | "iteration-limit";
+  checkpoints: readonly HeadsUpRiverConvergenceCheckpoint[];
+}>;
+
 export type HeadsUpRiverSolution = Readonly<{
-  solverVersion: "rangecraft-cfr+/0.1.0";
+  solverVersion: "rangecraft-cfr+/0.2.0" | "rangecraft-dcfr/0.2.0";
+  resultId: string;
+  algorithm: HeadsUpRiverSolverAlgorithm;
+  solverParameters: Readonly<{
+    updateSchedule: "alternating-player-0-first";
+    regretUpdateOrder: "add-then-rm+-clip" | "add-then-sign-discount";
+    averagingSchedule: "alternating-staggered-linear" | "paper-polynomial";
+    numericPrecision: "float64";
+    averagingDelay?: number;
+    linearAveraging?: boolean;
+    dcfr?: Readonly<DiscountedCFRParameters>;
+  }>;
   spotId: string;
   gameSpecId: string;
   treeId: string;
@@ -117,16 +154,40 @@ export type HeadsUpRiverSolution = Readonly<{
   accuracyScope: "within-fixed-tree";
   externalBenchmarkStatus: "not-run";
   accuracyLevel: HeadsUpAccuracyLevel;
+  convergence: HeadsUpRiverConvergence;
   exploitability: HeadsUpRiverExploitability;
   strategies: readonly HeadsUpRiverStrategy[];
   actionValues: readonly HeadsUpRiverActionEv[];
   averageStrategy: CFRStrategyProfile<HeadsUpRiverAction>;
 }>;
 
-export type SolveHeadsUpRiverOptions = Readonly<{
-  iterations: number;
+export type SolveHeadsUpRiverOptions =
+  | Readonly<{
+    algorithm?: "cfr+";
+    iterations: number;
+    averagingDelay?: number;
+    linearAveraging?: boolean;
+  }>
+  | Readonly<{
+    algorithm: "dcfr";
+    iterations: number;
+    alpha?: number;
+    beta?: number;
+    gamma?: number;
+  }>;
+
+export type SolveHeadsUpRiverAdaptiveOptions = Readonly<{
+  algorithm?: HeadsUpRiverSolverAlgorithm;
+  maxIterations: number;
+  checkpointInterval?: number;
+  minimumIterations?: number;
+  targetExploitabilityPotFraction?: number;
+  requiredConsecutiveTargetCheckpoints?: number;
   averagingDelay?: number;
   linearAveraging?: boolean;
+  alpha?: number;
+  beta?: number;
+  gamma?: number;
 }>;
 
 export type HeadsUpRiverGame = Readonly<{
@@ -443,7 +504,7 @@ function strategyProbability(
   actionIndex: number,
 ): number {
   const entry = profile[player].get(informationSet);
-  if (!entry) return 1 / actions.length;
+  if (!entry) throw new Error(`策略缺少信息集 ${informationSet}`);
   if (entry.actions.length !== entry.probabilities.length) {
     throw new Error(`策略节点 ${informationSet} 的动作与频率长度不同`);
   }
@@ -631,14 +692,26 @@ export function createHeadsUpRiverGame(input: HeadsUpRiverSpec): HeadsUpRiverGam
       return deals.reduce((sum, deal, index) => sum + deal.probability * values[index], 0);
     };
 
-    const profileValueBb = expectedValue(game, profile);
+    const profileValueBb = expectedValue(game, profile, { missingInformationSets: "error" });
     const oopBestResponseValueBb = bestResponse(0);
     const ipBestResponseValueForOopBb = bestResponse(1);
-    const nashConvBb = Math.max(0, oopBestResponseValueBb - ipBestResponseValueForOopBb);
+    const rawOopGainBb = oopBestResponseValueBb - profileValueBb;
+    const rawIpGainBb = profileValueBb - ipBestResponseValueForOopBb;
+    const auditTolerance = Math.max(1, spec.potBb) * 1e-9;
+    if (rawOopGainBb < -auditTolerance || rawIpGainBb < -auditTolerance) {
+      throw new Error(
+        `best-response 审计违反单边改进关系：OOP ${rawOopGainBb} BB / IP ${rawIpGainBb} BB`,
+      );
+    }
+    const oopDeviationGainBb = Math.max(0, rawOopGainBb);
+    const ipDeviationGainBb = Math.max(0, rawIpGainBb);
+    const nashConvBb = oopDeviationGainBb + ipDeviationGainBb;
     return Object.freeze({
       profileValueBb,
       oopBestResponseValueBb,
       ipBestResponseValueForOopBb,
+      oopDeviationGainBb,
+      ipDeviationGainBb,
       nashConvBb,
       exploitabilityBb: nashConvBb / 2,
       exploitabilityPotFraction: nashConvBb / 2 / spec.potBb,
@@ -882,33 +955,309 @@ function immutableStrategyProfile(
   ]) as CFRStrategyProfile<HeadsUpRiverAction>;
 }
 
+function completeUniformRiverProfile(
+  model: HeadsUpRiverGame,
+): CFRStrategyProfile<HeadsUpRiverAction> {
+  const players: [
+    Map<string, CFRStrategyEntry<HeadsUpRiverAction>>,
+    Map<string, CFRStrategyEntry<HeadsUpRiverAction>>,
+  ] = [new Map(), new Map()];
+  const traverse = (state: HeadsUpRiverState): void => {
+    const actor = model.game.currentActor(state);
+    if (actor === "terminal") return;
+    if (actor === "chance") {
+      for (const outcome of model.game.chanceOutcomes(state)) {
+        traverse(model.game.nextState(state, outcome.action));
+      }
+      return;
+    }
+    const actions = model.game.actions(state);
+    const informationSet = model.game.informationSet(state, actor);
+    if (!players[actor].has(informationSet)) {
+      players[actor].set(informationSet, {
+        actions: [...actions],
+        probabilities: actions.map(() => 1 / actions.length),
+      });
+    }
+    for (const action of actions) traverse(model.game.nextState(state, action));
+  };
+  traverse(model.game.initialState);
+  return players;
+}
+
+function solverVersion(algorithm: HeadsUpRiverSolverAlgorithm): HeadsUpRiverSolution["solverVersion"] {
+  return algorithm === "dcfr" ? "rangecraft-dcfr/0.2.0" : "rangecraft-cfr+/0.2.0";
+}
+
+function buildHeadsUpRiverSolution(
+  model: HeadsUpRiverGame,
+  algorithm: HeadsUpRiverSolverAlgorithm,
+  solverParameters: HeadsUpRiverSolution["solverParameters"],
+  iterations: number,
+  profile: CFRStrategyProfile<HeadsUpRiverAction>,
+  convergence: HeadsUpRiverConvergence,
+): HeadsUpRiverSolution {
+  const averageStrategy = immutableStrategyProfile(
+    iterations === 0 ? completeUniformRiverProfile(model) : profile,
+  );
+  const exploitability = model.exploitability(averageStrategy);
+  const actionValues = model.actionValues(averageStrategy);
+  const strategies = exportedStrategies(averageStrategy);
+  const version = solverVersion(algorithm);
+  const frozenSolverParameters = Object.freeze({
+    ...solverParameters,
+    ...(solverParameters.dcfr
+      ? { dcfr: Object.freeze({ ...solverParameters.dcfr }) }
+      : {}),
+  });
+  const resultId = `rc-hu-river-result-v1-${stableGtoHash({
+    spotId: model.spotId,
+    gameSpecId: model.gameSpecId,
+    treeId: model.treeId,
+    solverVersion: version,
+    algorithm,
+    solverParameters: frozenSolverParameters,
+    iterations,
+    strategies,
+  }).slice(0, 24)}`;
+  return Object.freeze({
+    solverVersion: version,
+    resultId,
+    algorithm,
+    solverParameters: frozenSolverParameters,
+    spotId: model.spotId,
+    gameSpecId: model.gameSpecId,
+    treeId: model.treeId,
+    ...(model.standardTemplate ? { standardTemplate: model.standardTemplate } : {}),
+    source: "internal-solver",
+    iterations,
+    compatibleDeals: model.compatibleDeals,
+    accuracyScope: "within-fixed-tree",
+    externalBenchmarkStatus: "not-run",
+    accuracyLevel: headsUpAccuracyLevel(exploitability.exploitabilityPotFraction),
+    convergence,
+    exploitability,
+    strategies,
+    actionValues,
+    averageStrategy,
+  });
+}
+
 /** Solves a weighted exact-card heads-up river subgame and audits its exploitability. */
 export function solveHeadsUpRiver(
   spec: HeadsUpRiverSpec,
   options: SolveHeadsUpRiverOptions,
 ): HeadsUpRiverSolution {
   const model = createHeadsUpRiverGame(spec);
+  const algorithm = options.algorithm ?? "cfr+";
+  if (algorithm === "dcfr") {
+    const solver = new DiscountedCFRSolver(model.game, options);
+    const solved = solver.run({ iterations: options.iterations });
+    const profile = solved.iterations === 0
+      ? completeUniformRiverProfile(model)
+      : solved.averageStrategy;
+    const exploitability = model.exploitability(profile);
+    const convergence = Object.freeze({
+      mode: "fixed" as const,
+      consecutiveTargetCheckpoints: 0,
+      trainedIterations: solved.iterations,
+      selectedIterations: solved.iterations,
+      stopReason: "fixed-iterations" as const,
+      checkpoints: Object.freeze([Object.freeze({
+        iterations: solved.iterations,
+        exploitabilityBb: exploitability.exploitabilityBb,
+        exploitabilityPotFraction: exploitability.exploitabilityPotFraction,
+        targetMet: false,
+      })]),
+    });
+    return buildHeadsUpRiverSolution(
+      model,
+      algorithm,
+      Object.freeze({
+        updateSchedule: "alternating-player-0-first" as const,
+        regretUpdateOrder: "add-then-sign-discount" as const,
+        averagingSchedule: "paper-polynomial" as const,
+        numericPrecision: "float64" as const,
+        dcfr: solver.parameters,
+      }),
+      solved.iterations,
+      profile,
+      convergence,
+    );
+  }
+
   const solved = solveCFRPlus(model.game, options);
-  const averageStrategy = immutableStrategyProfile(solved.averageStrategy);
-  const exploitability = model.exploitability(averageStrategy);
-  const actionValues = model.actionValues(averageStrategy);
-  return Object.freeze({
-    solverVersion: "rangecraft-cfr+/0.1.0",
-    spotId: model.spotId,
-    gameSpecId: model.gameSpecId,
-    treeId: model.treeId,
-    ...(model.standardTemplate ? { standardTemplate: model.standardTemplate } : {}),
-    source: "internal-solver",
-    iterations: solved.iterations,
-    compatibleDeals: model.compatibleDeals,
-    accuracyScope: "within-fixed-tree",
-    externalBenchmarkStatus: "not-run",
-    accuracyLevel: headsUpAccuracyLevel(exploitability.exploitabilityPotFraction),
-    exploitability,
-    strategies: exportedStrategies(averageStrategy),
-    actionValues,
-    averageStrategy,
+  const profile = solved.iterations === 0
+    ? completeUniformRiverProfile(model)
+    : solved.averageStrategy;
+  const exploitability = model.exploitability(profile);
+  const averagingDelay = options.averagingDelay ?? 0;
+  const linearAveraging = options.linearAveraging ?? true;
+  const convergence = Object.freeze({
+    mode: "fixed" as const,
+    consecutiveTargetCheckpoints: 0,
+    trainedIterations: solved.iterations,
+    selectedIterations: solved.iterations,
+    stopReason: "fixed-iterations" as const,
+    checkpoints: Object.freeze([Object.freeze({
+      iterations: solved.iterations,
+      exploitabilityBb: exploitability.exploitabilityBb,
+      exploitabilityPotFraction: exploitability.exploitabilityPotFraction,
+      targetMet: false,
+    })]),
   });
+  return buildHeadsUpRiverSolution(
+    model,
+    algorithm,
+    Object.freeze({
+      updateSchedule: "alternating-player-0-first" as const,
+      regretUpdateOrder: "add-then-rm+-clip" as const,
+      averagingSchedule: "alternating-staggered-linear" as const,
+      numericPrecision: "float64" as const,
+      averagingDelay,
+      linearAveraging,
+    }),
+    solved.iterations,
+    profile,
+    convergence,
+  );
+}
+
+function positiveSafeInteger(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new RangeError(`${label} 必须是正安全整数`);
+  }
+  return value;
+}
+
+/**
+ * Runs an auditable checkpointed solve and returns the lowest-exploitability
+ * checkpoint observed. Consecutive target passes are an engineering stability
+ * gate; exact best-response exploitability remains the mathematical quality
+ * certificate for each individual checkpoint.
+ */
+export function solveHeadsUpRiverAdaptive(
+  spec: HeadsUpRiverSpec,
+  options: SolveHeadsUpRiverAdaptiveOptions,
+): HeadsUpRiverSolution {
+  const model = createHeadsUpRiverGame(spec);
+  const algorithm = options.algorithm ?? "dcfr";
+  const maxIterations = positiveSafeInteger(options.maxIterations, "maxIterations");
+  const checkpointInterval = Math.min(
+    maxIterations,
+    positiveSafeInteger(options.checkpointInterval ?? 100, "checkpointInterval"),
+  );
+  const minimumIterations = Math.min(
+    maxIterations,
+    positiveSafeInteger(
+      options.minimumIterations ?? Math.min(maxIterations, checkpointInterval * 2),
+      "minimumIterations",
+    ),
+  );
+  const requiredConsecutive = positiveSafeInteger(
+    options.requiredConsecutiveTargetCheckpoints ?? 3,
+    "requiredConsecutiveTargetCheckpoints",
+  );
+  const target = options.targetExploitabilityPotFraction ?? 0.0024;
+  if (!Number.isFinite(target) || target < 0) {
+    throw new RangeError("targetExploitabilityPotFraction 必须是非负有限数");
+  }
+
+  const averagingDelay = Math.min(
+    Math.max(0, Math.round(options.averagingDelay ?? 0)),
+    Math.max(0, maxIterations - 1),
+  );
+  const linearAveraging = options.linearAveraging ?? true;
+  const dcfrParameters = Object.freeze({
+    alpha: options.alpha ?? DEFAULT_DCFR_PARAMETERS.alpha,
+    beta: options.beta ?? DEFAULT_DCFR_PARAMETERS.beta,
+    gamma: options.gamma ?? DEFAULT_DCFR_PARAMETERS.gamma,
+  });
+  const cfrPlusSolver = algorithm === "cfr+" ? new CFRPlusSolver(model.game) : null;
+  const dcfrSolver = algorithm === "dcfr"
+    ? new DiscountedCFRSolver(model.game, dcfrParameters)
+    : null;
+  const checkpoints: HeadsUpRiverConvergenceCheckpoint[] = [];
+  let trainedIterations = 0;
+  let consecutiveTargetCheckpoints = 0;
+  let bestIterations = 0;
+  let bestExploitability = Number.POSITIVE_INFINITY;
+  let bestProfile: CFRStrategyProfile<HeadsUpRiverAction> | null = null;
+  let stopReason: HeadsUpRiverConvergence["stopReason"] = "iteration-limit";
+
+  while (trainedIterations < maxIterations) {
+    const additionalIterations = Math.min(
+      checkpointInterval,
+      maxIterations - trainedIterations,
+    );
+    const solved = cfrPlusSolver
+      ? cfrPlusSolver.run({
+        iterations: additionalIterations,
+        averagingDelay,
+        linearAveraging,
+      })
+      : dcfrSolver!.run({ iterations: additionalIterations });
+    trainedIterations = solved.iterations;
+    const audit = model.exploitability(solved.averageStrategy);
+    const profileIsAveraged = algorithm !== "cfr+"
+      || trainedIterations > averagingDelay;
+    const targetMet = trainedIterations >= minimumIterations
+      && profileIsAveraged
+      && audit.exploitabilityPotFraction <= target;
+    consecutiveTargetCheckpoints = targetMet
+      ? consecutiveTargetCheckpoints + 1
+      : 0;
+    checkpoints.push(Object.freeze({
+      iterations: trainedIterations,
+      exploitabilityBb: audit.exploitabilityBb,
+      exploitabilityPotFraction: audit.exploitabilityPotFraction,
+      targetMet,
+    }));
+    if (profileIsAveraged && audit.exploitabilityPotFraction <= bestExploitability) {
+      bestExploitability = audit.exploitabilityPotFraction;
+      bestIterations = trainedIterations;
+      bestProfile = solved.averageStrategy;
+    }
+    if (consecutiveTargetCheckpoints >= requiredConsecutive) {
+      stopReason = "target-stable";
+      break;
+    }
+  }
+
+  if (!bestProfile) throw new Error("自适应河牌求解没有生成任何检查点");
+  const convergence = Object.freeze({
+    mode: "adaptive" as const,
+    targetExploitabilityPotFraction: target,
+    requiredConsecutiveTargetCheckpoints: requiredConsecutive,
+    consecutiveTargetCheckpoints,
+    trainedIterations,
+    selectedIterations: bestIterations,
+    stopReason,
+    checkpoints: Object.freeze([...checkpoints]),
+  });
+  return buildHeadsUpRiverSolution(
+    model,
+    algorithm,
+    algorithm === "dcfr"
+      ? Object.freeze({
+        updateSchedule: "alternating-player-0-first" as const,
+        regretUpdateOrder: "add-then-sign-discount" as const,
+        averagingSchedule: "paper-polynomial" as const,
+        numericPrecision: "float64" as const,
+        dcfr: dcfrSolver!.parameters,
+      })
+      : Object.freeze({
+        updateSchedule: "alternating-player-0-first" as const,
+        regretUpdateOrder: "add-then-rm+-clip" as const,
+        averagingSchedule: "alternating-staggered-linear" as const,
+        numericPrecision: "float64" as const,
+        averagingDelay,
+        linearAveraging,
+      }),
+    bestIterations,
+    bestProfile,
+    convergence,
+  );
 }
 
 /**

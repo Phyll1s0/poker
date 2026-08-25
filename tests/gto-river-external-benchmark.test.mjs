@@ -25,6 +25,7 @@ const rawOutputBase64 = await readFile(new URL(
   import.meta.url,
 ), "utf8");
 const candidate = solveHeadsUpRiver(fixture.spec, {
+  algorithm: "cfr+",
   iterations: 5_000,
   averagingDelay: 100,
   linearAveraging: true,
@@ -75,6 +76,24 @@ test("the independent mixed bluff frequency agrees to far below one percentage p
   const upstreamBet = rawFixture.upstream.players[1].profile.c.strategy[2][1];
 
   assert.ok(Math.abs(candidateBet - upstreamBet) < 1e-5, `${candidateBet} vs ${upstreamBet}`);
+});
+
+test("paper DCFR reaches a low audited error on the locked public tree", () => {
+  const cfrPlus = solveHeadsUpRiver(fixture.spec, {
+    algorithm: "cfr+",
+    iterations: 100,
+    averagingDelay: 10,
+    linearAveraging: true,
+  });
+  const dcfr = solveHeadsUpRiver(fixture.spec, {
+    algorithm: "dcfr",
+    iterations: 100,
+  });
+
+  assert.ok(dcfr.exploitability.exploitabilityPotFraction < 1e-5);
+  assert.ok(cfrPlus.exploitability.exploitabilityPotFraction < 1e-5);
+  assert.notEqual(dcfr.resultId, cfrPlus.resultId);
+  assert.equal(dcfr.solverParameters.regretUpdateOrder, "add-then-sign-discount");
 });
 
 test("fixture content, trusted source and exact spot identity cannot be silently changed", () => {
@@ -134,7 +153,33 @@ test("partial profiles and unconverged candidates fail instead of borrowing the 
   assert.equal(partialReport.passed, false);
   assert.equal(partialReport.checks.completeCoverage, false);
 
+  const relaxedCoverageFixture = {
+    ...fixture,
+    thresholds: {
+      ...fixture.thresholds,
+      minimumCoverageFraction: 0.5,
+    },
+  };
+  const relaxedPartialReport = benchmarkHeadsUpRiverAgainstPublicFixture(
+    partialCandidate,
+    relaxedCoverageFixture,
+  );
+  assert.equal(relaxedPartialReport.checks.completeCoverage, false);
+  assert.equal(relaxedPartialReport.candidateAuditedExploitabilityPotFraction, null);
+  assert.equal(relaxedPartialReport.candidateAuditDeltaPotFraction, null);
+  assert.equal(relaxedPartialReport.profileValueDeltaPotFraction, null);
+
+  const emptyCandidate = {
+    ...candidate,
+    averageStrategy: [new Map(), new Map()],
+  };
+  assert.throws(
+    () => benchmarkHeadsUpRiverAgainstPublicFixture(emptyCandidate, fixture),
+    /候选策略与参考基准没有可审计的共同信息集/,
+  );
+
   const oneIteration = solveHeadsUpRiver(fixture.spec, {
+    algorithm: "cfr+",
     iterations: 1,
     averagingDelay: 0,
     linearAveraging: true,
@@ -149,6 +194,7 @@ test("a different board, stack, range or tree is not benchmark-comparable", () =
     ...fixture.spec,
     effectiveStackBb: 9,
   }, {
+    algorithm: "cfr+",
     iterations: 10,
     averagingDelay: 0,
   });

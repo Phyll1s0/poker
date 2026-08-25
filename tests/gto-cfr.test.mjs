@@ -3,9 +3,11 @@ import test from "node:test";
 
 import {
   CFRPlusSolver,
+  DiscountedCFRSolver,
   exactExploitability,
   expectedValue,
   solveCFRPlus,
+  solveDiscountedCFR,
 } from "../lib/gto-cfr.ts";
 
 const CARDS = ["J", "Q", "K"];
@@ -63,6 +65,35 @@ function serializeProfile(profile) {
       [...entry.probabilities],
     ]),
   );
+}
+
+function asymmetricMatrixGame() {
+  const payoff = [[3, 0], [0, 1]];
+  return {
+    initialState: { row: null, column: null },
+    currentActor(state) {
+      if (state.row === null) return 0;
+      if (state.column === null) return 1;
+      return "terminal";
+    },
+    actions() {
+      return ["0", "1"];
+    },
+    nextState(state, action) {
+      return state.row === null
+        ? { row: Number(action), column: null }
+        : { row: state.row, column: Number(action) };
+    },
+    informationSet(_state, player) {
+      return `matrix:p${player}`;
+    },
+    chanceOutcomes() {
+      return [];
+    },
+    terminalUtility(state) {
+      return payoff[state.row][state.column];
+    },
+  };
 }
 
 test("CFR+ is deterministic and emits normalized behavioral strategies", () => {
@@ -123,9 +154,86 @@ test("CFR+ converges to Kuhn poker's known value with low exact exploitability",
   assert.ok(probability(solved.averageStrategy, 1, "Q:b", "b") < 0.7);
 });
 
+test("one alternating CFR+ round uses the proved staggered average phase", () => {
+  const solved = solveCFRPlus(asymmetricMatrixGame(), {
+    iterations: 1,
+    averagingDelay: 0,
+    linearAveraging: true,
+  });
+
+  assert.deepEqual(
+    solved.averageStrategy[0].get("matrix:p0").probabilities,
+    [1, 0],
+  );
+  assert.deepEqual(
+    solved.averageStrategy[1].get("matrix:p1").probabilities,
+    [0.5, 0.5],
+  );
+  assert.deepEqual(solved.currentStrategy[0].get("matrix:p0").probabilities, [1, 0]);
+  assert.deepEqual(solved.currentStrategy[1].get("matrix:p1").probabilities, [0, 1]);
+});
+
+test("DCFR(1.5, 0, 2) is deterministic and chunked training equals one shot", () => {
+  const first = solveDiscountedCFR(kuhnGame(), { iterations: 12_000 });
+  const second = solveDiscountedCFR(kuhnGame(), { iterations: 12_000 });
+  const chunkedSolver = new DiscountedCFRSolver(kuhnGame());
+  chunkedSolver.run({ iterations: 4_000 });
+  const chunked = chunkedSolver.run({ iterations: 8_000 });
+
+  assert.deepEqual(
+    serializeProfile(first.averageStrategy),
+    serializeProfile(second.averageStrategy),
+  );
+  assert.deepEqual(
+    serializeProfile(chunked.averageStrategy),
+    serializeProfile(first.averageStrategy),
+  );
+  assert.deepEqual(first.parameters, { alpha: 1.5, beta: 0, gamma: 2 });
+  assert.ok(Object.isFrozen(first.parameters));
+});
+
+test("paper-default DCFR converges to Kuhn poker's equilibrium", () => {
+  const solved = solveDiscountedCFR(kuhnGame(), { iterations: 30_000 });
+  const value = expectedValue(kuhnGame(), solved.averageStrategy);
+  const audit = exactExploitability(kuhnGame(), solved.averageStrategy);
+
+  assert.ok(Math.abs(value - -1 / 18) < 8e-4, `value ${value}`);
+  assert.ok(audit.exploitability < 0.0025, `exploitability ${audit.exploitability}`);
+  assert.ok(audit.nashConv < 0.005, `NashConv ${audit.nashConv}`);
+});
+
+test("DCFR recurrence keeps negative regret and applies quadratic iterate weights", () => {
+  const first = solveDiscountedCFR(asymmetricMatrixGame(), { iterations: 1 });
+  const second = solveDiscountedCFR(asymmetricMatrixGame(), { iterations: 2 });
+
+  assert.deepEqual(first.averageStrategy[0].get("matrix:p0").probabilities, [0.5, 0.5]);
+  assert.deepEqual(first.averageStrategy[1].get("matrix:p1").probabilities, [0.5, 0.5]);
+  assert.deepEqual(second.averageStrategy[0].get("matrix:p0").probabilities, [0.9, 0.1]);
+  assert.deepEqual(second.averageStrategy[1].get("matrix:p1").probabilities, [0.1, 0.9]);
+  assert.deepEqual(second.currentStrategy[0].get("matrix:p0").probabilities, [0.25, 0.75]);
+  assert.deepEqual(second.currentStrategy[1].get("matrix:p1").probabilities, [0, 1]);
+});
+
+test("DCFR rejects non-finite paper parameters", () => {
+  assert.throws(
+    () => new DiscountedCFRSolver(kuhnGame(), { alpha: Number.POSITIVE_INFINITY }),
+    /alpha must be finite/,
+  );
+  assert.throws(
+    () => solveDiscountedCFR(kuhnGame(), { iterations: 1, gamma: Number.NaN }),
+    /gamma must be finite/,
+  );
+});
+
 test("exact exploitability detects the uniform Kuhn strategy as exploitable", () => {
   const unsolved = solveCFRPlus(kuhnGame(), { iterations: 0 });
-  const audit = exactExploitability(kuhnGame(), unsolved.averageStrategy);
+  assert.throws(
+    () => exactExploitability(kuhnGame(), unsolved.averageStrategy),
+    /missing information set/,
+  );
+  const audit = exactExploitability(kuhnGame(), unsolved.averageStrategy, {
+    missingInformationSets: "uniform",
+  });
 
   assert.ok(Math.abs(audit.profileValue - 0.125) < 1e-12);
   assert.ok(audit.exploitability > 0.4);

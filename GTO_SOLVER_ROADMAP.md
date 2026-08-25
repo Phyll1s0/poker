@@ -4,7 +4,7 @@
 
 RangeCraft 不再把“手写范围表 + 启发式频率”称作精确 GTO。后续策略统一分成三种来源：
 
-1. **内部已求解**：由 RangeCraft 自己的 CFR+/后续 DCFR 求解器生成，附带内容寻址、哈希锁定的牌局规格、下注树、迭代次数和 exploitability/NashConv。
+1. **内部已求解**：由 RangeCraft 自己的 CFR+ / DCFR 求解器生成，附带内容寻址、哈希锁定的牌局规格、下注树、算法参数、迭代次数和 exploitability/NashConv。
 2. **合法参考数据**：只接受许可允许用于本项目的数据，并记录来源、许可和校验和；不会抓取或复制商业训练器的策略库。
 3. **本地近似**：现有 169 手牌表、范围权益和连续混频模型。节点未命中时仍可训练，但必须明确标为“近似”，评分也不能冒充精确 EV loss。
 
@@ -26,22 +26,23 @@ RangeCraft 不再把“手写范围表 + 启发式频率”称作精确 GTO。�
 
 ## 已完成的第一条真实求解链
 
-### 通用 CFR+ 核心
+### 通用 CFR+ / DCFR 核心
 
-[`lib/gto-cfr.ts`](lib/gto-cfr.ts) 是独立于扑克规则的两人零和、有限树 CFR+ 引擎，支持：
+[`lib/gto-cfr.ts`](lib/gto-cfr.ts) 是独立于扑克规则的两人零和、有限树求解引擎，支持：
 
 - chance node；
 - 私有信息集；
 - 外部终局效用；
-- 交替更新、regret matching+、延迟与线性平均；
+- CFR+ 的交替 regret matching+，以及修正证明要求的错位线性平均：玩家 0 累积更新后策略、玩家 1 累积更新前策略；
+- 论文默认 `DCFR(α=1.5, β=0, γ=2)`：正/负累计 regret 分别衰减，负 regret 不截断，平均策略按 `t²` 加权；
 - 确定性重复运行和分段续算；
 - 小博弈的精确 deterministic best-response 枚举。
 
-同一核心已经用 Kuhn Poker 验证：均衡值收敛到 `-1/18`，并独立计算低 exploitability。自博弈胜率或 bb/100 只用于回归，不再被当作均衡证明。
+两条算法都通过了非对称 `2×2` 零和矩阵的逐轮手算测试、分段与一次性求解逐位一致测试，以及 Kuhn Poker 回归：均衡值收敛到 `-1/18`，并独立计算低 exploitability。CFR+ 的平均相位依据 [Revisiting CFR+ and Alternating Updates](https://arxiv.org/abs/1810.11542)；DCFR 更新依据 [Solving Imperfect-Information Games via Discounted Regret Minimization](https://arxiv.org/abs/1809.04040)。自博弈胜率或 bb/100 只用于回归，不再被当作均衡证明。
 
 ### 真实 1v1 河牌子博弈
 
-[`lib/gto-river.ts`](lib/gto-river.ts) 已把 CFR+ 接入真正的德州扑克牌型比较：
+[`lib/gto-river.ts`](lib/gto-river.ts) 已把 CFR+ 与 DCFR 接入真正的德州扑克牌型比较：
 
 - 输入五张公共牌、OOP/IP 两个带权组合范围、底池、有效后手和固定下注树；
 - 删除公共牌冲突、重复组合和双方暗牌碰撞；
@@ -50,6 +51,8 @@ RangeCraft 不再把“手写范围表 + 启发式频率”称作精确 GTO。�
 - 支持过牌、多个下注尺度、弃牌、跟注、多个加注尺度与全下；
 - 终局使用真实七选五牌型，未跟注筹码正确退回；
 - 用针对公共下注树的 scalable best response 计算 NashConv/exploitability，而不是只看训练残差；
+- 单挑实时教练默认按 100 轮检查点运行 `DCFR(1.5,0,2)`，要求连续检查点通过内部误差线，并返回所有已审计检查点中 exploitability 最低的策略；“连续通过”是工程稳定门，单个检查点的精确 best-response 才是固定树内的数学误差证书；
+- 固定树误差高于训练线时只展示实验结果、不接管原提示；达到训练线但未达到较低误差评分线时可接管提示但不计算 solver EV 失误分；
 - 小范围测试同时与指数级精确 best response 结果逐值核对。
 
 这是“真实求解器的第一块”，但它仍只是**固定范围、固定河牌、固定离散下注树的 heads-up 子博弈**，不能被包装成完整 6 人无限注 GTO。
@@ -80,7 +83,7 @@ npm run gto:benchmark:river
 
 这里的阈值只描述**给定范围和固定离散树内部**的求解误差。输出会另带 `accuracyScope: within-fixed-tree` 与 `externalBenchmarkStatus`；即使上面的单项公开同题基准通过，也只覆盖那个固定子博弈，达到 0.3% 仍不等于已经证明完整 NLHE 抽象与商业解一致。
 
-下一步是离线批量生成典型 BTN vs BB、CO vs BB 河牌节点，并将它们分片存成策略包。浏览器只读取已算好的结果，不在主线程现场跑几十万次迭代。
+下一步是增加多棵不对称范围、多尺寸和加注树的公开 DCFR/CFR+ 对照 fixture，再离线批量生成典型 BTN vs BB、CO vs BB 河牌节点并分片存成策略包。浏览器只读取大型预计算结果，不在主线程现场跑几十万次迭代。
 
 ### P2：标准 RFI 与翻前响应
 

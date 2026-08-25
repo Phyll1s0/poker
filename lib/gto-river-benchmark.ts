@@ -115,11 +115,11 @@ export type PublicRiverBenchmarkReport = Readonly<{
   }>;
   referenceNativeExploitabilityPotFraction: number;
   referenceAuditedExploitabilityPotFraction: number;
-  candidateAuditedExploitabilityPotFraction: number;
+  candidateAuditedExploitabilityPotFraction: number | null;
   candidateReportedExploitabilityPotFraction: number;
   nativeAuditDeltaPotFraction: number;
-  candidateAuditDeltaPotFraction: number;
-  profileValueDeltaPotFraction: number;
+  candidateAuditDeltaPotFraction: number | null;
+  profileValueDeltaPotFraction: number | null;
   weightedReferenceEvRegretBb: number;
   weightedReferenceEvRegretPotFraction: number;
   meanFrequencyTotalVariation: number;
@@ -765,7 +765,6 @@ export function benchmarkHeadsUpRiverAgainstPublicFixture(
   const model = createHeadsUpRiverGame(fixture.spec);
   const reference = referenceProfile(fixture);
   const referenceAudit = model.exploitability(reference);
-  const candidateAudit = model.exploitability(solution.averageStrategy);
   const referenceActionValues = new Map(model.actionValues(reference).map((entry) => [
     `river|P${entry.player === "oop" ? 0 : 1}|${entry.holding}|${entry.history}`,
     entry,
@@ -774,7 +773,18 @@ export function benchmarkHeadsUpRiverAgainstPublicFixture(
   const candidateKeys = solution.averageStrategy.flatMap((player) => [...player.keys()]).sort();
   const candidateKeySet = new Set(candidateKeys);
   const comparedKeys = referenceKeys.filter((key) => candidateKeySet.has(key));
+  if (comparedKeys.length === 0) {
+    benchmarkError("候选策略与参考基准没有可审计的共同信息集");
+  }
   const coverageFraction = referenceKeys.length === 0 ? 0 : comparedKeys.length / referenceKeys.length;
+  const completeCoverage = coverageFraction >= fixture.thresholds.minimumCoverageFraction
+    && comparedKeys.length === referenceKeys.length
+    && comparedKeys.length === candidateKeys.length;
+  // Formal best-response audit is strict: an incomplete profile is rejected,
+  // not silently completed with uniform actions or an earlier reported value.
+  const candidateAudit = completeCoverage
+    ? model.exploitability(solution.averageStrategy)
+    : null;
 
   let reachTotal = 0;
   let weightedTotalVariation = 0;
@@ -829,23 +839,27 @@ export function benchmarkHeadsUpRiverAgainstPublicFixture(
   const nativeAuditDeltaPotFraction = Math.abs(
     referenceAudit.exploitabilityPotFraction - fixture.solver.nativeExploitability.potFraction,
   );
-  const candidateAuditDeltaPotFraction = Math.abs(
-    candidateAudit.exploitabilityPotFraction - solution.exploitability.exploitabilityPotFraction,
-  );
-  const profileValueDeltaPotFraction = Math.abs(
-    candidateAudit.profileValueBb - referenceAudit.profileValueBb,
-  ) / model.spec.potBb;
+  const candidateAuditDeltaPotFraction = candidateAudit
+    ? Math.abs(
+      candidateAudit.exploitabilityPotFraction - solution.exploitability.exploitabilityPotFraction,
+    )
+    : null;
+  const profileValueDeltaPotFraction = candidateAudit
+    ? Math.abs(candidateAudit.profileValueBb - referenceAudit.profileValueBb) / model.spec.potBb
+    : null;
   const thresholds = fixture.thresholds;
   const checks = Object.freeze({
-    completeCoverage: coverageFraction >= thresholds.minimumCoverageFraction
-      && comparedKeys.length === candidateKeys.length,
+    completeCoverage,
     referenceExploitability:
       referenceAudit.exploitabilityPotFraction <= thresholds.maximumReferenceExploitabilityPotFraction,
     candidateExploitability:
-      candidateAudit.exploitabilityPotFraction <= thresholds.maximumCandidateExploitabilityPotFraction,
+      candidateAudit !== null
+      && candidateAudit.exploitabilityPotFraction <= thresholds.maximumCandidateExploitabilityPotFraction,
     nativeAuditAgreement: nativeAuditDeltaPotFraction <= thresholds.maximumNativeAuditDeltaPotFraction,
-    candidateAuditAgreement: candidateAuditDeltaPotFraction <= AUDIT_ROUNDING_TOLERANCE,
-    profileValueAgreement: profileValueDeltaPotFraction <= thresholds.maximumProfileValueDeltaPotFraction,
+    candidateAuditAgreement: candidateAuditDeltaPotFraction !== null
+      && candidateAuditDeltaPotFraction <= AUDIT_ROUNDING_TOLERANCE,
+    profileValueAgreement: profileValueDeltaPotFraction !== null
+      && profileValueDeltaPotFraction <= thresholds.maximumProfileValueDeltaPotFraction,
     weightedReferenceEvRegret:
       weightedReferenceEvRegretPotFraction <= thresholds.maximumWeightedReferenceEvRegretPotFraction,
     singleReferenceActionRegret:
@@ -874,7 +888,8 @@ export function benchmarkHeadsUpRiverAgainstPublicFixture(
     },
     referenceNativeExploitabilityPotFraction: fixture.solver.nativeExploitability.potFraction,
     referenceAuditedExploitabilityPotFraction: referenceAudit.exploitabilityPotFraction,
-    candidateAuditedExploitabilityPotFraction: candidateAudit.exploitabilityPotFraction,
+    candidateAuditedExploitabilityPotFraction:
+      candidateAudit?.exploitabilityPotFraction ?? null,
     candidateReportedExploitabilityPotFraction: solution.exploitability.exploitabilityPotFraction,
     nativeAuditDeltaPotFraction,
     candidateAuditDeltaPotFraction,

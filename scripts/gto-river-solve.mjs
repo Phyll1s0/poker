@@ -7,7 +7,7 @@ import { solveHeadsUpRiver } from "../lib/gto-river.ts";
 
 function usage() {
   return [
-    "RangeCraft heads-up river CFR+ solver",
+    "RangeCraft heads-up river CFR+/DCFR solver",
     "",
     "Usage:",
     "  npm run gto:river -- --input examples/gto-river-node.json [--output solution.json]",
@@ -15,8 +15,9 @@ function usage() {
     "Options:",
     "  --input <file>             JSON river specification (required)",
     "  --output <file>            Write the portable result instead of stdout",
-    "  --iterations <integer>     CFR+ iterations (default: 50000)",
-    "  --averaging-delay <integer>  Delayed averaging iterations (default: 100)",
+    "  --algorithm <dcfr|cfr+>    Solver algorithm (default: dcfr)",
+    "  --iterations <integer>     Solver iterations (default: 50000)",
+    "  --averaging-delay <integer>  CFR+ delayed averaging iterations (default: 100)",
     "  --help                     Show this help",
   ].join("\n");
 }
@@ -28,7 +29,14 @@ function parseInteger(value, label) {
 }
 
 function parseArguments(argv) {
-  const result = { input: "", output: "", iterations: 50_000, averagingDelay: 100, help: false };
+  const result = {
+    input: "",
+    output: "",
+    algorithm: "dcfr",
+    iterations: 50_000,
+    averagingDelay: 100,
+    help: false,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--help" || argument === "-h") {
@@ -40,6 +48,10 @@ function parseArguments(argv) {
     index += 1;
     if (argument === "--input") result.input = value;
     else if (argument === "--output") result.output = value;
+    else if (argument === "--algorithm") {
+      if (value !== "dcfr" && value !== "cfr+") throw new Error("--algorithm 只能是 dcfr 或 cfr+");
+      result.algorithm = value;
+    }
     else if (argument === "--iterations") result.iterations = parseInteger(value, argument);
     else if (argument === "--averaging-delay") result.averagingDelay = parseInteger(value, argument);
     else throw new Error(`未知参数 ${argument}`);
@@ -57,15 +69,21 @@ async function main() {
   const inputPath = resolve(options.input);
   const spec = JSON.parse(await readFile(inputPath, "utf8"));
   const startedAt = Date.now();
-  const solution = solveHeadsUpRiver(spec, {
-    iterations: options.iterations,
-    averagingDelay: options.averagingDelay,
-    linearAveraging: true,
-  });
+  const solution = solveHeadsUpRiver(spec, options.algorithm === "dcfr"
+    ? { algorithm: "dcfr", iterations: options.iterations }
+    : {
+      algorithm: "cfr+",
+      iterations: options.iterations,
+      averagingDelay: options.averagingDelay,
+      linearAveraging: true,
+    });
   const portable = {
-    schemaVersion: "rangecraft-heads-up-river-solution/v1",
+    schemaVersion: "rangecraft-heads-up-river-solution/v2",
     inputFile: options.input,
     solverVersion: solution.solverVersion,
+    resultId: solution.resultId,
+    algorithm: solution.algorithm,
+    solverParameters: solution.solverParameters,
     spotId: solution.spotId,
     gameSpecId: solution.gameSpecId,
     treeId: solution.treeId,
@@ -76,6 +94,7 @@ async function main() {
     accuracyScope: solution.accuracyScope,
     externalBenchmarkStatus: solution.externalBenchmarkStatus,
     accuracyLevel: solution.accuracyLevel,
+    convergence: solution.convergence,
     exploitability: solution.exploitability,
     durationMs: Date.now() - startedAt,
     strategies: solution.strategies,
