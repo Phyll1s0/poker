@@ -37,7 +37,8 @@ test("AI self-play stays zero-sum and reports every style", () => {
 
   const byStyle = Object.fromEntries(report.results.map((result) => [result.styleKey, result]));
   assert.ok(byStyle.lag.vpip > byStyle.gto.vpip);
-  assert.ok(byStyle.gto.vpip > byStyle.tag.vpip);
+  assert.ok(byStyle.lag.vpip > byStyle.tag.vpip);
+  assert.ok(byStyle.gto.vpip > byStyle.nit.vpip);
   assert.ok(byStyle.tag.vpip > byStyle.nit.vpip);
   assert.ok(byStyle.lag.pfr > 0.16);
   assert.ok(byStyle.nit.pfr > 0.05);

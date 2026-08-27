@@ -121,7 +121,9 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /hintedDecisionKeys\.current\.has\(hintDecisionKey\)/);
   assert.match(page, /使用 AI 提示/);
   assert.match(page, /heroPublicRangeTendency/);
-  assert.match(page, /buildPokerPolicyInput\(game, player, equity, profile\)/);
+  assert.match(page, /buildPokerPolicyInput\(game, player, equity, AI_PROFILES\[styleKey\]\)/);
+  assert.match(page, /chooseAdaptivePokerPolicyAction\(policyInput/);
+  assert.match(page, /responseContext: canApplyPressure/);
   assert.doesNotMatch(page, /adapted\.equityAdjustment \* heroLayerShare/);
   assert.match(page, /raiseDisabled[\s\S]*?\? undefined[\s\S]*?heroDecisionPressureNode/);
   assert.match(page, /近期施压反应/);
@@ -606,7 +608,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(pokerAudio, /export function isPokerAudioEnabled/);
   assert.match(pokerAudio, /if \(!pokerAudioEnabled\) return/);
   assert.match(page, /useState\(\(\) => isPokerAudioEnabled\(\)\)/);
-  assert.match(page, /choosePokerPolicyAction/);
+  assert.match(page, /chooseAdaptivePokerPolicyAction/);
   assert.match(page, /policyPlan\.actionFrequencies/);
   assert.match(page, /resolvePokerDecisionStacks/);
   assert.match(page, /pokerCallClosesContestableLayers/);
@@ -633,7 +635,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(sizing, /跟注后底池/);
   assert.match(sizing, /scorePokerRaiseSize/);
   assert.match(evaluator, /export function estimateEquity/);
-  assert.match(selfPlay, /choosePokerPolicyAction/);
+  assert.match(selfPlay, /chooseAdaptivePokerPolicyAction/);
   assert.match(selfPlay, /estimateEquity/);
   assert.match(selfPlay, /resolvePokerDecisionStacks/);
   assert.match(selfPlay, /pokerCallClosesContestableLayers/);

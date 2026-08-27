@@ -4,9 +4,11 @@ import test from "node:test";
 import {
   AI_PROFILES,
   adaptAiProfileToHeroImage,
+  classifyHeroResponseSize,
   heroImageConfidence,
   heroNodePressure,
   heroPublicRangeTendency,
+  publicAggressiveActionBetFraction,
   sampleAiLineup,
   updateHeroTableImage,
 } from "../lib/poker-ai.ts";
@@ -220,8 +222,18 @@ test("reacts quickly to repeated pressure in the matching public node only", () 
     "没有合法加注权的强制决定不能冷却该节点",
   );
 
+  const afterOnePause = updateHeroTableImage(
+    image,
+    { loose: 0.4, aggressive: 0.24 },
+    { node: "preflop_open", aggressive: false },
+  );
+  assert.ok(
+    heroNodePressure(afterOnePause, "preflop_open") > openPressure * 0.75,
+    "一次战术停顿不能清空已经形成的节点读牌",
+  );
+
   let cooled = image;
-  for (let index = 0; index < 3; index += 1) {
+  for (let index = 0; index < 5; index += 1) {
     cooled = updateHeroTableImage(
       cooled,
       { loose: 0.4, aggressive: 0.24 },
@@ -229,4 +241,71 @@ test("reacts quickly to repeated pressure in the matching public node only", () 
     );
   }
   assert.ok(heroNodePressure(cooled, "preflop_open") < openPressure * 0.25);
+});
+
+test("forgets a mature pressure regime without overreacting to one pause", () => {
+  let image = { loose: 0.5, aggressive: 0.5, deceptive: 0.5, observations: 0, pressure: {} };
+  for (let index = 0; index < 1_000; index += 1) {
+    image = updateHeroTableImage(
+      image,
+      { loose: 0.78, aggressive: 0.9 },
+      { node: "preflop_open", aggressive: true },
+    );
+  }
+  const hot = heroNodePressure(image, "preflop_open");
+  assert.ok(hot > 0.9);
+  assert.ok(image.pressure.preflop_open.opportunities <= 96 + 1e-9);
+
+  for (let index = 0; index < 100; index += 1) {
+    image = updateHeroTableImage(
+      image,
+      { loose: 0.4, aggressive: 0.24 },
+      { node: "preflop_open", aggressive: false },
+    );
+  }
+  assert.ok(heroNodePressure(image, "preflop_open") < 0.08);
+  assert.ok(image.pressure.preflop_open.opportunities <= 96 + 1e-9);
+});
+
+test("classifies public wager sizes from added risk and true/effective all-ins", () => {
+  assert.equal(publicAggressiveActionBetFraction({ amount: 33, toCall: 0, potBefore: 100 }), 0.33);
+  assert.equal(publicAggressiveActionBetFraction({ amount: 200, toCall: 50, potBefore: 150 }), 0.75);
+  assert.equal(publicAggressiveActionBetFraction({ amount: 90, toCall: 30, potBefore: 90 }), 0.5);
+
+  const postflop = (betFraction, isEffectiveAllIn = false) => classifyHeroResponseSize({
+    street: "river",
+    bigBlind: 10,
+    target: 150,
+    isEffectiveAllIn,
+    betFraction,
+  });
+  assert.equal(postflop(0.33), "small");
+  assert.equal(postflop(0.75), "medium");
+  assert.equal(postflop(1.5), "large", "非全下 overbet 不应污染 jam 桶");
+  assert.equal(postflop(0.2, true), "jam", "短码真实全下仍必须进入 jam 桶");
+
+  assert.equal(classifyHeroResponseSize({
+    street: "preflop",
+    bigBlind: 10,
+    target: 25,
+    isEffectiveAllIn: false,
+  }), "small");
+  assert.equal(classifyHeroResponseSize({
+    street: "preflop",
+    bigBlind: 10,
+    target: 80,
+    isEffectiveAllIn: false,
+  }), "medium");
+  assert.equal(classifyHeroResponseSize({
+    street: "preflop",
+    bigBlind: 10,
+    target: 250,
+    isEffectiveAllIn: false,
+  }), "large");
+  assert.equal(classifyHeroResponseSize({
+    street: "preflop",
+    bigBlind: 10,
+    target: 150,
+    isEffectiveAllIn: true,
+  }), "jam");
 });
