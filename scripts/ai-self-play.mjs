@@ -16,7 +16,7 @@ import {
 } from "../lib/poker-evaluator.ts";
 import {
   evaluatePokerPolicy,
-  pokerCallClosesContestableLayers,
+  pokerCallClosesAction,
   pokerContestablePotAtDecision,
   sixMaxPreflopPosition,
   sixMaxPreflopPositionFactor,
@@ -128,18 +128,13 @@ function decideAction(context) {
   const effectiveStackBb = stacks.decision.effectiveStack / BIG_BLIND;
   const startingDepthBb = stacks.startingDepth / BIG_BLIND;
   const opponentsCanRespond = liveOpponents.some((candidate) => candidate.stack > 0);
-  const callEndsHand = toCall > 0 && (
-    pokerCallClosesContestableLayers(
-      player.id,
-      player.contributed,
-      player.stack,
-      toCall,
-      players,
-    )
-    || !opponentsCanRespond
-    || (street === "river" && liveOpponents
-      .filter((candidate) => candidate.stack > 0)
-      .every((candidate) => candidate.hasActed && candidate.bet === currentBet))
+  const callEndsHand = pokerCallClosesAction(
+    player.id,
+    player.contributed,
+    player.stack,
+    toCall,
+    players,
+    street,
   );
   const decisionPot = pokerContestablePotAtDecision(
     player.id,
@@ -160,27 +155,18 @@ function decideAction(context) {
   const equityKey = `${player.id}|${opponents}|${board.map((card) => `${card.rank}-${card.suit}`).join(",")}|${layerKey}`;
   let equity = shouldSampleEquity ? equityCache.get(equityKey) : handStrength;
   if (equity === undefined) {
-    if (decisionPot.finalPot > 0 && decisionPot.layers.length > 0) {
-      const layerIterations = Math.max(24, Math.floor(equityIterations / decisionPot.layers.length));
-      const expectedPayout = decisionPot.layers.reduce((sum, layer) => {
-        if (!layer.opponentIds.length) return sum + layer.amount;
-        const layerEquity = estimateEquity(player.hole, board, {
-          opponents: layer.opponentIds.length,
-          iterations: layerIterations,
-          random: equityRandom,
-          suits: [0, 1, 2, 3],
-        });
-        return sum + layer.amount * layerEquity;
-      }, 0);
-      equity = expectedPayout / decisionPot.finalPot;
-    } else {
-      equity = estimateEquity(player.hole, board, {
-        opponents,
-        iterations: equityIterations,
-        random: equityRandom,
-        suits: [0, 1, 2, 3],
-      });
-    }
+    equity = estimateEquity(player.hole, board, {
+      opponents,
+      iterations: Math.max(24, equityIterations),
+      random: equityRandom,
+      suits: [0, 1, 2, 3],
+      potLayers: (street !== "preflop" || callEndsHand) && decisionPot.finalPot > 0
+        ? decisionPot.layers.map((layer) => ({
+          amount: layer.amount,
+          opponentIndices: layer.opponentIds.map((id) => liveOpponents.findIndex((opponent) => opponent.id === id)),
+        }))
+        : undefined,
+    });
     equityCache.set(equityKey, equity);
   }
   const policyInput = {
@@ -675,7 +661,7 @@ export function runSimulation(options = {}) {
       stackBb,
       players: PLAYER_COUNT,
       equityIterations,
-      equityIterationsPerLayerFloor: 24,
+      equityIterationsFloor: 24,
       policyPipeline: "local-gto-anchor+bounded-style",
     },
     elapsedMs,
@@ -712,7 +698,7 @@ export function formatReport(report) {
   const line = (row) => headers.map((header) => row[header].padEnd(widths[header])).join("  ");
   return [
     "RangeCraft AI 自博弈基准",
-    `6-max · ${report.config.hands.toLocaleString("zh-CN")} 手 · seed=${report.config.seed} · ${report.config.stackBb}BB · 权益 MC 请求×${report.config.equityIterations}（每边池层至少 ${report.config.equityIterationsPerLayerFloor}）· ${(report.elapsedMs / 1000).toFixed(2)}s`,
+    `6-max · ${report.config.hands.toLocaleString("zh-CN")} 手 · seed=${report.config.seed} · ${report.config.stackBb}BB · 权益 MC 请求×${report.config.equityIterations}（联合样本至少 ${report.config.equityIterationsFloor}，共享主池 / 边池）· ${(report.elapsedMs / 1000).toFixed(2)}s`,
     "每手使用种子随机阵容；同风格可重复出现，统计按风格汇总。",
     "",
     line(Object.fromEntries(headers.map((header) => [header, header]))),
@@ -722,7 +708,7 @@ export function formatReport(report) {
     `零和校验：${signed(report.totalNetBb, 6)} BB`,
     "Limp=未加注底池中的跟注/手；弱牌进攻=有合法主动动作的非价值候选中实际下注/加注的比例；纯诈唬出手进一步排除主要听牌。",
     "Agg=(bet+raise)/call；W$SD=进入摊牌后的主池胜率（平分按份额计）；CI 按每个牌桌手聚类近似。",
-    `注意：这是均衡锚定策略流水线的快速回归，不是 CFR/GTO 求解器；权益敏感节点请求 ${report.config.equityIterations} 次采样，每个边池层实际至少 ${report.config.equityIterationsPerLayerFloor} 次，仍低于界面电脑的 300/600 次和实时教练的 600/1200 次。`,
+    `注意：这是均衡锚定策略流水线的快速回归，不是 CFR/GTO 求解器；权益敏感节点请求 ${report.config.equityIterations} 次采样，实际联合样本至少 ${report.config.equityIterationsFloor} 次，仍低于界面电脑的 300/600 次和实时教练的 600/1200 次。`,
   ].join("\n");
 }
 

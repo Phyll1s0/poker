@@ -58,6 +58,51 @@ function checkedFlopInput(overrides = {}) {
   };
 }
 
+test("covering an all-in bettor realizes full equity without requiring hero to go all-in", () => {
+  const analysis = analyzeMultiplayerDecision(checkedFlopInput({
+    pot: 300, currentBet: 100,
+    players: [
+      player("hero", 5, { stack: 900, committed: 100 }),
+      player("villain", 2, { stack: 0, committed: 200, streetCommitted: 100, status: "all-in" }),
+    ],
+    legalActions: { fold: true, check: false, callAmount: 100, minRaiseTo: null, maxRaiseTo: null, raiseAllInOnly: false },
+  }));
+  assert.equal(analysis.equityRealization, 1);
+  assert.equal(analysis.realizationThreshold, 0.25);
+});
+
+test("a closing river call has no future-street discount, even with chips behind", () => {
+  const analysis = analyzeMultiplayerDecision(checkedFlopInput({
+    street: "river", pot: 300, currentBet: 100,
+    board: [{ rank: "A", suit: "d" }, { rank: 7, suit: "c" }, { rank: 2, suit: "s" }, { rank: 8, suit: "c" }, { rank: "J", suit: "h" }],
+    players: [
+      player("hero", 5, { stack: 900, committed: 100 }),
+      player("villain", 2, { stack: 800, committed: 200, streetCommitted: 100 }),
+    ],
+    legalActions: { fold: true, check: false, callAmount: 100, minRaiseTo: 200, maxRaiseTo: 900, raiseAllInOnly: false },
+  }));
+  assert.equal(analysis.equityRealization, 1);
+  assert.equal(analysis.realizationThreshold, 0.25);
+});
+
+test("multiplayer advice values a short main pot and a deep side pot separately", () => {
+  const analysis = analyzeMultiplayerDecision(checkedFlopInput({
+    street: "river", pot: 1000, currentBet: 400,
+    heroCards: [{ rank: 2, suit: "d" }, { rank: 3, suit: "h" }],
+    board: ["A", "K", "Q", "J", "T"].map((rank) => ({ rank, suit: "s" })),
+    players: [
+      player("hero", 5, { stack: 100, committed: 400, streetCommitted: 300 }),
+      player("short", 1, { stack: 0, committed: 100, status: "all-in" }),
+      player("deep", 2, { stack: 0, committed: 500, streetCommitted: 400, status: "all-in" }),
+    ],
+    legalActions: { fold: true, check: false, callAmount: 100, minRaiseTo: null, maxRaiseTo: null, raiseAllInOnly: false },
+  }));
+  // The board plays for everybody: 300 / 3 from main, 800 / 2 from side.
+  assert.ok(Math.abs(analysis.equity - 500 / 1100) < 1e-12);
+  assert.ok(Math.abs(analysis.potOdds - 100 / 1100) < 1e-12);
+  assert.match(analysis.summary, /主池.*边池/);
+});
+
 test("produces deterministic analysis for the same public decision", () => {
   const input = checkedFlopInput();
 

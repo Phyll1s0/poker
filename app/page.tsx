@@ -34,7 +34,7 @@ import { formatPokerFrequency, formatPokerFrequencyMix } from "../lib/poker-freq
 import { encodePreflopHandClass } from "../lib/poker-preflop";
 import {
   evaluatePokerPolicy,
-  pokerCallClosesContestableLayers,
+  pokerCallClosesAction,
   pokerContestablePotAtDecision,
   sixMaxPreflopPosition,
   sixMaxPreflopPositionFactor,
@@ -396,29 +396,17 @@ function currentEquity(game: Game, player: Player, iterations = 80, heroImage?: 
   // Before the flop, players behind may still enter despite having contributed
   // nothing yet. Pot-layer equity would silently exclude them and make an RFI
   // hand look much stronger than its all-live-opponents showdown equity.
-  if (game.street !== "preflop" && decisionPot.finalPot > 0 && decisionPot.layers.length > 0) {
-    const rangeByPlayer = new Map(opponents.map((opponent) => [opponent.playerId, opponent.weight]));
-    const layerIterations = Math.max(48, Math.floor(iterations / decisionPot.layers.length));
-    const expectedPayout = decisionPot.layers.reduce((sum, layer, index) => {
-      const layerRanges = layer.opponentIds
-        .map((playerId) => rangeByPlayer.get(playerId))
-        .filter((weight): weight is NonNullable<typeof weight> => Boolean(weight));
-      if (!layerRanges.length) return sum + layer.amount;
-      const layerEquity = estimateEquity(player.hole, community, {
-        opponents: layerRanges.length,
-        iterations: layerIterations,
-        opponentRanges: layerRanges,
-        random: seededSpotRandom(`${publicSeed};layer:${index}:${layer.opponentIds.join(",")}`),
-      });
-      return sum + layer.amount * layerEquity;
-    }, 0);
-    return expectedPayout / decisionPot.finalPot;
-  }
+  const usePotLayers = (game.street !== "preflop" || callClosesPlayerAction(game, player))
+    && decisionPot.finalPot > 0;
   return estimateEquity(player.hole, community, {
     opponents: opponents.length,
     iterations: game.street === "preflop" ? Math.max(48, iterations) : iterations,
     opponentRanges: opponents.map((opponent) => opponent.weight),
     random: seededSpotRandom(publicSeed),
+    potLayers: usePotLayers ? decisionPot.layers.map((layer) => ({
+      amount: layer.amount,
+      opponentIndices: layer.opponentIds.map((id) => opponents.findIndex((opponent) => opponent.playerId === id)),
+    })) : undefined,
   });
 }
 
@@ -552,22 +540,14 @@ function heroResponseContext(
 
 function callClosesPlayerAction(game: Game, player: Player) {
   const toCall = Math.max(0, game.highestBet - player.bet);
-  if (toCall <= 0) return false;
-  if (pokerCallClosesContestableLayers(
+  return pokerCallClosesAction(
     player.id,
     player.contributed,
     player.stack,
     toCall,
     game.players,
-  )) return true;
-  const fundedOpponents = game.players.filter((candidate) => (
-    candidate.id !== player.id && !candidate.folded && candidate.stack > 0
-  ));
-  if (!fundedOpponents.length) return true;
-  if (game.street !== "river") return false;
-  return fundedOpponents.every((candidate) => (
-    candidate.hasActed && candidate.bet === game.highestBet
-  ));
+    game.street,
+  );
 }
 
 function isPlayerInPosition(game: Game, player: Player) {
@@ -1226,7 +1206,10 @@ function getAdvice(game: Game, player: Player, equity: number) {
   const action = (Object.entries(frequencies) as [ActionKind, number][])
     .reduce((best, candidate) => candidate[1] > best[1] ? candidate : best)[0];
   let note: string;
-  if (game.street === "preflop") {
+  if (game.street === "preflop" && terminalCall) {
+    const directEv = equity * decisionPot.finalPot - callCost;
+    note = `这是跟注后不再有决策的翻前全下节点，不套用常规开池 / 再加注表。按可争夺底池计算，直接价格为 ${Math.round(potOdds * 100)}%，估算权益 ${Math.round(equity * 100)}%，即时筹码 EV 约 ${directEv >= 0 ? "+" : ""}${Math.round(directEv)}；当前主线为${ACTION_LABELS[action]}。`;
+  } else if (game.street === "preflop") {
     const handFeatures = preflopHandFeatures(player.hole)!;
     const handClass = encodePreflopHandClass(
       handFeatures.highRank,

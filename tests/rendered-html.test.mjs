@@ -161,7 +161,6 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /底池 \$\{committedPot\(game\)\} 仅由小盲/);
   assert.match(page, /本手入池频率/);
   assert.match(page, /翻前原始摊牌权益不作为首入池阈值/);
-  assert.match(page, /game\.street !== "preflop" && decisionPot\.finalPot/);
   assert.match(page, /当前若继续加注将是/);
   assert.match(page, /preflopRaiseActionLabel\(game\.raiseCount\)/);
   assert.match(page, /极低频路线/);
@@ -594,7 +593,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(edgeFunction, /potAfter: event\.potAfter/);
   assert.match(edgeFunction, /stackAfter: event\.stackAfter/);
   assert.match(multiplayerCoach, /pokerContestablePotAtDecision/);
-  assert.match(multiplayerCoach, /pokerCallClosesContestableLayers/);
+  assert.match(multiplayerCoach, /pokerCallClosesAction/);
   assert.match(multiplayerCoach, /createPublicOpponentRanges/);
   assert.match(multiplayerCoach, /公开信息近似模型/);
   assert.match(multiplayerCoach, /不读取任何对手暗牌/);
@@ -611,7 +610,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(page, /chooseAdaptivePokerPolicyAction/);
   assert.match(page, /policyPlan\.actionFrequencies/);
   assert.match(page, /resolvePokerDecisionStacks/);
-  assert.match(page, /pokerCallClosesContestableLayers/);
+  assert.match(page, /pokerCallClosesAction/);
   assert.match(page, /pokerContestablePotAtDecision/);
   assert.match(page, /callEndsHand: callClosesPlayerAction/);
   assert.match(page, /这次跟注会让你全下，之后不再有决策/);
@@ -638,7 +637,7 @@ test("keeps the multiplayer and strategy boundaries with product metadata", asyn
   assert.match(selfPlay, /chooseAdaptivePokerPolicyAction/);
   assert.match(selfPlay, /estimateEquity/);
   assert.match(selfPlay, /resolvePokerDecisionStacks/);
-  assert.match(selfPlay, /pokerCallClosesContestableLayers/);
+  assert.match(selfPlay, /pokerCallClosesAction/);
   assert.match(selfPlay, /pokerContestablePotAtDecision/);
   assert.match(serviceWorker, /key\.startsWith\("rangecraft-"\)/);
   assert.match(serviceWorker, /rangecraft-v11/);

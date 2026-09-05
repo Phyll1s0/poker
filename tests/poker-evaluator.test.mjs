@@ -19,6 +19,61 @@ import {
 
 const c = (rank, suit) => ({ rank, suit });
 
+test("a missed backdoor straight draw expires on the turn", () => {
+  const hole = [c(8, "h"), c(10, "d")];
+  const flop = [c(6, "s"), c(2, "c"), c(13, "d")];
+  assert.ok(drawPotential(hole, flop) > 0);
+  assert.equal(drawPotential(hole, [...flop, c(3, "h")]), 0);
+  assert.ok(drawPotential(hole, [...flop, c(7, "h")]) > 0);
+});
+
+test("side-pot equity pays each eligible layer while retaining every opponent's blockers", () => {
+  const hero = [c(13, "s"), c(13, "h")];
+  const short = [c(14, "s"), c(14, "h")];
+  const deep = [c(12, "s"), c(12, "h")];
+  const board = [c(2, "s"), c(3, "h"), c(7, "d"), c(8, "c"), c(9, "s")];
+  const exact = (cards) => (candidate) => candidate.every((card) => cards.some((other) => other.rank === card.rank && other.suit === card.suit)) ? 1 : 0;
+  const common = { opponents: 2, iterations: 16, random: seeded(17), opponentRanges: [exact(short), exact(deep)] };
+  assert.equal(estimateEquity(hero, board, common), 0);
+  const layered = estimateEquity(hero, board, {
+    ...common,
+    potLayers: [{ amount: 300, opponentIndices: [0, 1] }, { amount: 800, opponentIndices: [1] }],
+  });
+  assert.ok(Math.abs(layered - 800 / 1100) < 1e-12);
+  // A hand that conflicts with the short stack is impossible in the deep
+  // player's range, even when evaluating only the deep side pot.
+  const conflictingAces = exact([c(14, "s"), c(14, "d")]);
+  const blockerAware = estimateEquity(hero, board, {
+    ...common,
+    opponentRanges: [exact(short), (candidate) => conflictingAces(candidate) * 100 + exact(deep)(candidate)],
+    potLayers: [{ amount: 1, opponentIndices: [1] }],
+  });
+  assert.equal(blockerAware, 1);
+  const blockedRunout = estimateEquity(hero, [c(2, "s"), c(3, "h"), c(7, "d"), c(8, "c")], {
+    ...common, iterations: 4000, random: seeded(38),
+    potLayers: [{ amount: 1, opponentIndices: [1] }],
+  });
+  assert.ok(Math.abs(blockedRunout - 40 / 42) < 0.013, `${blockedRunout}: only the two remaining queens beat KK`);
+});
+
+test("heads-up river equity is exact for a supplied range, independent of sample count and RNG", () => {
+  const hero = [c(13, "s"), c(13, "h")];
+  const board = [c(2, "s"), c(3, "h"), c(7, "d"), c(8, "c"), c(9, "s")];
+  const range = (cards) => cards.every((card) => card.rank === 14) ? 3 : cards.every((card) => card.rank === 12) ? 1 : 0;
+  for (const iterations of [1, 17, 400]) {
+    for (const random of [() => 0, () => 0.9999, seeded(18)]) {
+      assert.ok(Math.abs(estimateEquity(hero, board, { opponents: 1, iterations, random, opponentRanges: [range] }) - 0.25) < 1e-12);
+    }
+  }
+});
+
+test("rejects malformed side-pot eligibility instead of returning false equity", () => {
+  const hero = [c(13, "s"), c(13, "h")];
+  for (const potLayers of [[], [{ amount: 0, opponentIndices: [0] }], [{ amount: 10, opponentIndices: [1] }], [{ amount: 10, opponentIndices: [0, 0] }]]) {
+    assert.throws(() => estimateEquity(hero, [], { opponents: 1, potLayers }), /potLayers/);
+  }
+});
+
 function seeded(seed) {
   let state = seed >>> 0;
   return () => {

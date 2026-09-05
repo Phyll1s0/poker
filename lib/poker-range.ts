@@ -186,16 +186,14 @@ function preflopActionLikelihood(
   if (chartScenario && evidence.position) {
     const sorted = [...hole].sort((left, right) => right.rank - left.rank);
     const hand = encodePreflopHandClass(sorted[0].rank, sorted[1].rank, sameSuit(sorted[0], sorted[1]));
-    // Reconstruct the actual raise-to price. Fixed 2.5BB/9BB assumptions made
-    // an identical 9BB squeeze look different after a 2x open, a 3x open or
-    // a cold entry, which then selected the wrong response chart.
+    // Condition the action on the decision the player FACED. A BB three-bet
+    // from 1BB to 9BB over a 2.5BB open queries the response to 2.5BB, not 9BB.
+    // The new raise's size is separate evidence, handled by sizePolarization.
     const legacyInvestment = action.raiseCountBefore === 1
       ? evidence.position === "BB" ? 1 : evidence.position === "SB" ? 0.5 : 0
       : action.raiseCountBefore === 2 ? 2.5 : action.raiseCountBefore >= 3 ? 9 : 0;
     const committedBefore = Math.max(0, action.playerBetBefore ?? legacyInvestment * bigBlind);
-    const observedTargetBb = action.kind === "raise"
-      ? (committedBefore + action.amount) / Math.max(1, bigBlind)
-      : (committedBefore + action.toCall) / Math.max(1, bigBlind);
+    const facingTargetBb = (committedBefore + action.toCall) / Math.max(1, bigBlind);
     const strategy = getPreflopStrategy({
       hand,
       scenario: chartScenario,
@@ -207,7 +205,7 @@ function preflopActionLikelihood(
         ?? action.effectiveStackBefore
         ?? action.stackBefore
       ) / Math.max(1, bigBlind),
-      facingSizeBb: chartScenario === "rfi" ? undefined : observedTargetBb,
+      facingSizeBb: chartScenario === "rfi" ? undefined : facingTargetBb,
     });
     let chartFrequency = action.kind === "raise"
       ? strategy.frequencies.raise

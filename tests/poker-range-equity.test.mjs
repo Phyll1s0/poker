@@ -14,6 +14,36 @@ import { getPreflopStrategy } from "../lib/poker-preflop.ts";
 
 const c = (rank, suit) => ({ rank, suit });
 
+test("a three-bettor's range is conditioned on the open faced, not their own new raise", () => {
+  const aces = [c(14, "s"), c(14, "h")];
+  const candidates = [
+    ["A5s", [c(14, "s"), c(5, "s")]],
+    ["ATo", [c(14, "s"), c(10, "h")]],
+    ["TT", [c(10, "s"), c(10, "h")]],
+  ];
+  for (const openBb of [2, 2.5, 3]) {
+    const evidence = {
+      position: "BB", positionFactor: 1.35, openerPosition: "BTN", bigBlind: 10,
+      actions: [action({
+        amount: 80, toCall: openBb * 10 - 10, playerBetBefore: 10,
+        potBefore: openBb * 10 + 15, raiseCountBefore: 1,
+        startingDepthBefore: 1000, activeOpponents: 1,
+      })],
+    };
+    const query = { scenario: "vs-open", heroPosition: "BB", aggressorPosition: "BTN", effectiveStackBb: 100, facingSizeBb: openBb };
+    const premiumFrequency = getPreflopStrategy({ ...query, hand: "AA" }).frequencies.raise;
+    const premiumWeight = opponentHoldingWeight(aces, [], evidence);
+    for (const [hand, hole] of candidates) {
+      const expectedRatio = getPreflopStrategy({ ...query, hand }).frequencies.raise / premiumFrequency;
+      const actualRatio = opponentHoldingWeight(hole, [], evidence) / premiumWeight;
+      // A sizing likelihood may tilt the range, but must not erase the very
+      // bluff / thin-value combos that the response policy actually raises.
+      assert.ok(actualRatio >= expectedRatio * 0.8 && actualRatio <= expectedRatio * 1.2,
+        `${hand} vs ${openBb}BB: inferred ${actualRatio}, action-policy ratio ${expectedRatio}`);
+    }
+  }
+});
+
 function seeded(seed) {
   let state = seed >>> 0;
   return () => {

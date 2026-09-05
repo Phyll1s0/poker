@@ -58,6 +58,11 @@ export type EstimateEquityOptions = {
   suits?: readonly PokerSuit[];
   /** One public-information range likelihood function per opponent. */
   opponentRanges?: readonly OpponentRangeWeight[];
+  /** Eligible current pot layers; indices refer to opponentRanges / sampled seats.
+   * Every opponent is still sampled once, preserving blockers between layers.
+   * Omit to estimate the ordinary equal-stake showdown share.
+   */
+  potLayers?: readonly { amount: number; opponentIndices: readonly number[] }[];
 };
 
 const HAND_NAMES = ["高牌", "一对", "两对", "三条", "顺子", "同花", "葫芦", "四条", "同花顺"] as const;
@@ -363,7 +368,7 @@ export function drawPotential(hole: readonly PokerCard[], community: readonly Po
   }
   if (oneCardStraightOuts.size >= 2) straightDraw = 0.09;
   else if (oneCardStraightOuts.size === 1) straightDraw = 0.05;
-  else if (hasContributedThreeCardWindow) straightDraw = 0.035;
+  else if (hasContributedThreeCardWindow && community.length === 3) straightDraw = 0.035;
   return flushDraw + straightDraw;
 }
 
@@ -718,12 +723,51 @@ export function estimateEquity(
     throw new RangeError("opponentRanges 必须为每位对手提供一个范围权重函数");
   }
 
+  const layers = options.potLayers ?? [{ amount: 1, opponentIndices: Array.from({ length: opponents }, (_, index) => index) }];
+  if (!layers.length || layers.some((layer) => (
+    !Number.isFinite(layer.amount) || layer.amount <= 0
+    || new Set(layer.opponentIndices).size !== layer.opponentIndices.length
+    || layer.opponentIndices.some((index) => !Number.isInteger(index) || index < 0 || index >= opponents)
+  ))) throw new RangeError("potLayers 必须包含正数金额及不重复的有效对手索引");
+  const totalPot = layers.reduce((sum, layer) => sum + layer.amount, 0);
+  if (!Number.isFinite(totalPot)) throw new RangeError("potLayers 总金额必须是有限数值");
+  const showdownShare = (heroScore: number, opponentScores: readonly number[]) => {
+    let payout = 0;
+    for (const layer of layers) {
+      let ties = 0;
+      let beaten = false;
+      for (const index of layer.opponentIndices) {
+        if (opponentScores[index] > heroScore) { beaten = true; break; }
+        if (opponentScores[index] === heroScore) ties += 1;
+      }
+      if (!beaten) payout += layer.amount / (ties + 1);
+    }
+    return payout / totalPot;
+  };
+  const evaluateRunout = (board: readonly PokerCard[], opponentHoles: readonly (readonly PokerCard[])[]) => showdownShare(
+    bestHandUnchecked([...hole, ...board]).score,
+    opponentHoles.map((holding) => bestHandUnchecked([...holding, ...board]).score),
+  );
+
   if (opponentRanges) {
     const ranges = opponentRanges.map((range, index) => {
       if (typeof range !== "function") throw new TypeError(`opponentRanges[${index}] 必须是函数`);
       return buildWeightedRange(available, range, index);
     });
     const enumeratedJoint = canEnumerateJoint(ranges) ? enumerateCompatibleJoints(ranges) : undefined;
+    // A complete river has no runout uncertainty. Enumerate a tractable range
+    // exactly (all heads-up ranges fit) instead of adding sampling noise to a
+    // close pot-odds decision. This is exact equity vs the supplied ranges,
+    // not an equilibrium solve or proof that those inferred ranges are exact.
+    if (boardCardsNeeded === 0 && enumeratedJoint && enumeratedJoint.joints.length <= 2000) {
+      let previousWeight = 0;
+      let payout = 0;
+      for (const joint of enumeratedJoint.joints) {
+        payout += (joint.cumulativeWeight - previousWeight) * evaluateRunout(community, joint.holes);
+        previousWeight = joint.cumulativeWeight;
+      }
+      return payout / enumeratedJoint.totalWeight;
+    }
     let maximumLogImportance = -Infinity;
     let totalImportance = 0;
     let squaredImportance = 0;
@@ -745,19 +789,7 @@ export function estimateEquity(
       const unavailable = new Set(opponentHoles.flatMap((holding) => holding.map(cardKey)));
       const runoutPool = available.filter((card) => !unavailable.has(cardKey(card)));
       const board = [...community, ...sampleCards(runoutPool, boardCardsNeeded, random)];
-      const heroScore = bestHandUnchecked([...hole, ...board]).score;
-      let topScore = heroScore;
-      let tiedOpponents = 0;
-      for (const opponentHole of opponentHoles) {
-        const opponentScore = bestHandUnchecked([...opponentHole, ...board]).score;
-        if (opponentScore > topScore) {
-          topScore = opponentScore;
-          tiedOpponents = 1;
-        } else if (opponentScore === topScore) {
-          tiedOpponents += 1;
-        }
-      }
-      const equityShare = heroScore === topScore ? 1 / (tiedOpponents + 1) : 0;
+      const equityShare = evaluateRunout(board, opponentHoles);
       if (jointSample.logImportanceWeight > maximumLogImportance) {
         const scale = maximumLogImportance === -Infinity
           ? 0
@@ -783,20 +815,14 @@ export function estimateEquity(
     // Known cards and the sampling pool were validated once above. Skipping
     // repeated validation here matters for tens-of-thousands-hand arenas.
     const heroScore = bestHandUnchecked([...hole, ...board]).score;
-    let topScore = heroScore;
-    let tiedOpponents = 0;
+    const opponentScores: number[] = [];
     let cursor = boardCardsNeeded;
     for (let opponent = 0; opponent < opponents; opponent += 1) {
       const opponentScore = bestHandUnchecked([sampled[cursor], sampled[cursor + 1], ...board]).score;
       cursor += 2;
-      if (opponentScore > topScore) {
-        topScore = opponentScore;
-        tiedOpponents = 1;
-      } else if (opponentScore === topScore) {
-        tiedOpponents += 1;
-      }
+      opponentScores.push(opponentScore);
     }
-    if (heroScore === topScore) equityShare += 1 / (tiedOpponents + 1);
+    equityShare += showdownShare(heroScore, opponentScores);
   }
   return equityShare / iterations;
 }

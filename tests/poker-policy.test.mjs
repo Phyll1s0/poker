@@ -5,6 +5,7 @@ import {
   choosePokerPolicyAction,
   evaluatePokerPolicy,
   pokerCallClosesContestableLayers,
+  pokerCallClosesAction,
   pokerContestablePotAtDecision,
   pokerDecisionStackContext,
   pokerEffectiveStackAtDecision,
@@ -44,6 +45,36 @@ function seeded(seed) {
 function totalVariation(left, right) {
   return Object.keys(left).reduce((sum, key) => sum + Math.abs(left[key] - right[key]), 0) / 2;
 }
+
+test("terminal-call recognition respects unfunded seats and pending funded responders", () => {
+  const hero = { id: 0, stack: 900, contributed: 100, folded: false };
+  const bettor = { id: 1, stack: 800, contributed: 200, folded: false };
+  const behind = { id: 2, stack: 900, contributed: 100, folded: false };
+  const closes = (players, street) => pokerCallClosesAction(0, 100, 900, 100, players, street);
+  assert.equal(closes([hero, bettor], "river"), true);
+  assert.equal(closes([hero, bettor], "turn"), false);
+  assert.equal(closes([hero, { ...bettor, stack: 0 }], "flop"), true);
+  assert.equal(closes([hero, bettor, behind], "river"), false);
+  assert.equal(closes([hero, { ...bettor, stack: 0 }, behind], "flop"), false);
+  assert.equal(closes([hero, bettor, { ...behind, folded: true }], "river"), true);
+});
+
+test("the displayed realization boundary is the actual fold/call indifference point", () => {
+  for (const activeOpponents of [1, 2, 4]) {
+    for (const playerStack of [100, 300, 1000]) {
+      const spot = {
+        ...baseSpot, profile: { aggression: 0.7, looseness: 0.27, bluff: 0.12 },
+        activeOpponents, playerStack, effectiveStackBb: playerStack / 10,
+        handStrength: 0.25, draw: 0, blockers: 0, inPosition: false,
+        raiseLocked: true, callEndsHand: false,
+      };
+      const boundary = evaluatePokerPolicy(spot).realizationThreshold;
+      const plan = evaluatePokerPolicy({ ...spot, equity: boundary });
+      assert.ok(Math.abs(plan.actionFrequencies.call - 0.5) < 1e-9,
+        `${activeOpponents} opponents / ${playerStack} chips: call ${plan.actionFrequencies.call}`);
+    }
+  }
+});
 
 test("samples reproducibly with an injected seeded RNG", () => {
   const firstRandom = seeded(90210);

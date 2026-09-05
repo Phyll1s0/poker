@@ -309,6 +309,28 @@ export function pokerCallClosesContestableLayers(
   ));
 }
 
+/**
+ * Whether a call has terminal showdown utility for the actor. A covering
+ * caller need not themselves go all-in; nor is there a future street after a
+ * closing river call. Unmatched funded players behind still prevent closure.
+ */
+export function pokerCallClosesAction(
+  playerId: number,
+  playerContribution: number,
+  playerStack: number,
+  toCall: number,
+  players: readonly { id: number; contributed: number; folded: boolean; stack: number }[],
+  street: PokerPolicyStreet,
+) {
+  const callCost = Math.min(nonNegative(toCall), nonNegative(playerStack));
+  if (callCost <= 0) return false;
+  if (pokerCallClosesContestableLayers(playerId, playerContribution, playerStack, toCall, players)) return true;
+  const funded = players.filter((player) => player.id !== playerId && !player.folded && player.stack > 0);
+  return funded.length === 0 || (street === "river" && funded.every((player) => (
+    player.contributed >= nonNegative(playerContribution) + callCost
+  )));
+}
+
 function decisionPressure(toCall: number, playerStack: number, effectiveStackChips: number) {
   const available = nonNegative(playerStack);
   const callCost = Math.min(nonNegative(toCall), available);
@@ -1356,7 +1378,8 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
     + (input.profile.looseness - 0.27) * 0.035
     - realizationThreshold;
   let actionFrequencies: PokerPolicyActionFrequencies;
-  if (input.toCall > 0 && input.callEndsHand && !canRaise) {
+  const terminalCallPolicy = input.toCall > 0 && input.callEndsHand && !canRaise;
+  if (terminalCallPolicy) {
     // Once calling leaves the player no later decision and raising is illegal,
     // fold/call is centered on chip-EV indifference on every street, including
     // preflop. Only explicit Squid utility may shift that boundary; player-style
@@ -1370,15 +1393,13 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
   } else if (input.street === "preflop") {
     actionFrequencies = preflopPlan.actionFrequencies;
   } else if (input.toCall > 0) {
-    const futureRiskFactor = input.callEndsHand ? 0 : 1;
     const edgeSensitivity = input.street === "river" ? 15 : input.street === "turn" ? 12.5 : 11;
-    const foldLogit = -continueEdge * edgeSensitivity
-      + pressure * 0.62 * futureRiskFactor
-      + (input.activeOpponents - 1) * 0.14 * futureRiskFactor;
-    const callLogit = continueEdge * edgeSensitivity
-      - valueScore * 0.24
-      + drawQuality * 0.18
-      - pressure * 0.22 * futureRiskFactor;
+    // Position / draws / multiway risk are already priced in realization.
+    // Penalizing the call a second time moved the real boundary above the one
+    // shown to the player. Strong hands compete through the raise branch;
+    // they must not become more likely to fold when raising is unavailable.
+    const foldLogit = -continueEdge * edgeSensitivity;
+    const callLogit = continueEdge * edgeSensitivity;
     const valueRaiseLogit = -1.38
       + continueEdge * edgeSensitivity
       + valueScore * (1.72 + input.profile.aggression * 0.82)
@@ -1446,10 +1467,10 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
     shortStackJamFrequency,
     continueEdge,
     preflopTargetRange: preflopPlan.targetRange,
-    preflopEnterFrequency: preflopPlan.enterFrequency,
+    preflopEnterFrequency: terminalCallPolicy ? actionFrequencies.call : preflopPlan.enterFrequency,
     preflopOpenRaiseFrequency: preflopPlan.openRaiseFrequency,
     preflopThreeBetFrequency: preflopPlan.threeBetFrequency,
-    preflopRaiseFrequency: preflopPlan.raiseFrequency,
+    preflopRaiseFrequency: terminalCallPolicy ? 0 : preflopPlan.raiseFrequency,
     preflopScenario: preflopPlan.scenario,
     preflopPosition: preflopPlan.position,
     rangeAdvantage,

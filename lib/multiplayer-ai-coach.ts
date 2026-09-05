@@ -11,7 +11,7 @@ import {
 } from "./poker-evaluator.ts";
 import {
   evaluatePokerPolicy,
-  pokerCallClosesContestableLayers,
+  pokerCallClosesAction,
   pokerContestablePotAtDecision,
   pokerDecisionStackContext,
   type PokerPolicyActionKind,
@@ -301,9 +301,6 @@ export function multiplayerPublicActions(
 function normalizeFrequencies(
   raw: Record<PokerPolicyActionKind, number>,
   legal: MultiplayerCoachLegalActions,
-  equity: number,
-  potOdds: number,
-  callEndsHand: boolean,
 ) {
   const allowed: Record<PokerPolicyActionKind, boolean> = {
     fold: legal.fold,
@@ -318,13 +315,6 @@ function normalizeFrequencies(
     raise: allowed.raise ? Math.max(0, raw.raise) : 0,
   };
 
-  // Once calling closes the action there is no future realization penalty.
-  // A clearly profitable price must never be displayed as a pure fold.
-  if (callEndsHand && allowed.call && equity >= potOdds + 0.025) {
-    const excessFold = Math.max(0, frequencies.fold - 0.04);
-    frequencies.fold -= excessFold;
-    frequencies.call += excessFold;
-  }
   if (allowed.check && legal.callAmount === null) frequencies.fold = 0;
   let total = Object.values(frequencies).reduce((sum, value) => sum + value, 0);
   if (total <= 0) {
@@ -405,13 +395,7 @@ export function analyzeMultiplayerDecision(input: MultiplayerAiCoachInput): Mult
     positionFactor: (seat: number) => POSITION_FACTORS[positionForSeat(seat)],
     position: positionForSeat,
   };
-  const ranges = createPublicOpponentRanges(rangeState).map((range) => range.weight);
-  const equity = estimateEquity(hole, board, {
-    opponents: opponents.length,
-    iterations: input.iterations ?? (input.street === "preflop" ? 320 : 480),
-    random: seededRandom(input.decisionId),
-    opponentRanges: ranges,
-  });
+  const ranges = createPublicOpponentRanges(rangeState);
   const toCall = input.legalActions.callAmount ?? 0;
   const decisionPot = pokerContestablePotAtDecision(
     hero.seat,
@@ -437,7 +421,7 @@ export function analyzeMultiplayerDecision(input: MultiplayerAiCoachInput): Mult
   const deepestOpponentStart = Math.max(...opponents.map((player) => player.stack + player.committed));
   const startingDepthBb = Math.min(heroStart, deepestOpponentStart) / Math.max(1, input.bigBlind);
   const effectiveStackBb = stackContext.effectiveStack / Math.max(1, input.bigBlind);
-  const callEndsHand = pokerCallClosesContestableLayers(
+  const callEndsHand = pokerCallClosesAction(
     hero.seat,
     hero.committed,
     hero.stack,
@@ -448,7 +432,20 @@ export function analyzeMultiplayerDecision(input: MultiplayerAiCoachInput): Mult
       folded: player.status === "folded" || player.status === "out",
       stack: player.stack,
     })),
+    input.street,
   );
+  const equity = estimateEquity(hole, board, {
+    opponents: opponents.length,
+    iterations: input.iterations ?? (input.street === "preflop" ? 320 : 480),
+    random: seededRandom(input.decisionId),
+    opponentRanges: ranges.map((range) => range.weight),
+    potLayers: (input.street !== "preflop" || callEndsHand) && decisionPot.finalPot > 0
+      ? decisionPot.layers.map((layer) => ({
+        amount: layer.amount,
+        opponentIndices: layer.opponentIds.map((id) => ranges.findIndex((range) => range.playerId === id)),
+      }))
+      : undefined,
+  });
   const draw = drawPotential(hole, board);
   const blockers = blockerValue(hole, board);
   const texture = analyzeBoardTexture(board);
@@ -525,9 +522,6 @@ export function analyzeMultiplayerDecision(input: MultiplayerAiCoachInput): Mult
   const frequencies = normalizeFrequencies(
     { ...plan.actionFrequencies },
     input.legalActions,
-    equity,
-    potOdds,
-    callEndsHand,
   );
   const rows = frequencyRows(frequencies);
   const recommendedAction = rows[0]?.action ?? "fold";
@@ -568,10 +562,16 @@ export function analyzeMultiplayerDecision(input: MultiplayerAiCoachInput): Mult
   const preflopHandClass = heroPreflopHand
     ? encodePreflopHandClass(heroPreflopHand.highRank, heroPreflopHand.lowRank, heroPreflopHand.suited)
     : null;
-  const summary = input.street === "preflop"
+  const equityLabel = decisionPot.layers.some((layer) => layer.opponentIds.length !== opponents.length)
+    && (input.street !== "preflop" || callEndsHand)
+    ? "按主池 / 边池金额加权的权益"
+    : "对公开行动范围的估算权益";
+  const summary = callEndsHand
+    ? `跟注后不再有决策：${equityLabel}约 ${equityPercent}%，直接价格 ${pricePercent}%；当前主路线为${ACTION_LABELS[recommendedAction]}。不再扣除后续街风险。`
+    : input.street === "preflop"
     ? `${preflopHandClass ?? "翻前手牌"} · ${heroPosition} 翻前节点：结合起始有效筹码、公开加注线和行动尺度，当前主路线为${ACTION_LABELS[recommendedAction]}。`
     : decisionPot.callCost > 0
-      ? `对公开行动加权范围的估算胜率约 ${equityPercent}%，直接底池赔率为 ${pricePercent}%；当前主路线为${ACTION_LABELS[recommendedAction]}。`
+      ? `${equityLabel}约 ${equityPercent}%，直接底池赔率为 ${pricePercent}%；当前主路线为${ACTION_LABELS[recommendedAction]}。`
       : `当前没有直接跟注价格；结合范围胜率、牌面纹理和 SPR，主路线为${ACTION_LABELS[recommendedAction]}。`;
   const factors = [
     `${opponents.length + 1} 人有效底池 · ${inPosition ? "有位置" : "无位置"}`,
@@ -602,6 +602,6 @@ export function analyzeMultiplayerDecision(input: MultiplayerAiCoachInput): Mult
     sizing,
     summary,
     factors,
-    sourceNote: "RangeCraft 公开信息近似模型 · 权益按对手公开行动加权范围抽样；不是完整 solver 解，也不读取任何对手暗牌。",
+    sourceNote: "RangeCraft 公开信息近似模型 · 按对手行动推断范围；单挑河牌权益枚举，其他复杂局面抽样，主池 / 边池分别计入收益。频率仍是近似，不是完整 solver 解，也不读取任何对手暗牌。",
   };
 }
