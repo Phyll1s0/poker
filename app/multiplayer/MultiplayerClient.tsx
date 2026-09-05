@@ -551,9 +551,8 @@ function ReactionContent({ content, compact = false }: { content: string; compac
   const reaction = getMultiplayerChatReaction(content);
   if (!reaction) return <>{content}</>;
   return (
-    <span className={`${styles.reactionContent} ${compact ? styles.reactionContentCompact : ""}`}>
+    <span className={`${styles.reactionContent} ${compact ? styles.reactionContentCompact : ""}`} role="img" aria-label={reaction.label}>
       <span className={styles.reactionContentEmoji} aria-hidden="true">{reaction.emoji}</span>
-      <span className={styles.reactionContentLabel}>{reaction.label}</span>
     </span>
   );
 }
@@ -1357,7 +1356,7 @@ function ChatDock({
             <span>QUICK REACTIONS</span>
             <strong id="quick-reaction-title">快捷表情</strong>
           </div>
-          <small>座位旁显示 5 秒 · 搞怪短语音跟随牌桌音效</small>
+          <small>座位旁显示 5 秒 · 无台词情绪音效</small>
         </header>
         <div className={styles.quickReactions} aria-label="快捷表情">
           {MULTIPLAYER_CHAT_REACTION_CATALOG.map((reaction, index) => (
@@ -2979,8 +2978,8 @@ export default function MultiplayerClient({
             type="button"
             onClick={toggleSound}
             aria-pressed={soundOn}
-            aria-label={soundOn ? "关闭牌桌音效与表情语音" : "开启牌桌音效与表情语音"}
-            title={soundOn ? "关闭牌桌音效与表情语音" : "开启牌桌音效与表情语音"}
+            aria-label={soundOn ? "关闭牌桌与表情音效" : "开启牌桌与表情音效"}
+            title={soundOn ? "关闭牌桌与表情音效" : "开启牌桌与表情音效"}
           >
             <span>{soundOn ? "♪" : "—"}</span><b>音效</b><small>{soundOn ? "ON" : "OFF"}</small>
           </button>

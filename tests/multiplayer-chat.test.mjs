@@ -141,7 +141,7 @@ test("hosted chat is isolated from poker revision and protects server-owned iden
   assert.match(migration, /order by stale\.id desc[\s\S]*?offset 200/i);
   assert.match(client, /role="log"/);
   assert.match(client, /MULTIPLAYER_CHAT_REACTION_CATALOG\.map/);
-  assert.match(client, /搞怪短语音跟随牌桌音效/);
+  assert.match(client, /无台词情绪音效/);
   assert.match(client, /getMultiplayerChatReaction/);
   assert.match(client, /tableMessage\.kind === "reaction"[\s\S]*?<ReactionContent/);
   assert.match(client, /message\.kind === "reaction"[\s\S]*?<ReactionContent/);

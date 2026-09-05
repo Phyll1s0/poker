@@ -202,7 +202,7 @@ function MultiplayerGuide({
       <section className="poker-rule-section" aria-labelledby="multiplayer-social-title">
         <div className="poker-rule-section-heading"><span>TABLE TALK · BETWEEN HANDS</span><h3 id="multiplayer-social-title">聊天、亮牌和下一手，共用一张牌桌</h3></div>
         <div className="multiplayer-guide-grid">
-          <article><span>桌边互动</span><strong>表情与消息</strong><p>下注台旁打开“发表情”或“消息”。快捷表情会在座位边显示约 5 秒；顶栏音效开关同时控制牌桌音效和表情语音。</p></article>
+          <article><span>桌边互动</span><strong>表情与消息</strong><p>下注台旁打开“发表情”或“消息”。快捷表情会在座位边显示约 5 秒，并配上短笑、哼气等无台词情绪声；顶栏音效开关同时控制牌桌与表情音效。</p></article>
           <article><span>共同结算</span><strong>固定等待 20 秒</strong><p>一手结束后，结算与已公开牌会保留；若已公开且能组成牌型，还会展示赢家最佳五张。全员提前准备也不会跳过这段时间。</p></article>
           <article><span>赢家选择</span><strong>亮牌或盖牌</strong><p>赢家在共同等待的前 12 秒决定；超时自动盖牌。若选择亮牌，手牌至少持续显示到 20 秒结算结束。</p></article>
           <article><span>训练机会</span><strong>每手私密偷看 5 次</strong><p>本手参与者可在结算期查看未公开对手底牌；结果只对自己可见，也不会替对手公开。</p></article>
