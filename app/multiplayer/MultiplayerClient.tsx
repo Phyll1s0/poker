@@ -536,6 +536,17 @@ function stackInBigBlinds(stack: number, bigBlind = ONLINE_BIG_BLIND) {
   return Math.round(stack / Math.max(1, bigBlind));
 }
 
+function compactChipCount(stack: number) {
+  if (stack < 1_000) return String(stack);
+  if (stack < 10_000) {
+    const thousands = Math.round(stack / 100) / 10;
+    return `${thousands.toFixed(Number.isInteger(thousands) ? 0 : 1)}K`;
+  }
+  if (stack < 1_000_000) return `${Math.round(stack / 1_000)}K`;
+  const millions = Math.round(stack / 100_000) / 10;
+  return `${millions.toFixed(Number.isInteger(millions) ? 0 : 1)}M`;
+}
+
 function ReactionContent({ content, compact = false }: { content: string; compact?: boolean }) {
   const reaction = getMultiplayerChatReaction(content);
   if (!reaction) return <>{content}</>;
@@ -633,7 +644,11 @@ function PlayerSeat({
           </div>
           <span>{player.accountId === selfAccountId ? "你 · 在线" : PLAYER_STATUS_LABELS[player.status]}</span>
         </div>
-        <div className={styles.seatStack}><i />{player.stack}</div>
+        <div className={styles.seatStack} aria-label={`筹码 ${player.stack}`} title={`筹码 ${player.stack}`}>
+          <i />
+          <span className={styles.seatStackFull}>{player.stack}</span>
+          <span className={styles.seatStackCompact} aria-hidden="true">{compactChipCount(player.stack)}</span>
+        </div>
       </div>
       {player.streetCommitted > 0 && <div className={styles.tableBet}><i />{player.streetCommitted}</div>}
       <div className={`${styles.seatClock} ${player.accountId === actorAccountId ? styles.seatClockActive : ""}`}>
@@ -1837,6 +1852,8 @@ export default function MultiplayerClient({
   const viewerSeatRef = useRef<number | null>(null);
   const aiAssistBusyRef = useRef(false);
   const aiAssistButtonRef = useRef<HTMLButtonElement | null>(null);
+  const primaryActionsRef = useRef<HTMLDivElement | null>(null);
+  const lastAutoFocusedDecisionRef = useRef<string | null>(null);
   const roomRefreshInFlightRef = useRef(false);
   const roomRefreshPendingRef = useRef(false);
 
@@ -2658,6 +2675,35 @@ export default function MultiplayerClient({
     && aiAnalysis?.decisionId === aiDecisionId;
   const aiAssistBonusSeconds = Math.max(0, Math.round((snapshot?.table.aiAssistTimeBonusMs ?? 10_000) / 1_000));
 
+  useEffect(() => {
+    if (!isMyTurn || !aiDecisionId || lastAutoFocusedDecisionRef.current === aiDecisionId) return;
+    const compactWidth = window.matchMedia("(max-width: 1100px)");
+    const splitLandscape = window.matchMedia("(orientation: landscape) and (max-height: 700px)");
+    let frame: number | null = null;
+    const revealActions = () => {
+      if (!compactWidth.matches || splitLandscape.matches || lastAutoFocusedDecisionRef.current === aiDecisionId) return;
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        if (lastAutoFocusedDecisionRef.current === aiDecisionId) return;
+        lastAutoFocusedDecisionRef.current = aiDecisionId;
+        primaryActionsRef.current?.scrollIntoView({
+          block: "center",
+          inline: "nearest",
+          behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+        });
+      });
+    };
+    revealActions();
+    compactWidth.addEventListener("change", revealActions);
+    splitLandscape.addEventListener("change", revealActions);
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      compactWidth.removeEventListener("change", revealActions);
+      splitLandscape.removeEventListener("change", revealActions);
+    };
+  }, [aiDecisionId, isMyTurn]);
+
   const closeAiAnalysis = useCallback(() => {
     setAiAnalysisOpen(false);
     window.requestAnimationFrame(() => aiAssistButtonRef.current?.focus());
@@ -3351,7 +3397,7 @@ export default function MultiplayerClient({
                   )}
                     </div>
 
-                    <div className={styles.primaryActions} aria-label="牌桌行动">
+                    <div ref={primaryActionsRef} className={styles.primaryActions} aria-label="牌桌行动">
                   <button
                     className={`${styles.actionButton} ${styles.foldAction}`}
                     type="button"

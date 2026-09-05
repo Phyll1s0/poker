@@ -157,6 +157,30 @@ test("uses a normal open size and does not open-shove at 40 BB", () => {
   assert.ok(action.raiseTo >= 20 && action.raiseTo <= 30);
 });
 
+test("adds a hand-aware open-jam branch once the starting stack is truly short", () => {
+  const plan = evaluatePokerPolicy({
+    ...baseSpot,
+    street: "preflop",
+    equity: 0.82,
+    handStrength: 0.92,
+    preflopPercentile: 0.99,
+    preflopPosition: "BTN",
+    preflopPositionFactor: 1.28,
+    preflopRaiseCount: 0,
+    preflopHand: { highRank: 14, lowRank: 13, pair: false, suited: true, gap: 1 },
+    pot: 15,
+    toCall: 10,
+    highestBet: 10,
+    minRaise: 10,
+    playerStack: 100,
+    maxContestableTarget: 100,
+    effectiveStackBb: 9,
+    startingDepthBb: 10,
+  });
+  assert.ok(plan.shortStackJamFrequency >= 0.75);
+  assert.ok(plan.sizingRoutes.some((route) => route.allIn && route.frequency >= 0.75));
+});
+
 test("tightens preflop continues when a raise puts the effective stack at risk", () => {
   const facingOpen = {
     ...baseSpot,
@@ -345,11 +369,11 @@ test("uses the 169-class chart for canonical opening and blind-defense hands", (
 
   assert.ok(buttonDeuces.actionFrequencies.raise >= 0.8);
   assert.ok(buttonDeuces.actionFrequencies.call >= 0.1);
-  assert.equal(cutoffQueenNineOff.actionFrequencies.fold, 1);
+  assert.ok(cutoffQueenNineOff.actionFrequencies.call + cutoffQueenNineOff.actionFrequencies.raise >= 0.75);
   assert.equal(cutoffQueenNineOff.preflopScenario, "open");
   assert.ok(cutoffDeuces.actionFrequencies.raise >= 0.82);
   assert.ok(cutoffDeuces.actionFrequencies.call >= 0.08);
-  assert.ok(utgKingJack.actionFrequencies.fold >= 0.9);
+  assert.ok(utgKingJack.actionFrequencies.fold >= 0.85);
   assert.ok(utgQueenJack.actionFrequencies.fold >= 0.9);
 
   const bigBlindDefense = evaluatePokerPolicy({
@@ -590,6 +614,51 @@ test("builds a separate four-bet and shallow-jam branch against a three-bet", ()
     effectiveStackBb: 37.5,
     playerStack: 375,
   }, () => 0), { kind: "raise", raiseTo: 400 });
+});
+
+test("policy wiring distinguishes an opener from a squeezed caller and a cold entrant", () => {
+  const common = {
+    ...baseSpot,
+    profile: { aggression: 0.7, looseness: 0.27, bluff: 0.12 },
+    street: "preflop",
+    preflopPosition: "BTN",
+    preflopOpenerPosition: "SB",
+    preflopRaiseCount: 2,
+    preflopHand: { highRank: 7, lowRank: 6, pair: false, suited: true, gap: 1 },
+    preflopLimpers: 0,
+    preflopColdCallers: 1,
+    pot: 150,
+    highestBet: 90,
+    playerBet: 25,
+    toCall: 65,
+    minRaise: 65,
+    playerStack: 975,
+    effectiveStackBb: 97.5,
+    startingDepthBb: 100,
+  };
+  const opener = evaluatePokerPolicy({
+    ...common,
+    preflopPreviouslyRaised: true,
+    preflopWasPreviousAggressor: true,
+  });
+  const squeezedCaller = evaluatePokerPolicy({
+    ...common,
+    preflopPreviouslyRaised: false,
+    preflopWasPreviousAggressor: false,
+    preflopPreviouslyColdCalled: true,
+  });
+  const coldEntry = evaluatePokerPolicy({
+    ...common,
+    playerBet: 0,
+    toCall: 90,
+    preflopPreviouslyRaised: false,
+    preflopWasPreviousAggressor: false,
+    preflopPreviouslyColdCalled: false,
+  });
+  const continues = (plan) => plan.actionFrequencies.call + plan.actionFrequencies.raise;
+  assert.ok(continues(opener) > continues(squeezedCaller) + 0.2);
+  assert.ok(continues(squeezedCaller) > continues(coldEntry) + 0.18);
+  assert.ok(continues(coldEntry) < 0.1);
 });
 
 test("publishes one legal normalized postflop mix for AI, coaching and review", () => {

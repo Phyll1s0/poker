@@ -1494,6 +1494,15 @@
   height: 7px;
 }
 
+.multiplayerPage .seatStack > span {
+  color: inherit;
+  font: inherit;
+}
+
+.seatStackCompact {
+  display: none;
+}
+
 .multiplayerPage .seatCards {
   min-height: 0;
   margin: 0;
@@ -7066,3 +7075,1100 @@
   }
 }
 /* End compact multiplayer interaction reach */
+
+/* Authoritative multiplayer device matrix ---------------------------------
+   This block is deliberately last. Earlier iterations grew one breakpoint at
+   a time and could leave a phone inheriting desktop height rules. The matrix
+   below treats portrait phones, short landscape phones, tablets and desktop
+   as distinct workspaces while keeping the table and action dock in normal
+   document flow. */
+.multiplayerPage .tableViewport .pokerTable {
+  width: min(
+    1080px,
+    calc(100vw - 220px),
+    max(620px, calc(205dvh - 841px))
+  );
+}
+
+/* Touch devices keep real hit targets even when their labels collapse. */
+@media (pointer: coarse), (max-width: 700px) {
+  .tableHomeButton,
+  .navCodeButton,
+  .navSoundToggle,
+  .navHintToggle,
+  .navHelpButton,
+  .tableToolbar .historyButton,
+  .tableMoreMenu > summary,
+  .tableTalkButton,
+  .tableMenuFinish,
+  .tableMenuDanger,
+  .chatHeader button,
+  .tableHintHeading > button,
+  .primaryActions .actionButton,
+  .timeBankButton,
+  .aiAssistButton,
+  .raiseControl .raisePresets button,
+  .showDecisionActions > button,
+  .privatePeekTarget,
+  .waitingControls .actionRow > button,
+  .chatComposer button,
+  .historyHeaderMeta button,
+  .replayTransport > button {
+    min-height: 40px;
+  }
+
+  .tableHomeButton,
+  .navSoundToggle,
+  .navHintToggle,
+  .navHelpButton,
+  .chatHeader button,
+  .tableHintHeading > button,
+  .historyHeaderMeta button {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    padding: 0;
+  }
+
+  .multiplayerPage .raiseInput,
+  .raiseNumberField {
+    min-height: 40px;
+  }
+
+  .raiseNumberField {
+    height: 40px;
+  }
+
+  .field input,
+  .field select,
+  .multiplayerPage .chatComposer input,
+  .multiplayerPage .raiseNumberField input {
+    font-size: 16px;
+  }
+}
+
+/* Compact rails use a small but legible seat primitive and an even ellipse.
+   Scaling the desktop panel to 46% made names and clocks 4–6px tall and put
+   adjacent ten-seat panels on top of each other. */
+@media (max-width: 700px),
+  (max-width: 1100px) and (max-height: 700px) and (orientation: landscape) {
+  .multiplayerPage .pokerTable .seat {
+    --mp-compact-seat-width: 128px;
+    --mp-compact-dense-seat-width: 100px;
+    width: var(--mp-compact-seat-width);
+    min-width: var(--mp-compact-seat-width);
+  }
+
+  .multiplayerPage .pokerTable .playerPanel {
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    gap: 4px;
+    padding: 5px;
+  }
+
+  .multiplayerPage .pokerTable .avatar {
+    width: 24px;
+    height: 24px;
+    font-size: 13px;
+  }
+
+  .multiplayerPage .pokerTable .seatIdentity {
+    gap: 2px;
+  }
+
+  .multiplayerPage .pokerTable .seatIdentity > div {
+    gap: 3px;
+  }
+
+  .multiplayerPage .pokerTable .seatIdentity strong {
+    font-size: 18px;
+    letter-spacing: 0.02em;
+  }
+
+  .multiplayerPage .pokerTable .seatIdentity > span {
+    display: none;
+  }
+
+  .multiplayerPage .pokerTable .seatStack {
+    min-width: 0;
+    gap: 3px;
+    font-size: 18px;
+    white-space: nowrap;
+  }
+
+  .multiplayerPage .pokerTable .seatStackFull {
+    display: none;
+  }
+
+  .multiplayerPage .pokerTable .seatStackCompact {
+    display: inline;
+  }
+
+  .multiplayerPage .pokerTable .seatMessageBubble {
+    font-size: 18px;
+  }
+
+  .multiplayerPage .pokerTable .roleChip,
+  .multiplayerPage .pokerTable .ownerChip {
+    padding: 2px;
+    font-size: 9px;
+  }
+
+  .multiplayerPage .pokerTable .seatClock:not(.seatClockActive) {
+    display: none;
+  }
+
+  .multiplayerPage .pokerTable .seatClock span {
+    display: none;
+  }
+
+  .multiplayerPage .pokerTable .seatClock strong {
+    font-size: 20px;
+  }
+
+  .multiplayerPage .pokerTable .tableBet {
+    font-size: 20px;
+  }
+
+  .multiplayerPage .pokerTable:is([data-table-size="7"], [data-table-size="8"], [data-table-size="9"], [data-table-size="10"]) .seat:not(.seatSelf) {
+    width: var(--mp-compact-dense-seat-width);
+    min-width: var(--mp-compact-dense-seat-width);
+  }
+
+  .multiplayerPage .pokerTable:is([data-table-size="7"], [data-table-size="8"], [data-table-size="9"], [data-table-size="10"]) .seat:not(.seatSelf) .playerPanel {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .multiplayerPage .pokerTable:is([data-table-size="7"], [data-table-size="8"], [data-table-size="9"], [data-table-size="10"]) .seat:not(.seatSelf) .avatar {
+    display: none;
+  }
+
+  .multiplayerPage .seat0,
+  .multiplayerPage .replaySeat0 { --seat-x: 50%; --seat-y: 102%; }
+  .multiplayerPage .seat1,
+  .multiplayerPage .replaySeat1 { --seat-x: 17%; --seat-y: 95%; }
+  .multiplayerPage .seat2,
+  .multiplayerPage .replaySeat2 { --seat-x: -1%; --seat-y: 67%; }
+  .multiplayerPage .seat3,
+  .multiplayerPage .replaySeat3 { --seat-x: -1%; --seat-y: 33%; }
+  .multiplayerPage .seat4,
+  .multiplayerPage .replaySeat4 { --seat-x: 17%; --seat-y: 5%; }
+  .multiplayerPage .seat5,
+  .multiplayerPage .replaySeat5 { --seat-x: 50%; --seat-y: -2%; }
+  .multiplayerPage .seat6,
+  .multiplayerPage .replaySeat6 { --seat-x: 83%; --seat-y: 5%; }
+  .multiplayerPage .seat7,
+  .multiplayerPage .replaySeat7 { --seat-x: 101%; --seat-y: 33%; }
+  .multiplayerPage .seat8,
+  .multiplayerPage .replaySeat8 { --seat-x: 101%; --seat-y: 67%; }
+  .multiplayerPage .seat9,
+  .multiplayerPage .replaySeat9 { --seat-x: 83%; --seat-y: 95%; }
+}
+
+/* Tablets retain a generous rail, but use valid viewport arithmetic and a
+   flowing action dock so rotating the device cannot put controls over cards. */
+@media (min-width: 701px) and (max-width: 1100px) and (min-height: 701px) {
+  .multiplayerPage .tableStage:not(.tableStageEnded) {
+    min-height: calc(100dvh - 72px);
+    padding: 0 16px 18px;
+    overflow-x: clip;
+    overflow-y: visible;
+  }
+
+  .tableToolbar {
+    width: calc(100% - 28px);
+  }
+
+  .tableViewport {
+    min-height: 0;
+    margin-top: 54px;
+    padding: 64px 72px 88px;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable {
+    width: min(
+      760px,
+      calc(100vw - 164px),
+      max(520px, calc(178dvh - 748px))
+    );
+    min-width: 0;
+    aspect-ratio: 1.72 / 1;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="7"],
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="8"],
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="9"],
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="10"] {
+    aspect-ratio: 1.55 / 1;
+  }
+
+  .tableActionCluster {
+    width: calc(100% - 32px);
+  }
+}
+
+/* Portrait phones: one scroll axis, a fully reserved table safety belt and a
+   bottom-sheet conversation surface. Nothing is absolutely docked over the
+   hero cards or the wager controls. */
+@media (max-width: 700px) and (orientation: portrait) {
+  .multiplayerPage {
+    padding-bottom: 0;
+  }
+
+  .multiplayerPage .lobbyNav {
+    width: 100%;
+    height: calc(56px + env(safe-area-inset-top));
+    min-height: calc(56px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) max(8px, env(safe-area-inset-right)) 0 max(8px, env(safe-area-inset-left));
+    gap: 4px;
+  }
+
+  .multiplayerPage .tableBrandGroup {
+    gap: 4px;
+  }
+
+  .multiplayerPage .brand {
+    gap: 0;
+  }
+
+  .multiplayerPage .brandMark {
+    width: 32px;
+    height: 32px;
+  }
+
+  .multiplayerPage .navRight {
+    margin-left: auto;
+    padding: 0;
+    gap: 3px;
+  }
+
+  .multiplayerPage .navCodeButton {
+    min-width: 52px;
+    min-height: 40px;
+    padding-inline: 5px;
+    font-size: 8px;
+    letter-spacing: 0.035em;
+  }
+
+  .multiplayerPage .tableShell {
+    min-height: calc(100dvh - 56px - env(safe-area-inset-top));
+  }
+
+  .multiplayerPage .tableStage:not(.tableStageEnded) {
+    min-height: calc(100dvh - 56px - env(safe-area-inset-top));
+    padding: 0 max(8px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+    overflow-x: clip;
+    overflow-y: visible;
+  }
+
+  .historyOverlay {
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+
+  .historyDialog {
+    height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  }
+
+  .tableToolbar {
+    width: calc(100% - 16px);
+    min-height: 48px;
+    padding: 4px 5px 4px 9px;
+    top: 4px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 5px;
+  }
+
+  .tableToolbarCopy span,
+  .tableToolbarFacts {
+    display: none;
+  }
+
+  .tableToolbarCopy strong {
+    font-size: 12px;
+  }
+
+  .tableToolbarActions {
+    gap: 4px;
+  }
+
+  .tableToolbar .historyButton,
+  .tableMoreMenu > summary {
+    min-height: 40px;
+    padding-inline: 7px;
+  }
+
+  .tableViewport {
+    min-height: clamp(460px, calc(100vw + 145px), 640px);
+    margin-top: 52px;
+    padding: 64px 24px 88px;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable {
+    width: min(420px, calc(100vw - 64px));
+    min-width: 0;
+    aspect-ratio: 0.98 / 1;
+    --mp-board-card-width: clamp(36px, 10.5vw, 43px);
+    --mp-board-card-gap: 4px;
+    --mp-hole-card-width: 34px;
+    --mp-hero-card-width: 48px;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="7"],
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="8"],
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="9"],
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="10"] {
+    aspect-ratio: 0.88 / 1;
+    --mp-board-card-width: clamp(34px, 10vw, 40px);
+    --mp-hole-card-width: 32px;
+    --mp-hero-card-width: 47px;
+  }
+
+  .multiplayerPage .pokerTable .seat {
+    --seat-scale: 0.68;
+  }
+
+  .multiplayerPage .pokerTable .seatSelf {
+    --seat-scale: 0.82;
+  }
+
+  .multiplayerPage .pokerTable[data-table-size="7"] .seat:not(.seatSelf),
+  .multiplayerPage .pokerTable[data-table-size="8"] .seat:not(.seatSelf),
+  .multiplayerPage .pokerTable[data-table-size="9"] .seat:not(.seatSelf),
+  .multiplayerPage .pokerTable[data-table-size="10"] .seat:not(.seatSelf) {
+    --seat-scale: 0.62;
+  }
+
+  .tableActionCluster {
+    width: 100%;
+    gap: 5px;
+  }
+
+  .tableTalkRail {
+    min-height: 44px;
+    justify-content: center;
+  }
+
+  .tableTalkLabel {
+    display: none;
+  }
+
+  .tableTalkButton {
+    min-width: 92px;
+    min-height: 44px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) {
+    width: 100%;
+    padding: 9px;
+    gap: 7px;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .controlSummary {
+    min-height: 0;
+    padding: 0 0 7px;
+    grid-template-columns: auto 1fr auto;
+    gap: 5px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .controlSummary > span:last-of-type {
+    display: none;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .primaryActions,
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .raiseControl,
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .actionIdle {
+    grid-column: 1;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .primaryActions .actionButton {
+    height: 44px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .decisionResourceButtons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .timeBankButton,
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .aiAssistButton {
+    min-height: 44px;
+  }
+
+  .raiseControl .raisePresets button {
+    min-height: 40px;
+  }
+
+  .multiplayerPage .tableControlsTransition {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .chatDock,
+  .tableActionCluster .chatDock {
+    width: 100%;
+    height: min(680px, 78dvh);
+    min-height: min(380px, 78dvh);
+    max-height: 100dvh;
+    position: fixed;
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+    border-radius: 16px 16px 0 0;
+  }
+
+  .chatDockReactionFocus {
+    height: auto;
+    min-height: 0;
+    max-height: min(440px, 68dvh);
+  }
+
+  .aiAnalysisPanel {
+    width: 100%;
+    max-height: 78dvh;
+    position: fixed;
+    z-index: 70;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+    border-radius: 16px 16px 0 0;
+  }
+
+  .tableHintPanel {
+    max-height: calc(100dvh - 68px - env(safe-area-inset-top));
+    top: calc(60px + env(safe-area-inset-top));
+    right: 8px;
+    left: 8px;
+    overflow-y: auto;
+  }
+
+  .tableMain > .errorBox,
+  .tableMain > .noticeBox {
+    top: calc(60px + env(safe-area-inset-top));
+  }
+}
+
+/* Short portrait phones need a scrollable replay canvas. The legacy replay
+   minimums were taller than the remaining 320x568 workspace, which left the
+   transport controls below the dialog's clipped edge. */
+@media (max-width: 700px) and (max-height: 770px) and (orientation: portrait) {
+  .historyBody {
+    grid-template-rows: 86px minmax(0, 1fr);
+  }
+
+  .replayWorkspace {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .replayContent {
+    min-height: 560px;
+    grid-template-rows: 450px 108px;
+    overflow: visible;
+  }
+
+  .replayTableViewport {
+    min-height: 0;
+    padding: 54px 34px 48px;
+  }
+
+  .replayTable,
+  .multiplayerPage .replayTable[data-table-size="7"],
+  .multiplayerPage .replayTable[data-table-size="8"],
+  .multiplayerPage .replayTable[data-table-size="9"],
+  .multiplayerPage .replayTable[data-table-size="10"] {
+    width: min(250px, calc(100% - 8px));
+    min-width: 0;
+  }
+}
+
+/* Landscape phones, foldables and short tablets use the screen as a two-pane
+   game surface: the rail stays on the left and the independently scrollable
+   action dock stays on the right. This closes the old 1001–1100px/short-height
+   gap as well as the 481–700px foldable gap. Chat/help/AI become right-side
+   sheets and never obscure the felt. */
+@media (max-width: 1100px) and (max-height: 700px) and (orientation: landscape) {
+  .multiplayerPage {
+    min-height: 100dvh;
+    padding-bottom: 0;
+    overflow-x: hidden;
+  }
+
+  .multiplayerPage .lobbyNav {
+    width: 100%;
+    height: calc(48px + env(safe-area-inset-top));
+    min-height: calc(48px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) max(8px, env(safe-area-inset-right)) 0 max(8px, env(safe-area-inset-left));
+    gap: 5px;
+  }
+
+  .multiplayerPage .tableBrandGroup {
+    gap: 4px;
+  }
+
+  .multiplayerPage .brandCopy {
+    display: none;
+  }
+
+  .multiplayerPage .brandMark {
+    width: 30px;
+    height: 30px;
+  }
+
+  .multiplayerPage .navRight {
+    padding: 0;
+    gap: 3px;
+  }
+
+  .multiplayerPage .navCodeButton {
+    min-height: 40px;
+    padding-inline: 6px;
+  }
+
+  .navSoundToggle,
+  .navHintToggle,
+  .navHelpButton {
+    width: 40px;
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0;
+  }
+
+  .multiplayerPage .tableShell {
+    min-height: 0;
+  }
+
+  .multiplayerPage .tableStage:not(.tableStageEnded) {
+    height: calc(100dvh - 48px - env(safe-area-inset-top));
+    min-height: 0;
+    padding: 50px max(6px, env(safe-area-inset-right)) max(5px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left));
+    display: grid;
+    grid-template-columns: minmax(0, 62fr) minmax(0, 38fr);
+    grid-template-rows: minmax(0, 1fr);
+    align-items: stretch;
+    gap: 6px;
+    overflow: hidden;
+  }
+
+  .tableToolbar {
+    width: calc(100% - 12px);
+    min-height: 44px;
+    padding: 2px 4px 2px 8px;
+    top: 2px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 5px;
+  }
+
+  .tableToolbarCopy span,
+  .tableToolbarFacts {
+    display: none;
+  }
+
+  .tableToolbarCopy strong {
+    font-size: 11px;
+  }
+
+  .tableToolbarActions {
+    gap: 3px;
+  }
+
+  .tableToolbar .historyButton,
+  .tableMoreMenu > summary {
+    min-height: 40px;
+    padding-inline: 7px;
+  }
+
+  .tableViewport {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    margin: 0;
+    padding: 22px 30px 32px;
+    grid-column: 1;
+    overflow: visible;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable {
+    width: min(calc(62vw - 72px), calc(155dvh - 274px - env(safe-area-inset-bottom)), 430px);
+    min-width: 0;
+    aspect-ratio: 1.55 / 1;
+    --mp-board-card-width: clamp(24px, 4.2vw, 31px);
+    --mp-board-card-gap: 2px;
+    --mp-hole-card-width: 38px;
+    --mp-hero-card-width: 48px;
+    --mp-hole-card-top: -47px;
+    --mp-hole-card-bottom: -46px;
+    --mp-hero-card-top: -61px;
+    --mp-wager-bottom-y: -45px;
+    --mp-wager-lower-diagonal-x: 62px;
+    --mp-wager-lower-diagonal-y: 33px;
+    --mp-wager-upper-diagonal-x: 62px;
+    --mp-wager-upper-diagonal-y: 34px;
+    --mp-wager-side-x: 72px;
+    --mp-wager-side-lower-y: 28px;
+    --mp-wager-side-upper-y: -28px;
+    --mp-wager-top-y: 60px;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable .boardArea {
+    top: 45%;
+    gap: 10px;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable .potLabel {
+    gap: 5px;
+    font-size: 7px;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable .potLabel strong {
+    gap: 4px;
+    font-size: 12px;
+  }
+
+  .multiplayerPage .tableViewport .pokerTable .boardCards .card {
+    font-size: clamp(14px, 3vw, 18px);
+  }
+
+  .multiplayerPage .tableViewport .pokerTable .boardCards .cardSuit {
+    font-size: clamp(16px, 3.4vw, 20px);
+  }
+
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="7"],
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="8"],
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="9"],
+  .multiplayerPage .tableViewport .pokerTable[data-table-size="10"] {
+    width: min(calc(62vw - 72px), calc(155dvh - 274px - env(safe-area-inset-bottom)), 430px);
+    aspect-ratio: 1.4 / 1;
+    --mp-board-card-width: clamp(23px, 4vw, 30px);
+    --mp-hole-card-width: 36px;
+    --mp-hero-card-width: 47px;
+  }
+
+  .multiplayerPage .pokerTable .seat {
+    --seat-scale: 0.58;
+  }
+
+  .multiplayerPage .pokerTable .seatSelf {
+    --seat-scale: 0.72;
+  }
+
+  .multiplayerPage .pokerTable[data-table-size="7"] .seat:not(.seatSelf),
+  .multiplayerPage .pokerTable[data-table-size="8"] .seat:not(.seatSelf),
+  .multiplayerPage .pokerTable[data-table-size="9"] .seat:not(.seatSelf),
+  .multiplayerPage .pokerTable[data-table-size="10"] .seat:not(.seatSelf) {
+    --seat-scale: 0.52;
+  }
+
+  .multiplayerPage .pokerTable .seat5 .seatClock {
+    top: 50%;
+    right: auto;
+    bottom: auto;
+    left: calc(100% + 4px);
+    transform: translateY(-50%);
+  }
+
+  .multiplayerPage .pokerTable .seatIdentity > span,
+  .tableSignature {
+    display: none;
+  }
+
+  .multiplayerPage .pokerTable .seatMessageBubble {
+    max-width: 124px;
+    scale: 1;
+  }
+
+  .tableActionCluster {
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+    margin: 0;
+    padding: 0 2px 0 0;
+    grid-column: 2;
+    align-self: stretch;
+    align-items: stretch;
+    gap: 4px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+  }
+
+  .tableTalkRail {
+    min-height: 40px;
+    flex: 0 0 40px;
+    justify-content: stretch;
+    gap: 4px;
+  }
+
+  .tableTalkLabel {
+    display: none;
+  }
+
+  .tableTalkButton {
+    min-width: 0;
+    min-height: 40px;
+    padding-inline: 6px;
+    flex: 1;
+  }
+
+  .multiplayerPage .tableActionCluster .tableControls:not(.tableControlsTransition),
+  .multiplayerPage .tableActionCluster .tableControlsTransition,
+  .multiplayerPage .tableActionCluster .waitingControls {
+    width: 100%;
+    min-height: 0;
+    margin: 0;
+    padding: 6px;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 5px;
+  }
+
+  .multiplayerPage .tableActionCluster .tableControlsTransition {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .controlSummary {
+    min-height: 0;
+    padding: 0 0 5px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 3px 5px;
+    border-right: 0;
+    border-bottom: 1px solid var(--mp-line);
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .controlSummary > strong {
+    font-size: 14px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .controlSummary > span:last-of-type,
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .actionClockSummary small,
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .timeBankButton small,
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .aiAssistButton small,
+  .raiseExplanation {
+    display: none;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .decisionResourceButtons {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .timeBankButton,
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .aiAssistButton {
+    min-height: 40px;
+    margin: 0;
+    padding: 4px;
+    align-items: center;
+    text-align: center;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .primaryActions,
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .raiseControl,
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .actionIdle,
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .handTransition,
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .privatePeek {
+    grid-column: 1;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .primaryActions {
+    gap: 4px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .primaryActions .actionButton {
+    height: 40px;
+    min-height: 40px;
+    padding-inline: 3px;
+    font-size: 11px;
+  }
+
+  .multiplayerPage .tableControls:not(.tableControlsTransition) .primaryActions kbd {
+    display: none;
+  }
+
+  .raiseControl {
+    gap: 4px;
+  }
+
+  .raiseControl .raisePresets {
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+  }
+
+  .raiseControl .raisePresets::-webkit-scrollbar {
+    display: none;
+  }
+
+  .raiseControl .raisePresets button {
+    min-width: 52px;
+    min-height: 40px;
+    flex: 0 0 52px;
+  }
+
+  .actionIdle {
+    min-height: 44px;
+    padding: 7px 8px;
+  }
+
+  .multiplayerPage .waitingControls .lobbyPlayers {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .chatDock,
+  .tableActionCluster .chatDock {
+    width: min(360px, calc(38vw - 12px - env(safe-area-inset-right)));
+    height: auto;
+    min-height: 0;
+    max-height: calc(100dvh - max(8px, env(safe-area-inset-top)) - max(8px, env(safe-area-inset-bottom)));
+    position: fixed;
+    z-index: 80;
+    top: max(4px, env(safe-area-inset-top));
+    right: max(4px, env(safe-area-inset-right));
+    bottom: auto;
+    left: auto;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+  }
+
+  .chatDockMessageFocus {
+    height: calc(100dvh - max(8px, env(safe-area-inset-top)) - max(8px, env(safe-area-inset-bottom)));
+  }
+
+  .chatHeader {
+    min-height: 48px;
+    padding: 4px 6px 4px 10px;
+  }
+
+  .chatHeader small,
+  .quickReactionHeader > small {
+    display: none;
+  }
+
+  .chatLog {
+    min-height: 54px;
+    padding: 7px 9px;
+  }
+
+  .quickReactionSection {
+    padding: 6px;
+  }
+
+  .quickReactionHeader {
+    margin-bottom: 5px;
+  }
+
+  .quickReactions button,
+  .chatDockMessageFocus .quickReactions button {
+    min-height: 44px;
+  }
+
+  .chatComposer {
+    padding: 6px;
+  }
+
+  .multiplayerPage .chatComposer input,
+  .chatComposer button {
+    min-height: 44px;
+  }
+
+  .aiAnalysisPanel,
+  .tableHintPanel {
+    width: min(440px, calc(38vw - 12px - env(safe-area-inset-right)));
+    height: auto;
+    max-height: calc(100dvh - max(8px, env(safe-area-inset-top)) - max(8px, env(safe-area-inset-bottom)));
+    position: fixed;
+    z-index: 82;
+    top: max(4px, env(safe-area-inset-top));
+    right: max(4px, env(safe-area-inset-right));
+    bottom: auto;
+    left: auto;
+    overflow-y: auto;
+    border-radius: 12px;
+  }
+
+  .tableMain > .errorBox,
+  .tableMain > .noticeBox {
+    top: 52px;
+  }
+}
+
+/* A short landscape history viewer keeps its close button inside the safe
+   area and makes the replay workspace—not the whole page—the scroll owner. */
+@media (max-width: 1100px) and (max-height: 700px) and (orientation: landscape) {
+  .historyOverlay {
+    padding: max(4px, env(safe-area-inset-top)) max(4px, env(safe-area-inset-right)) max(4px, env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
+  }
+
+  .historyDialog {
+    width: 100%;
+    height: calc(100dvh - max(8px, env(safe-area-inset-top)) - max(8px, env(safe-area-inset-bottom)));
+    min-height: 0;
+    border-radius: 8px;
+  }
+
+  .historyHeader {
+    min-height: 44px;
+    padding: 4px 8px 4px 10px;
+  }
+
+  .historyHeader h2 {
+    font-size: 13px;
+  }
+
+  .historyBody {
+    min-height: 0;
+    grid-template-columns: 112px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .historySidebar {
+    min-height: 0;
+    padding: 5px;
+    display: flex;
+    border-right: 1px solid rgba(255, 255, 255, 0.075);
+    border-bottom: 0;
+  }
+
+  .historyHandList {
+    height: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+    flex-direction: column;
+  }
+
+  .historyHandList button {
+    width: 100%;
+    min-height: 48px;
+    flex: 0 0 48px;
+    padding: 5px 6px;
+    gap: 4px;
+  }
+
+  .replayWorkspace {
+    min-height: 0;
+    padding: 4px;
+    gap: 4px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .replayHeading {
+    min-height: 36px;
+    padding: 4px 7px;
+  }
+
+  .replayContent {
+    min-height: 250px;
+    grid-template-columns: minmax(0, 1fr) 148px;
+    grid-template-rows: minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  .replayTableViewport {
+    min-height: 0;
+    padding: 42px 38px 38px;
+  }
+
+  .replayTable,
+  .multiplayerPage .replayTable[data-table-size="7"],
+  .multiplayerPage .replayTable[data-table-size="8"],
+  .multiplayerPage .replayTable[data-table-size="9"],
+  .multiplayerPage .replayTable[data-table-size="10"] {
+    width: min(520px, calc(100% - 36px), calc((100dvh - 260px) * 2.05));
+    min-width: 0;
+    aspect-ratio: 2.05 / 1;
+  }
+
+  .replayActionPanel {
+    min-height: 0;
+    border-top: 0;
+    border-left: 1px solid rgba(255, 255, 255, 0.075);
+  }
+
+  .replayActionList {
+    display: block;
+    overflow-y: auto;
+  }
+
+  .replayActionList li,
+  .replayActionList li + li {
+    min-width: 0;
+    margin: 0 0 5px;
+  }
+}
+
+@media (max-width: 650px) and (max-height: 700px) and (orientation: landscape) {
+  .historyBody {
+    grid-template-columns: 98px minmax(0, 1fr);
+  }
+
+  .historyHeaderMeta > span,
+  .replayHeading > small {
+    display: none;
+  }
+
+  .replayContent {
+    min-height: 390px;
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+  }
+
+  .replayTableColumn {
+    min-height: 280px;
+  }
+
+  .replayTableViewport {
+    min-height: 226px;
+    padding: 38px 28px 34px;
+  }
+
+  .replayTable,
+  .multiplayerPage .replayTable[data-table-size="7"],
+  .multiplayerPage .replayTable[data-table-size="8"],
+  .multiplayerPage .replayTable[data-table-size="9"],
+  .multiplayerPage .replayTable[data-table-size="10"] {
+    width: min(300px, calc(100% - 36px));
+    aspect-ratio: 2.05 / 1;
+  }
+
+  .replayActionPanel {
+    min-height: 104px;
+    border-top: 1px solid rgba(255, 255, 255, 0.075);
+    border-left: 0;
+  }
+
+  .replayActionList {
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .replayActionList li,
+  .replayActionList li + li {
+    min-width: 150px;
+    margin: 0;
+    flex: 0 0 150px;
+  }
+}
+
+/* Compact desktop windows still use the desktop rail, but viewport height is
+   now expressed as valid calc() arithmetic and the dock remains below it. */
+@media (min-width: 1101px) and (max-height: 760px) {
+  .multiplayerPage .tableViewport .pokerTable {
+    width: min(
+      980px,
+      calc(100vw - 220px),
+      max(560px, calc(190dvh - 798px))
+    );
+  }
+}
+/* End authoritative multiplayer device matrix */

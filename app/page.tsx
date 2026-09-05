@@ -623,7 +623,8 @@ function buildPokerPolicyInput(
 ): SoloPokerPolicyInput {
   const context = pokerSizingContext(game, player);
   const preflopActions = game.actionHistory.filter((action) => action.street === "preflop");
-  const latestPreflopRaise = [...preflopActions].reverse().find((action) => action.kind === "raise");
+  const preflopRaises = preflopActions.filter((action) => action.kind === "raise");
+  const latestPreflopRaise = preflopRaises.at(-1);
   const latestAggressiveAction = [...game.actionHistory].reverse().find((action) => action.kind === "raise");
   const boardTexture = analyzeBoardTexture(game.community);
   const stacks = soloDecisionStackContext(game, player);
@@ -674,6 +675,11 @@ function buildPokerPolicyInput(
     preflopLimpers: preflopActions.filter((action) => action.kind === "call" && action.raiseCountBefore === 0).length,
     preflopColdCallers: preflopActions.filter((action) => action.kind === "call" && action.raiseCountBefore > 0).length,
     preflopPreviouslyRaised: preflopActions.some((action) => action.playerId === player.id && action.kind === "raise"),
+    preflopWasPreviousAggressor: preflopRaises.length >= 2
+      && preflopRaises.at(-2)?.playerId === player.id,
+    preflopPreviouslyColdCalled: preflopActions.some((action) => (
+      action.playerId === player.id && action.kind === "call" && action.raiseCountBefore > 0
+    )),
     preflopPreviouslyLimped: preflopActions.some((action) => (
       action.playerId === player.id && action.kind === "call" && action.raiseCountBefore === 0
     )),
@@ -1027,6 +1033,7 @@ function act(game: Game, playerId: number, kind: ActionKind, raiseTo?: number): 
   const players = game.players.map((player) => ({ ...player }));
   const player = players[playerId];
   const stackBefore = player.stack;
+  const playerBetBefore = player.bet;
   const toCall = Math.max(0, game.highestBet - player.bet);
   let highestBet = game.highestBet;
   let minRaise = game.minRaise;
@@ -1102,6 +1109,7 @@ function act(game: Game, playerId: number, kind: ActionKind, raiseTo?: number): 
     kind: resolvedKind!,
     amount,
     toCall,
+    playerBetBefore,
     stackBefore,
     effectiveStackBefore: stackContextBefore.decision.effectiveStack,
     startingDepthBefore: stackContextBefore.startingDepth,

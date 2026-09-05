@@ -10,6 +10,7 @@ import {
   encodePreflopHandClass,
   getPreflopStrategy,
   type PreflopPosition,
+  type PreflopResponseRole,
   type PreflopScenario,
 } from "./poker-preflop.ts";
 
@@ -23,6 +24,8 @@ export type PublicBettingAction = {
   kind: PublicActionKind;
   amount: number;
   toCall: number;
+  /** Chips this player already had in front before this public action. */
+  playerBetBefore?: number;
   stackBefore: number;
   /** Remaining chips this player could still contest against the relevant opponent. */
   effectiveStackBefore?: number;
@@ -36,6 +39,8 @@ export type PublicBettingAction = {
   activeOpponents: number;
   /** Latest preflop raiser this action was facing; derived from public history. */
   aggressorPositionBefore?: PreflopPosition;
+  /** Public path into a squeeze response; never depends on hidden cards. */
+  responseRoleBefore?: PreflopResponseRole;
 };
 
 export type OpponentRangeEvidence = {
@@ -181,17 +186,22 @@ function preflopActionLikelihood(
   if (chartScenario && evidence.position) {
     const sorted = [...hole].sort((left, right) => right.rank - left.rank);
     const hand = encodePreflopHandClass(sorted[0].rank, sorted[1].rank, sameSuit(sorted[0], sorted[1]));
-    const blindInvestment = action.raiseCountBefore === 1
+    // Reconstruct the actual raise-to price. Fixed 2.5BB/9BB assumptions made
+    // an identical 9BB squeeze look different after a 2x open, a 3x open or
+    // a cold entry, which then selected the wrong response chart.
+    const legacyInvestment = action.raiseCountBefore === 1
       ? evidence.position === "BB" ? 1 : evidence.position === "SB" ? 0.5 : 0
       : action.raiseCountBefore === 2 ? 2.5 : action.raiseCountBefore >= 3 ? 9 : 0;
+    const committedBefore = Math.max(0, action.playerBetBefore ?? legacyInvestment * bigBlind);
     const observedTargetBb = action.kind === "raise"
-      ? action.amount / Math.max(1, bigBlind) + blindInvestment
-      : action.toCall / Math.max(1, bigBlind) + blindInvestment;
+      ? (committedBefore + action.amount) / Math.max(1, bigBlind)
+      : (committedBefore + action.toCall) / Math.max(1, bigBlind);
     const strategy = getPreflopStrategy({
       hand,
       scenario: chartScenario,
       heroPosition: evidence.position,
       aggressorPosition: action.aggressorPositionBefore ?? evidence.openerPosition,
+      responseRole: chartScenario === "vs-three-bet" ? action.responseRoleBefore : undefined,
       effectiveStackBb: (
         action.startingDepthBefore
         ?? action.effectiveStackBefore
@@ -332,12 +342,30 @@ export function createPublicOpponentRanges(state: PublicRangeState) {
     action.street === "preflop" && action.kind === "raise" && action.raiseCountBefore === 0
   ));
   let latestPreflopRaiserId: number | null = null;
+  let firstPreflopRaiserId: number | null = null;
+  const preflopColdCallers = new Set<number>();
   const actionsWithAggressor = state.actions.map((action) => {
     if (action.street !== "preflop") return action;
-    const enriched = latestPreflopRaiserId === null || !state.position
-      ? action
-      : { ...action, aggressorPositionBefore: state.position(latestPreflopRaiserId) };
-    if (action.kind === "raise") latestPreflopRaiserId = action.playerId;
+    const responseRoleBefore: PreflopResponseRole | undefined = action.raiseCountBefore === 2
+      ? firstPreflopRaiserId === action.playerId
+        ? "opener"
+        : preflopColdCallers.has(action.playerId)
+          ? "cold-caller"
+          : "cold-entry"
+      : undefined;
+    const enriched = {
+      ...action,
+      ...(latestPreflopRaiserId === null || !state.position
+        ? {}
+        : { aggressorPositionBefore: state.position(latestPreflopRaiserId) }),
+      ...(responseRoleBefore ? { responseRoleBefore } : {}),
+    };
+    if (action.kind === "raise") {
+      if (firstPreflopRaiserId === null) firstPreflopRaiserId = action.playerId;
+      latestPreflopRaiserId = action.playerId;
+    } else if (action.kind === "call" && action.raiseCountBefore === 1) {
+      preflopColdCallers.add(action.playerId);
+    }
     return enriched;
   });
   return state.players

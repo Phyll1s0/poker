@@ -161,6 +161,10 @@ function activeSeatOrder(players: readonly MultiplayerCoachPlayer[], dealerSeat:
     .sort((left, right) => clockwiseDistance(left, dealerSeat) - clockwiseDistance(right, dealerSeat));
 }
 
+function participatedInHand(player: MultiplayerCoachPlayer) {
+  return player.status !== "waiting" && player.status !== "out";
+}
+
 /** Maps the actual occupied seats instead of assuming every six-max seat exists. */
 export function multiplayerPreflopPosition(
   seat: number,
@@ -168,7 +172,7 @@ export function multiplayerPreflopPosition(
   players: readonly MultiplayerCoachPlayer[],
 ): PokerPreflopPosition {
   const seats = players
-    .filter((player) => player.status !== "out")
+    .filter(participatedInHand)
     .map((player) => player.seat);
   if (seats.length <= 2) return seat === dealerSeat ? "SB" : "BB";
   if (seat === dealerSeat) return "BTN";
@@ -211,7 +215,7 @@ function seededRandom(seed: string) {
   };
 }
 
-function publicActions(
+export function multiplayerPublicActions(
   input: MultiplayerAiCoachInput,
   position: (seat: number) => PokerPreflopPosition,
 ): PublicBettingAction[] {
@@ -222,9 +226,12 @@ function publicActions(
   let latestAggressor: number | undefined;
   let raiseCount = 0;
   const actions: PublicBettingAction[] = [];
-  const activeOpponents = Math.max(1, input.players.filter((player) => (
-    player.status !== "folded" && player.status !== "out"
-  )).length - 1);
+  const handPlayers = input.players.filter(participatedInHand);
+  const handStartBySeat = new Map(handPlayers.map((player) => [
+    player.seat,
+    player.stack + player.committed,
+  ]));
+  const foldedSeats = new Set<number>();
 
   for (const event of sorted) {
     if (event.street !== activeStreet) {
@@ -234,7 +241,7 @@ function publicActions(
       latestAggressor = undefined;
       raiseCount = 0;
       if (event.street === "preflop") {
-        for (const player of input.players) {
+        for (const player of handPlayers) {
           const seatPosition = position(player.seat);
           if (seatPosition === "SB") currentBets.set(player.seat, input.bigBlind / 2);
           if (seatPosition === "BB") currentBets.set(player.seat, input.bigBlind);
@@ -248,14 +255,28 @@ function publicActions(
     const player = input.players.find((candidate) => candidate.seat === event.seat);
     const stackAfter = event.stackAfter == null ? player?.stack ?? 0 : integer(event.stackAfter);
     const potAfter = event.potAfter == null ? input.pot : integer(event.potAfter, input.pot);
+    const actorStart = handStartBySeat.get(event.seat) ?? stackAfter + amount;
+    const relevantOpponentStarts = latestAggressor === undefined
+      ? handPlayers
+        .filter((candidate) => candidate.seat !== event.seat)
+        .map((candidate) => handStartBySeat.get(candidate.seat) ?? candidate.stack + candidate.committed)
+      : [handStartBySeat.get(latestAggressor) ?? actorStart];
+    const deepestRelevantStart = relevantOpponentStarts.length
+      ? Math.max(...relevantOpponentStarts)
+      : actorStart;
+    const effectiveStart = Math.min(actorStart, deepestRelevantStart);
+    const activeOpponents = Math.max(1, handPlayers.filter((candidate) => (
+      candidate.seat !== event.seat && !foldedSeats.has(candidate.seat)
+    )).length);
     actions.push({
       playerId: event.seat,
       street: event.street,
       kind: event.action,
       amount,
       toCall,
+      playerBetBefore: beforeBet,
       stackBefore: stackAfter + amount,
-      startingDepthBefore: input.startingStack,
+      startingDepthBefore: effectiveStart,
       aggressorIdBefore: latestAggressor,
       isAllIn: event.action !== "fold" && stackAfter === 0,
       potBefore: Math.max(0, potAfter - amount),
@@ -263,6 +284,7 @@ function publicActions(
       activeOpponents,
       aggressorPositionBefore: latestAggressor === undefined ? undefined : position(latestAggressor),
     });
+    if (event.action === "fold") foldedSeats.add(event.seat);
     if (event.action === "raise") {
       const target = integer(event.raiseTo, integer(event.toAmount, beforeBet + amount));
       currentBets.set(event.seat, target);
@@ -363,14 +385,16 @@ export function analyzeMultiplayerDecision(input: MultiplayerAiCoachInput): Mult
   const opponents = input.players.filter((player) => (
     player.accountId !== input.heroAccountId
     && player.status !== "folded"
+    && player.status !== "waiting"
     && player.status !== "out"
   ));
   if (!opponents.length) throw new RangeError("当前没有仍持牌的对手");
   const positionForSeat = (seat: number) => multiplayerPreflopPosition(seat, input.dealerSeat, input.players);
   const heroPosition = positionForSeat(hero.seat);
-  const actionEvidence = publicActions(input, positionForSeat);
+  const actionEvidence = multiplayerPublicActions(input, positionForSeat);
+  const contestablePlayers = input.players.filter(participatedInHand);
   const rangeState = {
-    players: input.players.map((player) => ({
+    players: contestablePlayers.map((player) => ({
       id: player.seat,
       folded: player.status === "folded" || player.status === "out",
     })),
@@ -394,7 +418,7 @@ export function analyzeMultiplayerDecision(input: MultiplayerAiCoachInput): Mult
     hero.committed,
     hero.stack,
     toCall,
-    input.players.map((player) => ({
+    contestablePlayers.map((player) => ({
       id: player.seat,
       contributed: player.committed,
       folded: player.status === "folded" || player.status === "out",
@@ -418,7 +442,7 @@ export function analyzeMultiplayerDecision(input: MultiplayerAiCoachInput): Mult
     hero.committed,
     hero.stack,
     toCall,
-    input.players.map((player) => ({
+    contestablePlayers.map((player) => ({
       id: player.seat,
       contributed: player.committed,
       folded: player.status === "folded" || player.status === "out",
@@ -479,6 +503,13 @@ export function analyzeMultiplayerDecision(input: MultiplayerAiCoachInput): Mult
     preflopLimpers,
     preflopColdCallers,
     preflopPreviouslyRaised: raises.some((action) => action.playerId === hero.seat),
+    preflopWasPreviousAggressor: raises.length >= 2 && raises.at(-2)?.playerId === hero.seat,
+    preflopPreviouslyColdCalled: input.street === "preflop" && currentStreetActions.some((action, index) => (
+      action.playerId === hero.seat
+        && action.kind === "call"
+        && firstRaiseIndex >= 0
+        && index > firstRaiseIndex
+    )),
     preflopPreviouslyLimped: input.street === "preflop" && currentStreetActions.some((action, index) => (
       action.playerId === hero.seat
         && action.kind === "call"

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   analyzeMultiplayerDecision,
+  multiplayerPublicActions,
   multiplayerPreflopPosition,
 } from "../lib/multiplayer-ai-coach.ts";
 
@@ -234,6 +235,63 @@ test("a profitable terminal all-in call is never displayed as a pure fold", () =
   assert.match(analysis.factors.join(" "), /跟注后无后续决策/);
 });
 
+test("a next-hand waiting seat cannot turn a terminal all-in call into a multiway decision", () => {
+  const activePlayers = [
+    player("hero", 5, { stack: 100, committed: 100, streetCommitted: 0 }),
+    player("villain", 2, { stack: 0, committed: 200, streetCommitted: 100, status: "all-in" }),
+  ];
+  const input = {
+    decisionId: "hand-19:river:waiting-seat",
+    heroAccountId: "hero",
+    heroCards: [{ rank: "A", suit: "s" }, { rank: "A", suit: "h" }],
+    board: [
+      { rank: "A", suit: "d" },
+      { rank: "A", suit: "c" },
+      { rank: "K", suit: "s" },
+      { rank: "Q", suit: "h" },
+      { rank: 2, suit: "d" },
+    ],
+    street: "river",
+    pot: 300,
+    currentBet: 100,
+    bigBlind: 10,
+    startingStack: 1_000,
+    dealerSeat: 5,
+    players: activePlayers,
+    recentActions: [{
+      seq: 1,
+      accountId: "villain",
+      seat: 2,
+      street: "river",
+      action: "raise",
+      amount: 100,
+      toAmount: 100,
+      raiseTo: 100,
+      potAfter: 300,
+      stackAfter: 0,
+    }],
+    legalActions: {
+      fold: true,
+      check: false,
+      callAmount: 100,
+      minRaiseTo: null,
+      maxRaiseTo: null,
+      raiseAllInOnly: false,
+    },
+    iterations: 80,
+  };
+  const baseline = analyzeMultiplayerDecision(input);
+  const withWaitingSeat = analyzeMultiplayerDecision({
+    ...input,
+    players: [...activePlayers, player("next-hand", 0, { status: "waiting", stack: 1_000 })],
+  });
+
+  assert.equal(withWaitingSeat.potOdds, baseline.potOdds);
+  assert.deepEqual(withWaitingSeat.frequencies, baseline.frequencies);
+  assert.equal(withWaitingSeat.recommendedAction, baseline.recommendedAction);
+  assert.match(withWaitingSeat.factors.join(" "), /跟注后无后续决策/);
+});
+
 test("maps heads-up and full six-max occupied seats to poker positions", () => {
   const headsUp = [player("button", 5), player("blind", 2)];
   assert.equal(multiplayerPreflopPosition(5, 5, headsUp), "SB");
@@ -244,6 +302,50 @@ test("maps heads-up and full six-max occupied seats to poker positions", () => {
     sixMax.map(({ seat }) => multiplayerPreflopPosition(seat, 5, sixMax)),
     ["SB", "BB", "UTG", "HJ", "CO", "BTN"],
   );
+});
+
+test("excludes a player waiting for the next hand from current-hand positions", () => {
+  const players = [
+    player("dealer", 5),
+    player("blind", 2),
+    player("late-joiner", 0, { status: "waiting", stack: 1_000 }),
+  ];
+  assert.equal(multiplayerPreflopPosition(5, 5, players), "SB");
+  assert.equal(multiplayerPreflopPosition(2, 5, players), "BB");
+});
+
+test("reconstructs each public raise-to and this hand's effective starting depth", () => {
+  const players = [
+    player("squeeze", 0, { stack: 310, committed: 90, streetCommitted: 90 }),
+    player("caller", 4, { stack: 380, committed: 20, streetCommitted: 20, status: "folded" }),
+    player("opener", 5, { stack: 310, committed: 90, streetCommitted: 90 }),
+    player("next-hand", 7, { status: "waiting" }),
+  ];
+  const input = {
+    ...checkedFlopInput(),
+    decisionId: "second-hand-public-range",
+    heroAccountId: "opener",
+    heroCards: [{ rank: "A", suit: "s" }, { rank: "K", suit: "h" }],
+    board: [],
+    street: "preflop",
+    currentBet: 90,
+    startingStack: 1_000,
+    dealerSeat: 5,
+    players,
+    recentActions: [
+      { seq: 1, accountId: "opener", seat: 5, street: "preflop", action: "raise", amount: 20, raiseTo: 20, toAmount: 20, potAfter: 35, stackAfter: 380 },
+      { seq: 2, accountId: "caller", seat: 4, street: "preflop", action: "call", amount: 10, toAmount: 20, potAfter: 55, stackAfter: 380 },
+      { seq: 3, accountId: "squeeze", seat: 0, street: "preflop", action: "raise", amount: 85, raiseTo: 90, toAmount: 90, potAfter: 135, stackAfter: 310 },
+      { seq: 4, accountId: "caller", seat: 4, street: "preflop", action: "fold", amount: 0, potAfter: 135, stackAfter: 380 },
+      { seq: 5, accountId: "opener", seat: 5, street: "preflop", action: "call", amount: 70, toAmount: 90, potAfter: 205, stackAfter: 310 },
+    ],
+  };
+  const position = (seat) => multiplayerPreflopPosition(seat, input.dealerSeat, input.players);
+  const actions = multiplayerPublicActions(input, position);
+  assert.deepEqual(actions.map(({ playerBetBefore }) => playerBetBefore), [0, 10, 5, 20, 20]);
+  assert.ok(actions.every(({ startingDepthBefore }) => startingDepthBefore === 400));
+  assert.equal(actions[0].activeOpponents, 2, "等待下一手的座位不能成为幽灵对手");
+  assert.equal(actions[4].activeOpponents, 1, "过去已经弃牌的座位应从后续行动人数移除");
 });
 
 test("maps eight and ten-handed extra early seats to a conservative UTG family", () => {
@@ -315,6 +417,100 @@ test("uses actual postflop position for blind three-bet sizing", () => {
   assert.equal(analysis.position, "BB");
   assert.equal(analysis.inPosition, false, "BB 对 BTN 翻后应当无位置");
   assert.ok(analysis.sizing.some(({ target }) => target >= 100), JSON.stringify(analysis.sizing));
+});
+
+test("maps raise-call-three-bet journals to opener, squeezed-caller and cold-entry ranges", () => {
+  const squeezeInput = (role) => {
+    const heroSeat = role === "cold-entry" ? 1 : 4;
+    const openerSeat = role === "opener" ? heroSeat : 3;
+    const callerSeat = role === "opener" ? 5 : role === "cold-entry" ? 4 : heroSeat;
+    const players = Array.from({ length: 6 }, (_, seat) => player(
+      seat === heroSeat ? "hero" : `p${seat}`,
+      seat,
+      { status: "folded" },
+    ));
+    const setPlayer = (seat, values) => Object.assign(players[seat], values, { status: "active" });
+    setPlayer(0, { stack: 910, committed: 90, streetCommitted: 90 });
+    setPlayer(openerSeat, { stack: 975, committed: 25, streetCommitted: 25 });
+    setPlayer(callerSeat, { stack: 975, committed: 25, streetCommitted: 25 });
+    setPlayer(heroSeat, role === "cold-entry"
+      ? { stack: 990, committed: 10, streetCommitted: 10 }
+      : { stack: 975, committed: 25, streetCommitted: 25 });
+    const accountAt = (seat) => players[seat].accountId;
+    const recentActions = [
+      {
+        seq: 1,
+        accountId: accountAt(openerSeat),
+        seat: openerSeat,
+        street: "preflop",
+        action: "raise",
+        amount: 25,
+        toAmount: 25,
+        raiseTo: 25,
+        potAfter: 40,
+        stackAfter: 975,
+      },
+      {
+        seq: 2,
+        accountId: accountAt(callerSeat),
+        seat: callerSeat,
+        street: "preflop",
+        action: "call",
+        amount: 25,
+        toAmount: 25,
+        potAfter: 65,
+        stackAfter: 975,
+      },
+      {
+        seq: 3,
+        accountId: accountAt(0),
+        seat: 0,
+        street: "preflop",
+        action: "raise",
+        amount: 85,
+        toAmount: 90,
+        raiseTo: 90,
+        potAfter: 150,
+        stackAfter: 910,
+      },
+    ];
+    return {
+      decisionId: `squeeze-${role}`,
+      heroAccountId: "hero",
+      heroCards: [
+        { rank: 7, suit: "s" },
+        { rank: 6, suit: "s" },
+      ],
+      board: [],
+      street: "preflop",
+      pot: 150,
+      currentBet: 90,
+      bigBlind: 10,
+      startingStack: 1_000,
+      dealerSeat: 5,
+      players,
+      recentActions,
+      legalActions: {
+        fold: true,
+        check: false,
+        callAmount: role === "cold-entry" ? 80 : 65,
+        minRaiseTo: 155,
+        maxRaiseTo: role === "cold-entry" ? 1_000 : 1_000,
+        raiseAllInOnly: false,
+      },
+      iterations: 40,
+    };
+  };
+  const continueFrequency = (analysis) => analysis.frequencies
+    .filter(({ action }) => action === "call" || action === "raise")
+    .reduce((sum, { frequency }) => sum + frequency, 0);
+  const opener = continueFrequency(analyzeMultiplayerDecision(squeezeInput("opener")));
+  const caller = continueFrequency(analyzeMultiplayerDecision(squeezeInput("cold-caller")));
+  const coldEntry = continueFrequency(analyzeMultiplayerDecision(squeezeInput("cold-entry")));
+
+  assert.ok(opener > caller + 0.18, `${opener}/${caller}/${coldEntry}`);
+  assert.ok(caller > coldEntry + 0.15, `${opener}/${caller}/${coldEntry}`);
+  assert.ok(coldEntry < 0.1, `${opener}/${caller}/${coldEntry}`);
 });
 
 test("ignores all-in seats when deciding who acts last postflop", () => {

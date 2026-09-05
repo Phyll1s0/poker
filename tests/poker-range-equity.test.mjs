@@ -10,6 +10,7 @@ import {
   createPublicOpponentRanges,
   opponentHoldingWeight,
 } from "../lib/poker-range.ts";
+import { getPreflopStrategy } from "../lib/poker-preflop.ts";
 
 const c = (rank, suit) => ({ rank, suit });
 
@@ -149,9 +150,14 @@ test("preflop range inference follows the same position chart as coaching", () =
     opponentHoldingWeight(deuces, [], buttonOpen)
       > opponentHoldingWeight(deuces, [], underTheGunOpen) * 1.15,
   );
+  const kingQueenOff = [c(13, "♠"), c(12, "♥")];
+  assert.ok(
+    opponentHoldingWeight(kingQueenOff, [], underTheGunOpen)
+      > opponentHoldingWeight(kingJackOff, [], underTheGunOpen) * 2,
+  );
   assert.ok(
     opponentHoldingWeight(deuces, [], underTheGunOpen)
-      > opponentHoldingWeight(kingJackOff, [], underTheGunOpen) * 2,
+      < opponentHoldingWeight(kingQueenOff, [], underTheGunOpen),
   );
 
   const bigBlindCall = {
@@ -165,6 +171,55 @@ test("preflop range inference follows the same position chart as coaching", () =
     opponentHoldingWeight(deuces, [], bigBlindCall)
       > opponentHoldingWeight([c(7, "♠"), c(2, "♥")], [], bigBlindCall) * 8,
   );
+});
+
+test("range inference reconstructs the real total price after nonstandard prior investments", () => {
+  const queens = [c(12, "♠"), c(12, "♥")];
+  const openerCall = action({
+    kind: "call",
+    amount: 70,
+    toCall: 70,
+    playerBetBefore: 20,
+    raiseCountBefore: 2,
+    aggressorPositionBefore: "SB",
+    responseRoleBefore: "opener",
+    startingDepthBefore: 1_000,
+  });
+  const expectedOpener = getPreflopStrategy({
+    hand: "QQ",
+    scenario: "vs-three-bet",
+    heroPosition: "BTN",
+    aggressorPosition: "SB",
+    responseRole: "opener",
+    effectiveStackBb: 100,
+    facingSizeBb: 9,
+  }).frequencies.call;
+  const actualOpener = opponentHoldingWeight(queens, [], {
+    actions: [openerCall],
+    positionFactor: 1.28,
+    position: "BTN",
+    bigBlind: 10,
+  });
+  assert.ok(Math.abs(actualOpener - Math.min(1.65, 0.004 + expectedOpener * 1.18)) < 1e-9);
+
+  const aceKing = [c(14, "♠"), c(13, "♥")];
+  const coldCall = { ...openerCall, amount: 90, toCall: 90, playerBetBefore: 0, responseRoleBefore: "cold-entry" };
+  const expectedCold = getPreflopStrategy({
+    hand: "AKo",
+    scenario: "vs-three-bet",
+    heroPosition: "BTN",
+    aggressorPosition: "SB",
+    responseRole: "cold-entry",
+    effectiveStackBb: 100,
+    facingSizeBb: 9,
+  }).frequencies.call;
+  const actualCold = opponentHoldingWeight(aceKing, [], {
+    actions: [coldCall],
+    positionFactor: 1.28,
+    position: "BTN",
+    bigBlind: 10,
+  });
+  assert.ok(Math.abs(actualCold - Math.min(1.65, 0.004 + expectedCold * 1.18)) < 1e-9);
 });
 
 test("range inference uses the latest raiser position after a three-bet", () => {
@@ -204,6 +259,80 @@ test("range inference uses the latest raiser position after a three-bet", () => 
 
   assert.equal(inferredButton.weight(candidate), expected);
   assert.notEqual(expected, wrongOpeningRaiser);
+});
+
+test("range inference preserves a cold caller's role through a squeeze", () => {
+  const open = action({
+    playerId: 1,
+    kind: "raise",
+    amount: 25,
+    toCall: 10,
+    raiseCountBefore: 0,
+  });
+  const coldCall = action({
+    playerId: 2,
+    kind: "call",
+    amount: 25,
+    toCall: 25,
+    potBefore: 40,
+    raiseCountBefore: 1,
+  });
+  const squeeze = action({
+    playerId: 3,
+    kind: "raise",
+    amount: 85,
+    toCall: 20,
+    potBefore: 65,
+    raiseCountBefore: 1,
+  });
+  const callSqueeze = action({
+    playerId: 2,
+    kind: "call",
+    amount: 65,
+    toCall: 65,
+    potBefore: 150,
+    raiseCountBefore: 2,
+  });
+  const positions = new Map([[0, "BB"], [1, "HJ"], [2, "BTN"], [3, "SB"]]);
+  const state = {
+    players: [0, 1, 2, 3].map((id) => ({ id, folded: false })),
+    viewerId: 0,
+    community: [],
+    actions: [open, coldCall, squeeze, callSqueeze],
+    bigBlind: 10,
+    positionFactor: () => 1,
+    position: (playerId) => positions.get(playerId),
+  };
+  const inferred = createPublicOpponentRanges(state).find((range) => range.playerId === 2);
+  const candidate = [c(7, "♠"), c(6, "♠")];
+  const enrichedCall = {
+    ...callSqueeze,
+    aggressorPositionBefore: "SB",
+    responseRoleBefore: "cold-caller",
+  };
+  const expected = opponentHoldingWeight(candidate, [], {
+    actions: [
+      { ...coldCall, aggressorPositionBefore: "HJ" },
+      enrichedCall,
+    ],
+    positionFactor: 1,
+    position: "BTN",
+    openerPosition: "HJ",
+    bigBlind: 10,
+  });
+  const mistakenForOpener = opponentHoldingWeight(candidate, [], {
+    actions: [
+      { ...coldCall, aggressorPositionBefore: "HJ" },
+      { ...enrichedCall, responseRoleBefore: "opener" },
+    ],
+    positionFactor: 1,
+    position: "BTN",
+    openerPosition: "HJ",
+    bigBlind: 10,
+  });
+
+  assert.equal(inferred.weight(candidate), expected);
+  assert.ok(expected < mistakenForOpener * 0.75, `${expected}/${mistakenForOpener}`);
 });
 
 test("range inference uses recorded hand-start effective depth", () => {

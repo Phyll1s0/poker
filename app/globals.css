@@ -1166,7 +1166,7 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
 .coach-footer button { border: 0; background: transparent; color: #777b75; font-size: 8px; cursor: pointer; }
 .coach-footer button:hover { color: #b7b5ae; }
 
-.modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-content: center; padding: 24px; background: rgba(5,8,7,.78); backdrop-filter: blur(12px); }
+.modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-content: center; padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left)); background: rgba(5,8,7,.78); backdrop-filter: blur(12px); }
 .hand-history-modal {
   width: min(1080px, calc(100vw - 48px));
   height: min(780px, calc(100vh - 48px));
@@ -1337,7 +1337,7 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
 .modal-close { position: absolute; top: 14px; right: 16px; border: 0; background: transparent; color: #7c807b; font-size: 22px; cursor: pointer; }
 .info-modal h2 { margin: 12px 0 17px; font: 500 29px/1.25 Georgia, serif; }
 .info-modal > p { color: #969991; font-size: 12px; line-height: 1.75; }
-.poker-rules-modal { width: min(1020px, 100%); padding: 42px 46px 46px; scrollbar-gutter: stable; }
+.poker-rules-modal { width: min(1020px, 100%); max-height: calc(100dvh - max(24px, env(safe-area-inset-top)) - max(24px, env(safe-area-inset-bottom))); padding: 42px 46px 46px; scrollbar-gutter: stable; }
 .poker-rules-modal > p { max-width: 830px; margin: 0 0 25px; color: #9a9e97; font-size: 12px; line-height: 1.8; }
 .poker-rules-modal > p strong { color: #b9dccb; }
 .poker-rules-toolbar { min-height: 58px; margin: -42px -46px 27px; padding: 10px 14px 10px 46px; position: sticky; top: 0; z-index: 12; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 18px; border-bottom: 1px solid rgba(216,183,116,.16); background: rgba(18,22,20,.96); box-shadow: 0 12px 28px rgba(0,0,0,.24); backdrop-filter: blur(14px); }
@@ -1676,9 +1676,9 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
   .info-modal { padding: 34px 24px 24px; }
   .poker-rules-modal { padding: 34px 18px 22px; }
   .poker-rules-toolbar { min-height: 54px; margin: -34px -18px 22px; padding: 8px 10px 8px 18px; gap: 8px; }
-  .poker-rules-toolbar .modal-close { width: 36px; height: 36px; }
+  .poker-rules-toolbar .modal-close { width: 44px; height: 44px; }
   .poker-rules-tabs { min-width: 0; width: 100%; }
-  .poker-rules-tabs button { min-width: 0; flex: 1; padding-inline: 8px; }
+  .poker-rules-tabs button { min-width: 0; min-height: 40px; flex: 1; padding-inline: 8px; }
   .poker-rules-modal h2 { font-size: 25px; }
   .multiplayer-guide-now { padding: 14px; grid-template-columns: 1fr; }
   .multiplayer-guide-clock { grid-column: auto; grid-template-columns: 1fr auto; }
@@ -1731,7 +1731,8 @@ kbd { opacity: .48; font: 8px/1 Arial, sans-serif; padding-left: 4px; }
   .modal-grid > div:last-child { border-bottom: 0; }
   .install-guide { grid-template-columns: 1fr; }
   .install-guide > div { min-height: auto; }
-  .modal-backdrop { padding: 10px; }
+  .modal-backdrop { padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left)); }
+  .poker-rules-modal { max-height: calc(100dvh - max(10px, env(safe-area-inset-top)) - max(10px, env(safe-area-inset-bottom))); }
   .hand-history-modal { width: calc(100vw - 20px); height: calc(100dvh - 20px); }
   .hand-history-heading { min-height: 86px; padding: 18px 48px 14px 16px; align-items: flex-start; flex-direction: column; gap: 7px; }
   .hand-history-heading h2 { font-size: 20px; }

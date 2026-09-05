@@ -383,9 +383,14 @@ function clientCard(card: { rank: number; suit: string | number }): ClientCard {
 
 function clientPlayers(table: OnlinePublicRoomState): ClientPublicPlayer[] {
   return table.seats.map((seat) => {
-    let status: ClientPublicPlayer["status"] = table.hand ? "active" : "waiting";
-    if (seat.folded) status = "folded";
-    else if (table.hand && seat.stack === 0) status = "all-in";
+    // A player joining between deals has a seat but no cards in the current
+    // hand. Keep that player out of position maps, equity simulations and
+    // blind reconstruction until the next hand actually includes them.
+    let status: ClientPublicPlayer["status"] = table.hand && seat.holeCardCount > 0
+      ? "active"
+      : "waiting";
+    if (table.hand && seat.holeCardCount > 0 && seat.folded) status = "folded";
+    else if (table.hand && seat.holeCardCount > 0 && seat.stack === 0) status = "all-in";
     else if (!table.hand && seat.stack === 0) status = "out";
     return {
       accountId: publicSeatId(seat.seat),

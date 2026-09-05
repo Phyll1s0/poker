@@ -75,6 +75,10 @@ export type PokerPolicyInput = {
   preflopLimpers?: number;
   preflopColdCallers?: number;
   preflopPreviouslyRaised?: boolean;
+  /** Whether this player is the aggressor immediately before the latest raise. */
+  preflopWasPreviousAggressor?: boolean;
+  /** Whether this player called a raise before now and is currently facing a squeeze/re-raise. */
+  preflopPreviouslyColdCalled?: boolean;
   /** Whether this player already called the blind before the current raise. */
   preflopPreviouslyLimped?: boolean;
   preflopHand?: PokerPreflopHand | null;
@@ -567,6 +571,8 @@ function buildFallbackPreflopFrequencies(input: {
   preflopLimpers: number;
   preflopColdCallers: number;
   preflopPreviouslyRaised: boolean;
+  preflopWasPreviousAggressor: boolean;
+  preflopPreviouslyColdCalled: boolean;
   preflopPreviouslyLimped: boolean;
   preflopHand: PokerPreflopHand | null;
   bigBlind: number;
@@ -641,6 +647,18 @@ function buildFallbackPreflopFrequencies(input: {
         ? { check: 1 - selectedRaise, raise: selectedRaise }
         : { fold: 1 - selectedRaise, raise: selectedRaise };
     }
+    const shallowOpenJamRamp = clamp((18 - input.startingDepthBb) / 8, 0, 1);
+    const highCardJam = input.preflopHand
+      ? clamp((input.preflopHand.highRank - 10) / 4, 0, 1)
+      : premiumValue;
+    const pairJam = input.preflopHand?.pair
+      ? clamp((input.preflopHand.highRank - 5) / 7, 0, 1)
+      : 0;
+    shortStackJamFrequency = clamp(
+      shallowOpenJamRamp * (premiumValue * 0.72 + highCardJam * 0.18 + pairJam * 0.18),
+      0,
+      0.96,
+    );
   } else if (input.preflopRaiseCount === 1) {
     scenario = "vs-open";
     const openerRange = POSITION_OPEN_RANGES[input.preflopOpenerPosition ?? "CO"];
@@ -776,7 +794,9 @@ function buildPreflopFrequencies(input: Parameters<typeof buildFallbackPreflopFr
   }
 
   const chartScenario: ChartPreflopScenario = input.preflopRaiseCount === 0
-    ? "rfi"
+    ? input.preflopLimpers > 0
+      ? "vs-limp"
+      : "rfi"
     : input.preflopRaiseCount === 1
       ? "vs-open"
       : input.preflopRaiseCount === 2
@@ -790,19 +810,27 @@ function buildPreflopFrequencies(input: Parameters<typeof buildFallbackPreflopFr
     scenario: chartScenario,
     heroPosition: position,
     aggressorPosition: input.preflopOpenerPosition,
+    responseRole: input.preflopRaiseCount === 2
+      ? input.preflopWasPreviousAggressor || input.preflopPreviouslyRaised && !input.preflopPreviouslyColdCalled
+        ? "opener"
+        : input.preflopPreviouslyColdCalled
+          ? "cold-caller"
+          : "cold-entry"
+      : undefined,
+    limpers: input.preflopLimpers,
     // Solver/chart trees are selected by the effective stack at the start of
     // the hand. Remaining contestable chips still drive pressure, SPR and jam
     // ramps below, but must not silently turn a 100 BB tree into a 70 BB tree
     // merely because chips have already entered the pot.
     effectiveStackBb: input.startingDepthBb,
     facingSizeBb,
-  };
+  } satisfies Parameters<typeof getPreflopStrategy>[0];
   const chart = getPreflopStrategy(query);
 
   // Player archetypes perturb the chart in odds space. This preserves exact
   // zero/one chart decisions and keeps all styles anchored to the same node
   // instead of replacing the chart with a different hand-strength ranking.
-  const styleEnterFactor = Math.exp((input.profile.looseness - 0.27) * 2.05);
+  const styleEnterFactor = Math.exp((input.profile.looseness - 0.27) * 3.2);
   const styleRaiseFactor = Math.exp(
     (input.profile.aggression - 0.7) * 2
       + (input.profile.bluff - 0.12) * 1.2,
@@ -811,7 +839,9 @@ function buildPreflopFrequencies(input: Parameters<typeof buildFallbackPreflopFr
     ? clamp(1 - input.preflopLimpers * 0.045, 0.78, 1)
     : 1;
   const coldCallerFactor = input.preflopColdCallers > 0
-    ? clamp(1 + input.preflopColdCallers * 0.025, 1, 1.1)
+    ? input.preflopHand?.pair || input.preflopHand?.suited
+      ? clamp(1 - input.preflopColdCallers * 0.015, 0.92, 1)
+      : clamp(1 - input.preflopColdCallers * 0.08, 0.72, 1)
     : 1;
   const baseEnter = chart.frequencies.call + chart.frequencies.raise;
   let adjustedEnter = scalePreflopProbability(
@@ -823,13 +853,18 @@ function buildPreflopFrequencies(input: Parameters<typeof buildFallbackPreflopFr
   const premiumProtection = preflopPremiumValue(input);
   if (loosenessDelta < 0) {
     const tightening = clamp(-loosenessDelta / 0.11, 0, 1);
-    adjustedEnter *= 1 - tightening * 0.3 * (1 - premiumProtection * 0.92);
+    adjustedEnter *= 1 - tightening * 0.36 * (1 - premiumProtection * 0.92);
   } else if (loosenessDelta > 0) {
     const expansion = clamp(loosenessDelta / 0.13, 0, 1) * 0.3;
     adjustedEnter += Math.max(0, fallback.enterFrequency - adjustedEnter) * expansion;
   }
   let raiseShare = baseEnter > 0 ? chart.frequencies.raise / baseEnter : 0;
   raiseShare = scalePreflopProbability(raiseShare, styleRaiseFactor);
+  if (input.preflopRaiseCount === 1 && input.preflopColdCallers > 0) {
+    const squeezeValue = preflopPremiumValue(input);
+    const squeezeFactor = 0.78 + squeezeValue * 0.68 + input.preflopColdCallers * 0.08;
+    raiseShare = scalePreflopProbability(raiseShare, squeezeFactor);
+  }
   const expandedShare = adjustedEnter > 0
     ? clamp((adjustedEnter - chartAnchoredEnter) / adjustedEnter, 0, 1)
     : 0;
@@ -855,7 +890,7 @@ function buildPreflopFrequencies(input: Parameters<typeof buildFallbackPreflopFr
     adjustedEnter = 1;
     raiseShare = Math.max(raiseShare, 0.9);
   }
-  if (input.preflopRaiseCount === 0) {
+  if (chartScenario === "rfi") {
     // Calls in an unopened pot are genuine limps/overlimps.  Shift only hands
     // that already entered the chart so the passive branch does not admit
     // arbitrary trash. `preflopLimpShare` also protects this range with a small
@@ -881,13 +916,30 @@ function buildPreflopFrequencies(input: Parameters<typeof buildFallbackPreflopFr
   const actionFrequencies = normalizeActionFrequencies(raw, input);
   const summaryDepth = Math.round(input.startingDepthBb / 5) * 5;
   const summarySize = facingSizeBb === undefined ? "-" : (Math.round(facingSizeBb * 4) / 4).toFixed(2);
-  const summaryKey = [chartScenario, position, input.preflopOpenerPosition ?? "-", summaryDepth, summarySize].join("|");
+  const summaryRole = input.preflopRaiseCount === 2
+    ? input.preflopWasPreviousAggressor || input.preflopPreviouslyRaised && !input.preflopPreviouslyColdCalled
+      ? "opener"
+      : input.preflopPreviouslyColdCalled
+        ? "cold-caller"
+        : "cold-entry"
+    : "-";
+  const summaryKey = [
+    chartScenario,
+    position,
+    input.preflopOpenerPosition ?? "-",
+    summaryRole,
+    input.preflopLimpers,
+    summaryDepth,
+    summarySize,
+  ].join("|");
   let baselineRange = PREFLOP_RANGE_SUMMARY_CACHE.get(summaryKey);
   if (baselineRange === undefined) {
     baselineRange = summarizePreflopRange({
       scenario: chartScenario,
       heroPosition: position,
       aggressorPosition: input.preflopOpenerPosition,
+      responseRole: summaryRole === "-" ? undefined : summaryRole,
+      limpers: input.preflopLimpers,
       effectiveStackBb: summaryDepth,
       facingSizeBb: facingSizeBb === undefined ? undefined : Number(summarySize),
     }).enterFrequency;
@@ -898,7 +950,7 @@ function buildPreflopFrequencies(input: Parameters<typeof buildFallbackPreflopFr
     styleEnterFactor * limperFactor * coldCallerFactor,
   );
   const profiledTargetRange = loosenessDelta < 0
-    ? targetRange * (1 - clamp(-loosenessDelta / 0.11, 0, 1) * 0.26)
+    ? targetRange * (1 - clamp(-loosenessDelta / 0.11, 0, 1) * 0.32)
     : loosenessDelta > 0
       ? targetRange + Math.max(0, fallback.targetRange - targetRange)
         * clamp(loosenessDelta / 0.13, 0, 1) * 0.3
@@ -968,6 +1020,8 @@ export function evaluatePokerPolicy(rawInput: PokerPolicyInput): PokerPolicyPlan
     preflopLimpers: Math.max(0, Math.floor(nonNegative(rawInput.preflopLimpers ?? 0))),
     preflopColdCallers: Math.max(0, Math.floor(nonNegative(rawInput.preflopColdCallers ?? 0))),
     preflopPreviouslyRaised: Boolean(rawInput.preflopPreviouslyRaised),
+    preflopWasPreviousAggressor: Boolean(rawInput.preflopWasPreviousAggressor),
+    preflopPreviouslyColdCalled: Boolean(rawInput.preflopPreviouslyColdCalled),
     preflopPreviouslyLimped: Boolean(rawInput.preflopPreviouslyLimped),
     preflopHand: rawInput.preflopHand ?? null,
     boardWetness: clamp(rawInput.boardWetness ?? 0, 0, 1),
